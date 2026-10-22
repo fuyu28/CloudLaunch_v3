@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// NewGame は登録するゲームの値。ID と日時は呼び出し側が決める。
+// NewGame の ID と日時は呼び出し側が決める。
 type NewGame struct {
 	ID             string
 	Title          string

@@ -20,10 +20,8 @@ var migrations embed.FS
 // PRAGMA は実行した接続にしか効かず、database/sql は接続を作り直すので、Open 後に一度 Exec するのではなく DSN で全接続に適用する
 const dsnParams = "?_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)"
 
-// timeLayout は仕様書 3 章の日時の形式（RFC3339 の UTC・ミリ秒固定長）。
 const timeLayout = "2006-01-02T15:04:05.000Z"
 
-// Store はローカルの SQLite への接続を持つ。
 type Store struct {
 	db *sql.DB
 }
@@ -56,7 +54,6 @@ func migrate(ctx context.Context, db *sql.DB) error {
 	return nil
 }
 
-// Close は DB を閉じる。
 func (s *Store) Close() error {
 	return s.db.Close()
 }
