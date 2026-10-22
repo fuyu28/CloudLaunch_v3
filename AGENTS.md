@@ -9,6 +9,22 @@ Go（同期コア + CLI）と Wails（UI）で作る。
 - 設計判断（データ構造・状態遷移・保証範囲）はオーナーが行う。AI は仕様にない判断を勝手に入れず、必要なら `docs/sync-spec.md` の「未決事項」に挙げて止まる
 - 振る舞いを変えるときは、仕様書の変更 PR を先に通してから実装を変える
 - PR はオーナーが全行読める量（目安: 数百行）に収める
+- 技術や構造の決定とその理由は ADR に書く。書き方とルールは `docs/adr/README.md` に従う
+
+## 開発の進め方
+
+- 機能の追加・変更、バグの修正は、次の順で進める
+  1. grilling で決めることを詰める
+  2. ADR の初版と GitHub Issue を作る。Issue には ADR のファイル名、受け入れの条件（テストのケース名の一覧）、範囲外にすること、見込みの行数を書く
+  3. オーナーの承認を得てから実装する。決定が変わったら ADR の更新履歴に追記する
+  4. 作業が終わったら ADR の「結果 / 影響」を書き、ADR を含めた PR に `Closes #番号` を書く
+- 設定・リンタ・CI・文書だけの変更では ADR と Issue を作らず、理由は PR の説明に書く
+- Issue は GitHub の Milestones に入れる: M1 walking skeleton、M2 同期コア（仕様書 4〜7 章）、M3 メタ情報と旧版の取り込み（8・9 章）、M4 GUI
+- M1 では、端から端まで一番細い道（`game add` → `status` → `push` → 別のフォルダで `pull`、判定は「base なし」の行だけ）を MinIO 相手に通し、つなぎ目の問題を先に出す
+- PR は仕様書の節ごとに、テストから CLI まで縦に通して切る。層ごと（DB だけ、コアだけ）には切らない
+- PR の中は、テストだけのコミット（失敗する状態）を先に積み、実装のコミットを後に積む。オーナーはテストのコミットで、仕様どおりのことが検査されているかを確かめる
+- M2 の最初に、仕様書の検査できる項目（判定表の行、Push・Pull の手順、復旧表の行、不正な manifest の条件）に ID を振る。テストのケース名に ID を入れ、テストのない ID を CI で一覧にする
+- M2 が終わったら、バックアップを取ったうえで、実際のゲームのセーブで CLI を使い始める
 
 ## 作る順番
 
@@ -16,7 +32,8 @@ Go（同期コア + CLI）と Wails（UI）で作る。
 2. 同期コア + CLI（`status` / `push` / `pull`）
 3. GUI（Wails）
    - フロントエンドの第一候補は Go のテンプレート + htmx、次点は Svelte。GUI に着手するときに、進捗の表示と確認ダイアログを含む 1 画面を試作して決める
-   - 状態と画面の組み立ては Go に置き、Go の型を TS で書き直す層や、Go の API を包む層を作らない。Go 版ではこの橋渡しの層が、フロントエンドの肥大化の主な原因だったため
+   - 状態と画面の組み立ては Go に置き、Go の型を TS で書き直す層や、Go の API を包む層を作らない
+   - 理由: `docs/adr/2026-10-23_00-30_gui-frontend.md`
 
 ## 構成
 
@@ -30,6 +47,7 @@ internal/platform/     OS 固有の処理（ファイルロック、reparse poin
 internal/synclock/     PC 全体の同期ロック（仕様書 3 章）
 ```
 
+- 理由: `docs/adr/2026-10-23_00-30_package-structure.md`・`docs/adr/2026-10-23_00-30_remote-object-store.md`・`docs/adr/2026-10-23_00-30_db-migration-goose.md`
 - パッケージは責務で分ける。`services`・`domain`・`util` のような、何でも入る名前のパッケージは作らない
 - syncore の中は、仕様書の章に合わせてファイルを分ける。独立して意味を持つ部分（最初の候補は manifest）が育ったら、サブパッケージに切り出す
 - 依存の向き: syncore と metasync が必要な操作だけのインターフェースを定義し、store・objstore・platform がそれを実装する。syncore と metasync は互いに import せず、cmd で組み合わせる
@@ -71,6 +89,7 @@ internal/synclock/     PC 全体の同期ロック（仕様書 3 章）
 
 ## 開発環境
 
+- lefthook を選んだ理由: `docs/adr/2026-10-23_00-30_git-hooks-lefthook.md`
 - ツールのバージョンは `mise.toml` で固定する。clone したら `mise install` と `lefthook install` を実行する
 - コミット時に lefthook の pre-commit フックが走る
   - ステージした `.go` ファイルにフォーマッタ（gofmt・goimports）をかけ、直した結果をステージに戻す
@@ -106,5 +125,5 @@ internal/synclock/     PC 全体の同期ロック（仕様書 3 章）
 
 ## docs/
 
-- docs/ には、仕様書のように「現在の正」である文書だけを置く
+- docs/ には、仕様書や ADR のように、置き換えられるまで有効な文書だけを置く
 - 計画・タスク・バックログは GitHub Issues で管理し、終わったら閉じる
