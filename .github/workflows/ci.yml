@@ -67,11 +67,5 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      # -race は cgo の C コンパイラが要り、Windows のランナーでは用意されていないので Ubuntu だけで使う
-      - name: Test (race)
-        if: runner.os == 'Linux'
-        run: go test -race -cover ./...
-
       - name: Test
-        if: runner.os != 'Linux'
-        run: go test -cover ./...
+        run: go test -race -cover ./...

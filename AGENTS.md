@@ -64,7 +64,7 @@ internal/synclock/     PC 全体の同期ロック（仕様書 3 章）
 - fuzz テスト: manifest のパスの検証（仕様書 6 章）。CI では保存したコーパスだけを走らせ、ランダムな探索は手元で行う
 - migration のテスト: 空の DB に最後まで適用できること
 - platform のテスト: 実装したあとで書く。Windows の振る舞いは Windows の CI で確かめる
-- CI の Ubuntu のテストは `-race` で走らせる
+- CI のテストは Ubuntu・Windows とも `-race` で走らせる
 - ここにない種類（CLI の E2E、プロパティベーステスト、ベンチマークなど）は、必要になったら PR で足す
 
 ## 開発環境
