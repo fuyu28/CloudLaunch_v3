@@ -1,0 +1,17 @@
+pre-commit:
+  piped: true
+  commands:
+    fmt:
+      glob: "*.go"
+      run: golangci-lint fmt {staged_files}
+      stage_fixed: true
+    lint-windows:
+      glob: ["*.go", "go.mod", "go.sum", ".golangci.yml"]
+      env:
+        GOOS: windows
+      run: golangci-lint run ./...
+    lint-linux:
+      glob: ["*.go", "go.mod", "go.sum", ".golangci.yml"]
+      env:
+        GOOS: linux
+      run: golangci-lint run ./...
