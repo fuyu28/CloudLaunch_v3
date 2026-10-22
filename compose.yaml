@@ -1,0 +1,24 @@
+# 手元で objstore の契約テストを本物の S3 互換サーバーに対して走らせるための versitygw。
+# 起動後に次の環境変数を付けて go test を実行する:
+#   CLOUDLAUNCH_TEST_S3_ENDPOINT=http://127.0.0.1:7070 CLOUDLAUNCH_TEST_S3_BUCKET=cloudlaunch-test
+#   CLOUDLAUNCH_TEST_S3_ACCESS_KEY_ID=testuser CLOUDLAUNCH_TEST_S3_SECRET_ACCESS_KEY=testsecret
+services:
+  versitygw:
+    image: versity/versitygw:v1.9.0
+    # posix バックエンドは /data 直下のディレクトリをバケットとして扱うので、起動前にバケットのディレクトリを作る
+    entrypoint: ["sh", "-c", "mkdir -p /data/cloudlaunch-test && exec versitygw --port :7070 --region auto posix /data"]
+    environment:
+      ROOT_ACCESS_KEY: testuser
+      ROOT_SECRET_KEY: testsecret
+    ports:
+      - "127.0.0.1:7070:7070"
+    volumes:
+      - versitygw-data:/data
+    # docker compose up --wait が、待ち受けを始めるまで待てるようにする
+    healthcheck:
+      test: ["CMD", "nc", "-z", "127.0.0.1", "7070"]
+      interval: 1s
+      retries: 30
+
+volumes:
+  versitygw-data:

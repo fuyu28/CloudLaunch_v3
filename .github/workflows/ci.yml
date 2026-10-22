@@ -67,5 +67,17 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      # service コンテナには起動の引数を渡せず、Windows のランナーでは Linux のコンテナを動かせないので、Ubuntu の手順の中で立てる
+      - name: Start S3-compatible server
+        if: runner.os == 'Linux'
+        run: |
+          docker compose up -d --wait
+          {
+            echo "CLOUDLAUNCH_TEST_S3_ENDPOINT=http://127.0.0.1:7070"
+            echo "CLOUDLAUNCH_TEST_S3_BUCKET=cloudlaunch-test"
+            echo "CLOUDLAUNCH_TEST_S3_ACCESS_KEY_ID=testuser"
+            echo "CLOUDLAUNCH_TEST_S3_SECRET_ACCESS_KEY=testsecret"
+          } >> "$GITHUB_ENV"
+
       - name: Test
         run: go test -race -cover ./...
