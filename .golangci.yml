@@ -2,6 +2,18 @@ version: "2"
 
 linters:
   default: standard
+  enable:
+    - testpackage
+  settings:
+    testpackage:
+      # 既定では export_test.go / internal_test.go を内部パッケージのまま許すが、公開 API 経由のテストの抜け道になるので許さない
+      skip-regexp: "^$"
+  exclusions:
+    rules:
+      # 公開 API 経由のテストを強制するのはコアだけ。store・platform は SQL や OS の細部を内部から確かめる
+      - path-except: ^internal/(syncore|metasync)/
+        linters:
+          - testpackage
 
 formatters:
   enable:
