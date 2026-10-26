@@ -16,7 +16,9 @@ import (
 )
 
 type Config struct {
-	Endpoint        string
+	Endpoint string
+	// Region は空なら、R2 が指定する auto にする
+	Region          string
 	Bucket          string
 	AccessKeyID     string
 	SecretAccessKey string
@@ -32,10 +34,14 @@ func New(cfg Config) (*S3, error) {
 	if cfg.Endpoint == "" || cfg.Bucket == "" {
 		return nil, errors.New("objstore: endpoint and bucket are required")
 	}
+	region := cfg.Region
+	if region == "" {
+		region = "auto"
+	}
 	client := s3.New(s3.Options{
 		BaseEndpoint: aws.String(cfg.Endpoint),
-		// R2 が指定するリージョン。versitygw は署名のリージョンを検査するので、テストでも同じリージョンで立てる
-		Region:      "auto",
+		// versitygw は署名のリージョンを検査するので、テストでは auto で立てたサーバーに既定のまま接続する
+		Region:      region,
 		Credentials: credentials.NewStaticCredentialsProvider(cfg.AccessKeyID, cfg.SecretAccessKey, ""),
 		// R2 もテスト用のサーバーもパス形式に対応しているので、仮想ホスト形式の DNS に頼らない
 		UsePathStyle: true,
