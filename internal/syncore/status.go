@@ -4,6 +4,7 @@ package syncore
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 )
@@ -56,6 +57,46 @@ type RemoteState struct {
 	Hash       string
 }
 
+// Status はローカルにもリモートにも書き込まない。
 func (c *Core) Status(ctx context.Context, gameID string) (Plan, error) {
-	return Plan{}, errors.New("not implemented")
+	saveFolder, base, err := c.local.GameLocal(ctx, gameID)
+	if err != nil {
+		return Plan{}, fmt.Errorf("read game %s: %w", gameID, err)
+	}
+	if base != "" {
+		return Plan{}, errors.New("status with a base is not implemented yet")
+	}
+
+	entries, err := localEntries(ctx, saveFolder)
+	if err != nil {
+		return Plan{}, err
+	}
+	local := LocalState{Entries: entries}
+	if len(entries) > 0 {
+		local.Hash = ManifestHash(entries)
+	}
+	remote, err := c.readRemote(ctx, gameID)
+	if err != nil {
+		return Plan{}, err
+	}
+
+	plan := Plan{GameID: gameID, Base: base, Local: local, Remote: remote}
+	plan.Decision, plan.RecordBase = decideWithoutBase(local.Hash, remote)
+	return plan, nil
+}
+
+// decideWithoutBase は判定表の「base なし」の 5 行に当たる。
+func decideWithoutBase(localHash string, remote *RemoteState) (Decision, bool) {
+	switch {
+	case localHash == "" && remote == nil:
+		return DecisionNoChange, false
+	case remote == nil:
+		return DecisionPush, false
+	case localHash == "":
+		return DecisionPull, false
+	case localHash == remote.Hash:
+		return DecisionNoChange, true
+	default:
+		return DecisionConflict, false
+	}
 }
