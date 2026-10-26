@@ -43,3 +43,7 @@ func (s *Store) CreateGame(ctx context.Context, g NewGame) error {
 	}
 	return nil
 }
+
+func (s *Store) GameLocal(ctx context.Context, gameID string) (saveFolderPath, baseManifestHash string, err error) {
+	return "", "", nil
+}
