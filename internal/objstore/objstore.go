@@ -1,4 +1,4 @@
-// Package objstore は、S3 互換のオブジェクトストア（本番は R2）にキーを指定して読み書きする。キーの形はコアが決め、ここでは扱わない。
+// Package objstore は、S3 互換のオブジェクトストアにキーを指定して読み書きする。キーの形はコアが決め、ここでは扱わない。
 package objstore
 
 import (
@@ -16,8 +16,7 @@ import (
 )
 
 type Config struct {
-	Endpoint string
-	// Region は空なら、R2 が指定する auto にする
+	Endpoint        string
 	Region          string
 	Bucket          string
 	AccessKeyID     string
@@ -40,9 +39,8 @@ func New(cfg Config) (*S3, error) {
 	}
 	client := s3.New(s3.Options{
 		BaseEndpoint: aws.String(cfg.Endpoint),
-		// versitygw は署名のリージョンを検査するので、テストでは auto で立てたサーバーに既定のまま接続する
-		Region:      region,
-		Credentials: credentials.NewStaticCredentialsProvider(cfg.AccessKeyID, cfg.SecretAccessKey, ""),
+		Region:       region,
+		Credentials:  credentials.NewStaticCredentialsProvider(cfg.AccessKeyID, cfg.SecretAccessKey, ""),
 		// R2 もテスト用のサーバーもパス形式に対応しているので、仮想ホスト形式の DNS に頼らない
 		UsePathStyle: true,
 		// SDK の既定の CRC32 チェックサムは S3 互換サーバーで拒否されることがあり、内容の検証はコアが sha256 で行うので付けない

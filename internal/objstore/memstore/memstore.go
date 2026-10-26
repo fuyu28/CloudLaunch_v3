@@ -12,7 +12,6 @@ import (
 	"sync"
 )
 
-// Op は Before に渡す操作の種類。
 type Op int
 
 const (
