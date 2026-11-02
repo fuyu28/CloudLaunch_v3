@@ -73,7 +73,7 @@ func status(ctx context.Context, args []string, stdout io.Writer) error {
 	defer func() { _ = s.Close() }()
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
-	plan, err := syncore.New(remote, s, logger).Status(ctx, *gameID)
+	plan, err := syncore.New(syncore.Config{Remote: remote, Local: s, Logger: logger}).Status(ctx, *gameID)
 	if err != nil {
 		return err
 	}
