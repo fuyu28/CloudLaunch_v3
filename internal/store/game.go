@@ -4,7 +4,6 @@ package store
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 	"time"
 )
@@ -57,5 +56,17 @@ func (s *Store) GameLocal(ctx context.Context, gameID string) (saveFolderPath, b
 }
 
 func (s *Store) SetBase(ctx context.Context, gameID, manifestHash string) error {
-	return errors.New("SetBase is not implemented yet")
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE game_locals SET base_manifest_hash = ? WHERE game_id = ?`, manifestHash, gameID)
+	if err != nil {
+		return fmt.Errorf("update base: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("update base: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("update base: game %s: %w", gameID, sql.ErrNoRows)
+	}
+	return nil
 }

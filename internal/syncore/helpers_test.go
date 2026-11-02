@@ -110,9 +110,13 @@ func entriesOf(files map[string]string) []syncore.Entry {
 	return entries
 }
 
-func headKey() string                      { return "games/" + testGameID + "/HEAD" }
-func manifestKey(generation string) string { return "games/" + testGameID + "/manifests/" + generation + ".json" }
-func objectKey(content string) string     { return "games/" + testGameID + "/objects/" + sha256Hex(content) }
+func headKey() string { return "games/" + testGameID + "/HEAD" }
+func manifestKey(generation string) string {
+	return "games/" + testGameID + "/manifests/" + generation + ".json"
+}
+func objectKey(content string) string {
+	return "games/" + testGameID + "/objects/" + sha256Hex(content)
+}
 
 func (e env) putObject(t *testing.T, key, body string) {
 	t.Helper()
