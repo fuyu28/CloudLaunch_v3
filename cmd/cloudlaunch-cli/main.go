@@ -87,12 +87,8 @@ func status(ctx context.Context, args []string, stdout io.Writer) error {
 	if plan.RecordBase {
 		decision += "（base を記録）"
 	}
-	remoteHash := ""
-	if plan.Remote != nil {
-		remoteHash = plan.Remote.Hash
-	}
 	_, err = fmt.Fprintf(stdout, "判定: %s\nbase: %s\nlocal: %s\nremote: %s\n",
-		decision, orDash(plan.Base), orDash(plan.Local.Hash), orDash(remoteHash))
+		decision, orDash(plan.Base), orDash(plan.Local.Hash), orDash(plan.Remote.Hash))
 	return err
 }
 

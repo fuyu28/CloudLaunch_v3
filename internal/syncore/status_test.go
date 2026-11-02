@@ -70,8 +70,8 @@ func TestStatusなしの意味(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Status: %v", err)
 		}
-		if plan.Decision != syncore.DecisionPull || plan.Remote == nil {
-			t.Errorf("(Decision, Remote) = (%v, %v), want (%v, non-nil)", plan.Decision, plan.Remote, syncore.DecisionPull)
+		if want := syncore.ManifestHash(nil); plan.Decision != syncore.DecisionPull || plan.Remote.Hash != want {
+			t.Errorf("(Decision, Remote.Hash) = (%v, %q), want (%v, %q)", plan.Decision, plan.Remote.Hash, syncore.DecisionPull, want)
 		}
 	})
 }

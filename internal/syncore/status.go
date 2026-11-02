@@ -43,7 +43,7 @@ type Plan struct {
 	RecordBase bool
 	Base       string // 空なら base なし
 	Local      LocalState
-	Remote     *RemoteState // HEAD がなければ nil
+	Remote     RemoteState
 }
 
 type LocalState struct {
@@ -54,7 +54,7 @@ type LocalState struct {
 type RemoteState struct {
 	Generation string
 	Manifest   Manifest
-	Hash       string
+	Hash       string // HEAD がなければ空。空 manifest の世代なら空にならない
 }
 
 // Status はローカルにもリモートにも書き込まない。
@@ -81,20 +81,20 @@ func (c *Core) Status(ctx context.Context, gameID string) (Plan, error) {
 	}
 
 	plan := Plan{GameID: gameID, Base: base, Local: local, Remote: remote}
-	plan.Decision, plan.RecordBase = decideWithoutBase(local.Hash, remote)
+	plan.Decision, plan.RecordBase = decideWithoutBase(local.Hash, remote.Hash)
 	return plan, nil
 }
 
-// decideWithoutBase は判定表の「base なし」の 5 行に当たる。
-func decideWithoutBase(localHash string, remote *RemoteState) (Decision, bool) {
+// decideWithoutBase は判定表の「base なし」の 5 行に当たる。空のハッシュは「なし」を表す。
+func decideWithoutBase(localHash, remoteHash string) (Decision, bool) {
 	switch {
-	case localHash == "" && remote == nil:
+	case localHash == "" && remoteHash == "":
 		return DecisionNoChange, false
-	case remote == nil:
+	case remoteHash == "":
 		return DecisionPush, false
 	case localHash == "":
 		return DecisionPull, false
-	case localHash == remote.Hash:
+	case localHash == remoteHash:
 		return DecisionNoChange, true
 	default:
 		return DecisionConflict, false

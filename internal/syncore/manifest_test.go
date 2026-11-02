@@ -116,8 +116,8 @@ func TestManifestHash(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Status: %v", err)
 		}
-		if plan.Remote == nil || plan.Remote.Hash != plan.Local.Hash {
-			t.Errorf("Remote = %+v, want Hash %s", plan.Remote, plan.Local.Hash)
+		if plan.Remote.Hash == "" || plan.Remote.Hash != plan.Local.Hash {
+			t.Errorf("Remote.Hash = %q, want %q", plan.Remote.Hash, plan.Local.Hash)
 		}
 	})
 }
