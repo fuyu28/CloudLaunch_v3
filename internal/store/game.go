@@ -1,4 +1,4 @@
-// ゲームの登録（games と game_locals への書き込み）を行う。
+// ゲームの登録（games と game_locals への書き込み）と、同期コアが使うゲームのローカル情報の読み込みを行う。
 package store
 
 import (
@@ -42,4 +42,15 @@ func (s *Store) CreateGame(ctx context.Context, g NewGame) error {
 		return fmt.Errorf("commit: %w", err)
 	}
 	return nil
+}
+
+// GameLocal は、base が未設定なら baseManifestHash に空文字を返す。
+func (s *Store) GameLocal(ctx context.Context, gameID string) (saveFolderPath, baseManifestHash string, err error) {
+	var base sql.NullString
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT save_folder_path, base_manifest_hash FROM game_locals WHERE game_id = ?`, gameID,
+	).Scan(&saveFolderPath, &base); err != nil {
+		return "", "", fmt.Errorf("select game_locals: %w", err)
+	}
+	return saveFolderPath, base.String, nil
 }

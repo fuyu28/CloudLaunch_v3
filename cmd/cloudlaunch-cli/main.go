@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -14,11 +15,18 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/fuyu28/CloudLaunch_v3/internal/objstore"
 	"github.com/fuyu28/CloudLaunch_v3/internal/store"
+	"github.com/fuyu28/CloudLaunch_v3/internal/syncore"
 )
 
 const usage = `usage:
-  cloudlaunch-cli game add --title <タイトル> --save-dir <パス> --exe <パス> [--brand <ブランド>] [--id <gameId>] [--data-dir <dir>]`
+  cloudlaunch-cli game add --title <タイトル> --save-dir <パス> --exe <パス> [--brand <ブランド>] [--id <gameId>] [--data-dir <dir>]
+  cloudlaunch-cli status --game <gameId> [--data-dir <dir>]
+
+status はリモートの接続先と鍵を環境変数から読む:
+  CLOUDLAUNCH_S3_ENDPOINT, CLOUDLAUNCH_S3_BUCKET, CLOUDLAUNCH_S3_ACCESS_KEY_ID, CLOUDLAUNCH_S3_SECRET_ACCESS_KEY,
+  CLOUDLAUNCH_S3_REGION（省くと auto）`
 
 func main() {
 	if err := run(context.Background(), os.Args[1:], os.Stdout); err != nil {
@@ -31,7 +39,64 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 	if len(args) >= 2 && args[0] == "game" && args[1] == "add" {
 		return gameAdd(ctx, args[2:], stdout)
 	}
+	if len(args) >= 1 && args[0] == "status" {
+		return status(ctx, args[1:], stdout)
+	}
 	return errors.New(usage)
+}
+
+func status(ctx context.Context, args []string, stdout io.Writer) error {
+	fs := flag.NewFlagSet("status", flag.ContinueOnError)
+	gameID := fs.String("game", "", "ゲーム ID")
+	dataDir := fs.String("data-dir", "", "DB などを置くディレクトリ")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *gameID == "" {
+		return errors.New("--game is required")
+	}
+
+	remote, err := objstore.New(objstore.Config{
+		Endpoint:        os.Getenv("CLOUDLAUNCH_S3_ENDPOINT"),
+		Region:          os.Getenv("CLOUDLAUNCH_S3_REGION"),
+		Bucket:          os.Getenv("CLOUDLAUNCH_S3_BUCKET"),
+		AccessKeyID:     os.Getenv("CLOUDLAUNCH_S3_ACCESS_KEY_ID"),
+		SecretAccessKey: os.Getenv("CLOUDLAUNCH_S3_SECRET_ACCESS_KEY"),
+	})
+	if err != nil {
+		return err
+	}
+	s, err := openStore(ctx, *dataDir)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = s.Close() }()
+
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	plan, err := syncore.New(remote, s, logger).Status(ctx, *gameID)
+	if err != nil {
+		return err
+	}
+
+	decision := map[syncore.Decision]string{
+		syncore.DecisionNoChange: "変更なし",
+		syncore.DecisionPush:     "Push",
+		syncore.DecisionPull:     "Pull",
+		syncore.DecisionConflict: "競合",
+	}[plan.Decision]
+	if plan.RecordBase {
+		decision += "（base を記録）"
+	}
+	_, err = fmt.Fprintf(stdout, "判定: %s\nbase: %s\nlocal: %s\nremote: %s\n",
+		decision, orDash(plan.Base), orDash(plan.Local.Hash), orDash(plan.Remote.Hash))
+	return err
+}
+
+func orDash(s string) string {
+	if s == "" {
+		return "-"
+	}
+	return s
 }
 
 func gameAdd(ctx context.Context, args []string, stdout io.Writer) error {

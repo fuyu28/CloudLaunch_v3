@@ -1,0 +1,133 @@
+package syncore_test
+
+import (
+	"context"
+	"crypto/sha256"
+	"database/sql"
+	"encoding/hex"
+	"encoding/json"
+	"io"
+	"log/slog"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/fuyu28/CloudLaunch_v3/internal/objstore/memstore"
+	"github.com/fuyu28/CloudLaunch_v3/internal/store"
+	"github.com/fuyu28/CloudLaunch_v3/internal/syncore"
+)
+
+const (
+	testGameID     = "0192d4e8-0000-7000-8000-000000000001"
+	testGeneration = "0192d4e8-0000-7000-8000-0000000000aa"
+)
+
+type env struct {
+	core    *syncore.Core
+	remote  *memstore.Store
+	saveDir string
+	dbPath  string
+}
+
+// newEnv は、セーブフォルダを持つゲームを 1 つ登録した DB と、空のリモートを用意する。
+func newEnv(t *testing.T) env {
+	t.Helper()
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "cloudlaunch.db")
+	saveDir := filepath.Join(dir, "save")
+	if err := os.Mkdir(saveDir, 0o700); err != nil {
+		t.Fatalf("mkdir save: %v", err)
+	}
+
+	st, err := store.Open(context.Background(), dbPath)
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	if err := st.CreateGame(context.Background(), store.NewGame{
+		ID:             testGameID,
+		Title:          "Game",
+		SaveFolderPath: saveDir,
+		ExePath:        filepath.Join(dir, "game.exe"),
+		CreatedAt:      time.Date(2026, 10, 27, 0, 0, 0, 0, time.UTC),
+	}); err != nil {
+		t.Fatalf("CreateGame: %v", err)
+	}
+
+	remote := memstore.New()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	return env{
+		core:    syncore.New(remote, st, logger),
+		remote:  remote,
+		saveDir: saveDir,
+		dbPath:  dbPath,
+	}
+}
+
+func (e env) status(t *testing.T) (syncore.Plan, error) {
+	t.Helper()
+	return e.core.Status(t.Context(), testGameID)
+}
+
+func writeFiles(t *testing.T, root string, files map[string]string) {
+	t.Helper()
+	for rel, content := range files {
+		p := filepath.Join(root, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		if err := os.WriteFile(p, []byte(content), 0o600); err != nil {
+			t.Fatalf("write %s: %v", rel, err)
+		}
+	}
+}
+
+// entriesOf は、files をセーブフォルダに置いたときに期待する entries を、path の昇順で返す。
+func entriesOf(files map[string]string) []syncore.Entry {
+	entries := []syncore.Entry{}
+	for rel, content := range files {
+		sum := sha256.Sum256([]byte(content))
+		entries = append(entries, syncore.Entry{Path: rel, SHA256: hex.EncodeToString(sum[:]), Size: int64(len(content))})
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].Path < entries[j].Path })
+	return entries
+}
+
+func (e env) putObject(t *testing.T, key, body string) {
+	t.Helper()
+	if err := e.remote.Put(context.Background(), key, strings.NewReader(body), int64(len(body))); err != nil {
+		t.Fatalf("put %s: %v", key, err)
+	}
+}
+
+// putGeneration は、entries を持つ世代を置き、HEAD をその世代に向ける。
+func (e env) putGeneration(t *testing.T, entries []syncore.Entry) {
+	t.Helper()
+	b, err := json.Marshal(map[string]any{
+		"version":    1,
+		"createdAt":  "2026-10-27T00:00:00.000Z",
+		"deviceName": "Other",
+		"entries":    entries,
+	})
+	if err != nil {
+		t.Fatalf("marshal manifest: %v", err)
+	}
+	e.putObject(t, "games/"+testGameID+"/manifests/"+testGeneration+".json", string(b))
+	e.putObject(t, "games/"+testGameID+"/HEAD", testGeneration)
+}
+
+// setBase は base を DB に直接書く。base を書く store の操作は Push（#9）で足す。
+func (e env) setBase(t *testing.T, hash string) {
+	t.Helper()
+	db, err := sql.Open("sqlite", e.dbPath)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	if _, err := db.Exec(`UPDATE game_locals SET base_manifest_hash = ? WHERE game_id = ?`, hash, testGameID); err != nil {
+		t.Fatalf("set base: %v", err)
+	}
+}
