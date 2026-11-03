@@ -20,11 +20,11 @@ func TestStatusBaseなし(t *testing.T) {
 		wantDecision   syncore.Decision
 		wantRecordBase bool
 	}{
-		{name: "4章/base なし・local なし・remote なし → 変更なし", wantDecision: syncore.DecisionNoChange},
-		{name: "4章/base なし・local あり・remote なし → Push", local: save, wantDecision: syncore.DecisionPush},
-		{name: "4章/base なし・local なし・remote あり → Pull", remote: other, wantDecision: syncore.DecisionPull},
-		{name: "4章/base なし・local あり・remote あり（local と同じ） → 変更なし（base を記録）", local: save, remote: save, wantDecision: syncore.DecisionNoChange, wantRecordBase: true},
-		{name: "4章/base なし・local あり・remote あり（local と異なる） → 競合", local: save, remote: other, wantDecision: syncore.DecisionConflict},
+		{name: "4-D1 base なし・local なし・remote なし → 変更なし", wantDecision: syncore.DecisionNoChange},
+		{name: "4-D2 base なし・local あり・remote なし → Push", local: save, wantDecision: syncore.DecisionPush},
+		{name: "4-D3 base なし・local なし・remote あり → Pull", remote: other, wantDecision: syncore.DecisionPull},
+		{name: "4-D4 base なし・local あり・remote あり（local と同じ） → 変更なし（base を記録）", local: save, remote: save, wantDecision: syncore.DecisionNoChange, wantRecordBase: true},
+		{name: "4-D5 base なし・local あり・remote あり（local と異なる） → 競合", local: save, remote: other, wantDecision: syncore.DecisionConflict},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

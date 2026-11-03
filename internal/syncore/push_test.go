@@ -58,7 +58,7 @@ func failPut(e env, keyPart string, err error) {
 func TestPush(t *testing.T) {
 	files := map[string]string{"slot1.sav": "one", "dir/slot2.sav": "two"}
 
-	t.Run("5章/Push/リモートにない object だけをアップロードする", func(t *testing.T) {
+	t.Run("5-P3 リモートにない object だけをアップロードする", func(t *testing.T) {
 		e := newEnv(t)
 		e.putObject(t, objectKey("one"), "one")
 		plan := approvedPush(t, e, files)
@@ -75,7 +75,7 @@ func TestPush(t *testing.T) {
 		}
 	})
 
-	t.Run("5章/Push/同じ中身のファイルは object を 1 つだけアップロードする", func(t *testing.T) {
+	t.Run("5-P3 同じ中身のファイルは object を 1 つだけアップロードする", func(t *testing.T) {
 		e := newEnv(t)
 		plan := approvedPush(t, e, map[string]string{"a.sav": "same", "b.sav": "same"})
 		puts := recordObjectPuts(e)
@@ -88,7 +88,7 @@ func TestPush(t *testing.T) {
 		}
 	})
 
-	t.Run("5章/Push/manifest を書き、HEAD を新しい世代に向ける", func(t *testing.T) {
+	t.Run("5-P6 manifest を書き、HEAD を新しい世代に向ける", func(t *testing.T) {
 		e := newEnv(t)
 		plan := approvedPush(t, e, files)
 
@@ -114,7 +114,7 @@ func TestPush(t *testing.T) {
 		}
 	})
 
-	t.Run("5章/Push/manifest に createdAt と deviceName を書く", func(t *testing.T) {
+	t.Run("5-P4 manifest に createdAt と deviceName を書く", func(t *testing.T) {
 		e := newEnv(t)
 		plan := approvedPush(t, e, files)
 
@@ -131,7 +131,7 @@ func TestPush(t *testing.T) {
 		}
 	})
 
-	t.Run("5章/Push/base を local の manifest ハッシュにする", func(t *testing.T) {
+	t.Run("5-P7 base を local の manifest ハッシュにする", func(t *testing.T) {
 		e := newEnv(t)
 		plan := approvedPush(t, e, files)
 
@@ -167,7 +167,7 @@ func TestPush中止(t *testing.T) {
 	files := map[string]string{"slot1.sav": "one", "slot2.sav": "two"}
 	injected := errors.New("injected")
 
-	t.Run("5章/Push/承認後にファイルが書き換わっていたら ErrPlanStale、HEAD を変えない", func(t *testing.T) {
+	t.Run("5-P3 承認後にファイルが書き換わっていたら ErrPlanStale、HEAD を変えない", func(t *testing.T) {
 		e := newEnv(t)
 		plan := approvedPush(t, e, files)
 		writeFiles(t, e.saveDir, map[string]string{"slot2.sav": "changed"})
@@ -183,7 +183,7 @@ func TestPush中止(t *testing.T) {
 		}
 	})
 
-	t.Run("5章/Push/承認後に HEAD が変わっていたら ErrPlanStale、HEAD を変えない", func(t *testing.T) {
+	t.Run("5-P5 承認後に HEAD が変わっていたら ErrPlanStale、HEAD を変えない", func(t *testing.T) {
 		e := newEnv(t)
 		plan := approvedPush(t, e, files)
 		e.putGeneration(t, entriesOf(map[string]string{"slot1.sav": "other"}))
@@ -199,7 +199,7 @@ func TestPush中止(t *testing.T) {
 		}
 	})
 
-	t.Run("5章/Push/object の PUT が失敗したら中止、HEAD を変えない", func(t *testing.T) {
+	t.Run("5-P3 object の PUT が失敗したら中止、HEAD を変えない", func(t *testing.T) {
 		e := newEnv(t)
 		plan := approvedPush(t, e, files)
 		failPut(e, "/objects/", injected)
@@ -215,7 +215,7 @@ func TestPush中止(t *testing.T) {
 		}
 	})
 
-	t.Run("5章/Push/manifest の PUT が失敗したら中止、HEAD を変えない", func(t *testing.T) {
+	t.Run("5-P4 manifest の PUT が失敗したら中止、HEAD を変えない", func(t *testing.T) {
 		e := newEnv(t)
 		plan := approvedPush(t, e, files)
 		failPut(e, "/manifests/", injected)
@@ -231,7 +231,7 @@ func TestPush中止(t *testing.T) {
 		}
 	})
 
-	t.Run("5章/Push/HEAD の PUT が失敗したら base を書かない", func(t *testing.T) {
+	t.Run("5-P6 HEAD の PUT が失敗したら base を書かない", func(t *testing.T) {
 		e := newEnv(t)
 		plan := approvedPush(t, e, files)
 		failPut(e, "/HEAD", injected)
@@ -249,7 +249,7 @@ func TestPush中止(t *testing.T) {
 func TestPush中断(t *testing.T) {
 	files := map[string]string{"slot1.sav": "one"}
 
-	t.Run("5章/中断/3〜5 で中断 → HEAD は同期前のまま、次の判定は Push", func(t *testing.T) {
+	t.Run("5-I1 3〜5 で中断 → HEAD は同期前のまま、次の判定は Push", func(t *testing.T) {
 		e := newEnv(t)
 		writeFiles(t, e.saveDir, files)
 		e.putObject(t, objectKey("one"), "one")
@@ -264,7 +264,7 @@ func TestPush中断(t *testing.T) {
 		}
 	})
 
-	t.Run("5章/中断/6 と 7 の間で中断 → 次の判定は 変更なし（base を記録）", func(t *testing.T) {
+	t.Run("5-I2 6 と 7 の間で中断 → 次の判定は 変更なし（base を記録）", func(t *testing.T) {
 		e := newEnv(t)
 		writeFiles(t, e.saveDir, files)
 		e.putObject(t, objectKey("one"), "one")

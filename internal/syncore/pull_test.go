@@ -72,7 +72,7 @@ func assertAborted(t *testing.T, e env, wantFiles map[string]string) {
 func TestPull(t *testing.T) {
 	files := map[string]string{"slot1.sav": "one", "dir/slot2.sav": "two"}
 
-	t.Run("6章/Pull/manifest のファイルをセーブフォルダに取り込む", func(t *testing.T) {
+	t.Run("6-L7 manifest のファイルをセーブフォルダに取り込む", func(t *testing.T) {
 		e := newEnv(t)
 		removeSaveDir(t, e)
 		plan := approvedPull(t, e, files)
@@ -85,7 +85,7 @@ func TestPull(t *testing.T) {
 		}
 	})
 
-	t.Run("6章/Pull/同じ中身の 2 つのファイルをどちらも取り込む", func(t *testing.T) {
+	t.Run("6-L4 同じ中身の 2 つのファイルをどちらも取り込む", func(t *testing.T) {
 		e := newEnv(t)
 		removeSaveDir(t, e)
 		same := map[string]string{"a.sav": "same", "b.sav": "same"}
@@ -99,7 +99,7 @@ func TestPull(t *testing.T) {
 		}
 	})
 
-	t.Run("6章/Pull/空 manifest の世代を取り込むと、空のセーブフォルダができる", func(t *testing.T) {
+	t.Run("6-L7 空 manifest の世代を取り込むと、空のセーブフォルダができる", func(t *testing.T) {
 		e := newEnv(t)
 		removeSaveDir(t, e)
 		plan := approvedPull(t, e, map[string]string{})
@@ -132,7 +132,7 @@ func TestPull(t *testing.T) {
 		}
 	})
 
-	t.Run("6章/Pull/base を remote の manifest ハッシュにする", func(t *testing.T) {
+	t.Run("6-L8 base を remote の manifest ハッシュにする", func(t *testing.T) {
 		e := newEnv(t)
 		removeSaveDir(t, e)
 		plan := approvedPull(t, e, files)
@@ -145,7 +145,7 @@ func TestPull(t *testing.T) {
 		}
 	})
 
-	t.Run("6章/Pull/終わったら stage を残さず、ジャーナルを削除する", func(t *testing.T) {
+	t.Run("6-L10 終わったら stage を残さず、ジャーナルを削除する", func(t *testing.T) {
 		e := newEnv(t)
 		removeSaveDir(t, e)
 		plan := approvedPull(t, e, files)
@@ -164,7 +164,7 @@ func TestPull(t *testing.T) {
 		}
 	})
 
-	t.Run("6章/Pull/セーブフォルダがあれば old に退避し、手順 9 を行わずにジャーナルを残す", func(t *testing.T) {
+	t.Run("6-L7 セーブフォルダがあれば old に退避し、手順 9 を行わずにジャーナルを残す", func(t *testing.T) {
 		e := newEnv(t)
 		if err := os.Mkdir(filepath.Join(e.saveDir, "empty"), 0o700); err != nil {
 			t.Fatalf("mkdir: %v", err)
@@ -211,7 +211,7 @@ func TestPull中止(t *testing.T) {
 	files := map[string]string{"slot1.sav": "one", "slot2.sav": "two"}
 	injected := errors.New("injected")
 
-	t.Run("6章/Pull/object がなければ中止し、stage とジャーナルを削除する", func(t *testing.T) {
+	t.Run("6-L4 object がなければ中止し、stage とジャーナルを削除する", func(t *testing.T) {
 		e := newEnv(t)
 		plan := approvedPull(t, e, files)
 		if err := e.remote.Delete(t.Context(), objectKey("two")); err != nil {
@@ -225,7 +225,7 @@ func TestPull中止(t *testing.T) {
 		assertAborted(t, e, map[string]string{})
 	})
 
-	t.Run("6章/Pull/object の取得が失敗したら中止し、stage とジャーナルを削除する", func(t *testing.T) {
+	t.Run("6-A1 object の取得が失敗したら中止し、stage とジャーナルを削除する", func(t *testing.T) {
 		e := newEnv(t)
 		plan := approvedPull(t, e, files)
 		failGet(e, "/objects/", injected)
@@ -236,7 +236,7 @@ func TestPull中止(t *testing.T) {
 		assertAborted(t, e, map[string]string{})
 	})
 
-	t.Run("6章/Pull/stage が manifest と一致しなければ中止し、stage とジャーナルを削除する", func(t *testing.T) {
+	t.Run("6-L5 stage が manifest と一致しなければ中止し、stage とジャーナルを削除する", func(t *testing.T) {
 		e := newEnv(t)
 		plan := approvedPull(t, e, files)
 		e.putObject(t, objectKey("two"), "broken")
@@ -248,7 +248,7 @@ func TestPull中止(t *testing.T) {
 		assertAborted(t, e, map[string]string{})
 	})
 
-	t.Run("6章/Pull/承認後にセーブフォルダが変わっていたら ErrPlanStale、stage とジャーナルを削除する", func(t *testing.T) {
+	t.Run("6-L6 承認後にセーブフォルダが変わっていたら ErrPlanStale、stage とジャーナルを削除する", func(t *testing.T) {
 		e := newEnv(t)
 		plan := approvedPull(t, e, files)
 		changed := map[string]string{"slot1.sav": "local"}
@@ -260,7 +260,7 @@ func TestPull中止(t *testing.T) {
 		assertAborted(t, e, changed)
 	})
 
-	t.Run("6章/Pull/承認後に HEAD が変わっていたら ErrPlanStale、stage とジャーナルを削除する", func(t *testing.T) {
+	t.Run("6-L6 承認後に HEAD が変わっていたら ErrPlanStale、stage とジャーナルを削除する", func(t *testing.T) {
 		e := newEnv(t)
 		plan := approvedPull(t, e, files)
 		e.putManifest(t, otherGeneration, entriesOf(map[string]string{"slot1.sav": "one"}))
@@ -272,7 +272,7 @@ func TestPull中止(t *testing.T) {
 		assertAborted(t, e, map[string]string{})
 	})
 
-	t.Run("6章/Pull/承認後に HEAD が消えていたら ErrPlanStale、stage とジャーナルを削除する", func(t *testing.T) {
+	t.Run("6-L6 承認後に HEAD が消えていたら ErrPlanStale、stage とジャーナルを削除する", func(t *testing.T) {
 		e := newEnv(t)
 		plan := approvedPull(t, e, files)
 		if err := e.remote.Delete(t.Context(), headKey()); err != nil {
@@ -291,19 +291,19 @@ func TestPull不正なmanifest(t *testing.T) {
 		name  string
 		paths []string
 	}{
-		{"6章/不正な manifest/path が空", []string{""}},
-		{"6章/不正な manifest// で始まる", []string{"/etc/passwd"}},
-		{"6章/不正な manifest/\\ で始まる", []string{`\Windows\win.ini`}},
-		{"6章/不正な manifest/ドライブレターを含む", []string{"C:/Windows/win.ini"}},
-		{"6章/不正な manifest/要素の途中にドライブレターを含む", []string{"a/C:b.sav"}},
-		{"6章/不正な manifest/UNC パス", []string{`\\server\share\a.sav`}},
-		{"6章/不正な manifest/.. の要素がある", []string{"../a.sav"}},
-		{"6章/不正な manifest/途中に .. の要素がある", []string{"dir/../../a.sav"}},
-		{"6章/不正な manifest/. の要素がある", []string{"./a.sav"}},
-		{"6章/不正な manifest/空の要素がある", []string{"dir//a.sav"}},
-		{"6章/不正な manifest/末尾が / で空の要素がある", []string{"dir/"}},
-		{"6章/不正な manifest/\\ を含む", []string{`dir\a.sav`}},
-		{"6章/不正な manifest/大文字小文字の違いだけで重複する", []string{"Slot1.sav", "slot1.sav"}},
+		{"6-M1 path が空", []string{""}},
+		{"6-M2 「/」で始まる", []string{"/etc/passwd"}},
+		{"6-M2 「\\」で始まる", []string{`\Windows\win.ini`}},
+		{"6-M2 ドライブレターを含む", []string{"C:/Windows/win.ini"}},
+		{"6-M2 要素の途中にドライブレターを含む", []string{"a/C:b.sav"}},
+		{"6-M2 UNC パス", []string{`\\server\share\a.sav`}},
+		{"6-M3 .. の要素がある", []string{"../a.sav"}},
+		{"6-M3 途中に .. の要素がある", []string{"dir/../../a.sav"}},
+		{"6-M3 . の要素がある", []string{"./a.sav"}},
+		{"6-M3 空の要素がある", []string{"dir//a.sav"}},
+		{"6-M3 末尾が「/」で空の要素がある", []string{"dir/"}},
+		{"6-M4 「\\」を含む", []string{`dir\a.sav`}},
+		{"6-M5 大文字小文字の違いだけで重複する", []string{"Slot1.sav", "slot1.sav"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -337,7 +337,7 @@ func TestPull不正なmanifest(t *testing.T) {
 		})
 	}
 
-	t.Run("6章/不正な manifest/要素の一部に .. を含むだけなら正当", func(t *testing.T) {
+	t.Run("6-M3 要素の一部に .. を含むだけなら正当", func(t *testing.T) {
 		e := newEnv(t)
 		removeSaveDir(t, e)
 		files := map[string]string{"a..b.sav": "one", "dir/..c": "two"}
