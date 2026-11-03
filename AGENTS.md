@@ -97,7 +97,7 @@ internal/synclock/     PC 全体の同期ロック（仕様書 3 章）
   - モジュール全体に golangci-lint を `GOOS=windows` と `GOOS=linux` の両方でかける。golangci-lint は実行する OS 向けのファイルしか解析しないため、本番で動く Windows 向けのコードを検査するには `GOOS=windows` が要る
   - テストはフックでは走らせず、CI に任せる
 - リンタの設定は `.golangci.yml` に明示する。リンタを追加するときは、1 つずつ PR で入れる
-- CI は dev と main への PR と push で走る。Ubuntu でフォーマットの確認と両方の GOOS でのリント、Ubuntu と Windows でテストを行う。フックは `--no-verify` で飛ばせるので、ルールを最終的に守らせるのは CI である
+- CI は dev と main への PR と push で走る。Ubuntu でフォーマットの確認と両方の GOOS でのリント、Ubuntu と Windows でテストを行う。PR では、`.md` だけの変更ならリントとテストを飛ばす。ブランチ保護の必須チェックは、他のジョブの結果をまとめる `CI OK` の 1 つだけにし、CI にジョブを足したら `CI OK` の `needs` にも足す。フックは `--no-verify` で飛ばせるので、ルールを最終的に守らせるのは CI である
 
 ## ブランチとマージ
 
