@@ -23,8 +23,9 @@ import (
 const usage = `usage:
   cloudlaunch-cli game add --title <タイトル> --save-dir <パス> --exe <パス> [--brand <ブランド>] [--id <gameId>] [--data-dir <dir>]
   cloudlaunch-cli status --game <gameId> [--data-dir <dir>]
+  cloudlaunch-cli push --game <gameId> [--data-dir <dir>]
 
-status はリモートの接続先と鍵を環境変数から読む:
+status と push はリモートの接続先と鍵を環境変数から読む:
   CLOUDLAUNCH_S3_ENDPOINT, CLOUDLAUNCH_S3_BUCKET, CLOUDLAUNCH_S3_ACCESS_KEY_ID, CLOUDLAUNCH_S3_SECRET_ACCESS_KEY,
   CLOUDLAUNCH_S3_REGION（省くと auto）`
 
@@ -42,18 +43,82 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 	if len(args) >= 1 && args[0] == "status" {
 		return status(ctx, args[1:], stdout)
 	}
+	if len(args) >= 1 && args[0] == "push" {
+		return push(ctx, args[1:], stdout)
+	}
 	return errors.New(usage)
 }
 
 func status(ctx context.Context, args []string, stdout io.Writer) error {
-	fs := flag.NewFlagSet("status", flag.ContinueOnError)
-	gameID := fs.String("game", "", "ゲーム ID")
-	dataDir := fs.String("data-dir", "", "DB などを置くディレクトリ")
-	if err := fs.Parse(args); err != nil {
+	core, gameID, closeStore, err := openCore(ctx, "status", args)
+	if err != nil {
 		return err
 	}
-	if *gameID == "" {
-		return errors.New("--game is required")
+	defer closeStore()
+
+	plan, err := core.Status(ctx, gameID)
+	if err != nil {
+		return err
+	}
+	if err := printPlan(stdout, plan); err != nil {
+		return err
+	}
+	return recordBaseIfNeeded(ctx, core, plan, stdout)
+}
+
+// recordBaseIfNeeded は、データを転送しないので確認を取らない（仕様書 4 章）。
+func recordBaseIfNeeded(ctx context.Context, core *syncore.Core, plan syncore.Plan, stdout io.Writer) error {
+	if !plan.RecordBase {
+		return nil
+	}
+	if err := core.RecordBase(ctx, plan); err != nil {
+		return err
+	}
+	_, err := fmt.Fprintln(stdout, "base を記録しました")
+	return err
+}
+
+// push は、コマンドの実行を承認とみなして確認を出さない（仕様書 7 章の確認は GUI が出す）。
+func push(ctx context.Context, args []string, stdout io.Writer) error {
+	core, gameID, closeStore, err := openCore(ctx, "push", args)
+	if err != nil {
+		return err
+	}
+	defer closeStore()
+
+	plan, err := core.Status(ctx, gameID)
+	if err != nil {
+		return err
+	}
+	if err := printPlan(stdout, plan); err != nil {
+		return err
+	}
+	if plan.Decision != syncore.DecisionPush {
+		if _, err := fmt.Fprintln(stdout, "判定が Push でないので、アップロードしません"); err != nil {
+			return err
+		}
+		return recordBaseIfNeeded(ctx, core, plan, stdout)
+	}
+	if err := core.Push(ctx, plan); err != nil {
+		if errors.Is(err, syncore.ErrPlanStale) {
+			return fmt.Errorf("状況が変わりました。もう一度実行してください: %w", err)
+		}
+		return err
+	}
+	_, err = fmt.Fprintln(stdout, "アップロードしました")
+	return err
+}
+
+// openCore は --game と --data-dir を読み、リモートと DB につないだコアを返す。closeStore は呼び出し側が必ず呼ぶ。
+func openCore(ctx context.Context, name string, args []string) (core *syncore.Core, gameID string, closeStore func(), err error) {
+	fs := flag.NewFlagSet(name, flag.ContinueOnError)
+	game := fs.String("game", "", "ゲーム ID")
+	dataDir := fs.String("data-dir", "", "DB などを置くディレクトリ")
+	if err := fs.Parse(args); err != nil {
+		return nil, "", nil, err
+	}
+	if *game == "" {
+		return nil, "", nil, errors.New("--game is required")
 	}
 
 	remote, err := objstore.New(objstore.Config{
@@ -64,20 +129,28 @@ func status(ctx context.Context, args []string, stdout io.Writer) error {
 		SecretAccessKey: os.Getenv("CLOUDLAUNCH_S3_SECRET_ACCESS_KEY"),
 	})
 	if err != nil {
-		return err
+		return nil, "", nil, err
+	}
+	// deviceName は DB の設定に置き、初期値をホスト名にする（仕様書 3 章）。変更する手段ができるまでは初期値をそのまま渡す
+	host, err := os.Hostname()
+	if err != nil {
+		return nil, "", nil, fmt.Errorf("hostname: %w", err)
 	}
 	s, err := openStore(ctx, *dataDir)
 	if err != nil {
-		return err
-	}
-	defer func() { _ = s.Close() }()
-
-	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
-	plan, err := syncore.New(remote, s, logger).Status(ctx, *gameID)
-	if err != nil {
-		return err
+		return nil, "", nil, err
 	}
 
+	core = syncore.New(syncore.Config{
+		Remote:     remote,
+		Local:      s,
+		Logger:     slog.New(slog.NewTextHandler(os.Stderr, nil)),
+		DeviceName: host,
+	})
+	return core, *game, func() { _ = s.Close() }, nil
+}
+
+func printPlan(w io.Writer, plan syncore.Plan) error {
 	decision := map[syncore.Decision]string{
 		syncore.DecisionNoChange: "変更なし",
 		syncore.DecisionPush:     "Push",
@@ -87,7 +160,7 @@ func status(ctx context.Context, args []string, stdout io.Writer) error {
 	if plan.RecordBase {
 		decision += "（base を記録）"
 	}
-	_, err = fmt.Fprintf(stdout, "判定: %s\nbase: %s\nlocal: %s\nremote: %s\n",
+	_, err := fmt.Fprintf(w, "判定: %s\nbase: %s\nlocal: %s\nremote: %s\n",
 		decision, orDash(plan.Base), orDash(plan.Local.Hash), orDash(plan.Remote.Hash))
 	return err
 }

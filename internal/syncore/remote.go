@@ -21,18 +21,35 @@ func manifestKey(gameID, generation string) string {
 	return "games/" + gameID + "/manifests/" + generation + ".json"
 }
 
-// readRemote は HEAD がなければゼロ値を返す。
-func (c *Core) readRemote(ctx context.Context, gameID string) (RemoteState, error) {
+func objectsPrefix(gameID string) string {
+	return "games/" + gameID + "/objects/"
+}
+
+func objectKey(gameID, sha256 string) string {
+	return objectsPrefix(gameID) + sha256
+}
+
+// readHead は HEAD が指す世代を返す。HEAD がなければ空を返す。
+func (c *Core) readHead(ctx context.Context, gameID string) (string, error) {
 	head, err := c.getAll(ctx, headKey(gameID))
 	if errors.Is(err, fs.ErrNotExist) {
-		return RemoteState{}, nil
+		return "", nil
 	}
 	if err != nil {
-		return RemoteState{}, fmt.Errorf("read HEAD: %w", err)
+		return "", fmt.Errorf("read HEAD: %w", err)
 	}
 	generation := string(head)
 	if !generationPattern.MatchString(generation) {
-		return RemoteState{}, fmt.Errorf("malformed HEAD: %q", generation)
+		return "", fmt.Errorf("malformed HEAD: %q", generation)
+	}
+	return generation, nil
+}
+
+// readRemote は HEAD がなければゼロ値を返す。
+func (c *Core) readRemote(ctx context.Context, gameID string) (RemoteState, error) {
+	generation, err := c.readHead(ctx, gameID)
+	if err != nil || generation == "" {
+		return RemoteState{}, err
 	}
 
 	body, err := c.getAll(ctx, manifestKey(gameID, generation))
