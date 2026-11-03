@@ -91,6 +91,7 @@ internal/synclock/     PC 全体の同期ロック（仕様書 3 章）
 
 - lefthook を選んだ理由: `docs/adr/2026-10-23_00-30_git-hooks-lefthook.md`
 - ツールのバージョンは `mise.toml` で固定する。clone したら `mise install` と `lefthook install` を実行する
+- リモートの接続情報などの環境変数は `.env` に書き、mise（`mise.toml` の `[env]`）で読み込む。`.env` は git に入れず、`.env.example` を写して作る
 - コミット時に lefthook の pre-commit フックが走る
   - ステージした `.go` ファイルにフォーマッタ（gofmt・goimports）をかけ、直した結果をステージに戻す
   - モジュール全体に golangci-lint を `GOOS=windows` と `GOOS=linux` の両方でかける。golangci-lint は実行する OS 向けのファイルしか解析しないため、本番で動く Windows 向けのコードを検査するには `GOOS=windows` が要る
