@@ -21,6 +21,8 @@ type ObjectStore interface {
 type LocalStore interface {
 	GameLocal(ctx context.Context, gameID string) (saveFolderPath, baseManifestHash string, err error)
 	SetBase(ctx context.Context, gameID, manifestHash string) error
+	InsertPullOperation(ctx context.Context, opID, gameID, livePath, stagePath, oldPath string, createdAt time.Time) error
+	DeletePullOperation(ctx context.Context, opID string) error
 }
 
 type Config struct {

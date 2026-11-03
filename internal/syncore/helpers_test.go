@@ -3,9 +3,11 @@ package syncore_test
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"io"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -34,6 +36,7 @@ type env struct {
 	store   *store.Store
 	remote  *memstore.Store
 	saveDir string
+	dbPath  string
 }
 
 // newEnv は、セーブフォルダを持つゲームを 1 つ登録した DB と、空のリモートを用意する。
@@ -51,7 +54,8 @@ func newEnvWithRemote(t *testing.T, remote *memstore.Store) env {
 		t.Fatalf("mkdir save: %v", err)
 	}
 
-	st, err := store.Open(context.Background(), filepath.Join(dir, "cloudlaunch.db"))
+	dbPath := filepath.Join(dir, "cloudlaunch.db")
+	st, err := store.Open(context.Background(), dbPath)
 	if err != nil {
 		t.Fatalf("store.Open: %v", err)
 	}
@@ -74,7 +78,7 @@ func newEnvWithRemote(t *testing.T, remote *memstore.Store) env {
 		Now:           func() time.Time { return testNow },
 		NewGeneration: func() (string, error) { return pushGeneration, nil },
 	})
-	return env{core: core, store: st, remote: remote, saveDir: saveDir}
+	return env{core: core, store: st, remote: remote, saveDir: saveDir, dbPath: dbPath}
 }
 
 func (e env) status(t *testing.T) (syncore.Plan, error) {
@@ -176,6 +180,68 @@ func (e env) setBase(t *testing.T, hash string) {
 	if err := e.store.SetBase(context.Background(), testGameID, hash); err != nil {
 		t.Fatalf("SetBase: %v", err)
 	}
+}
+
+// openDB は、store が公開していない読み書き（ジャーナルの行の数、セーブフォルダのパスの変更）のために、同じ DB を別に開く。
+func (e env) openDB(t *testing.T) *sql.DB {
+	t.Helper()
+	db, err := sql.Open("sqlite", e.dbPath)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	return db
+}
+
+func (e env) execDB(t *testing.T, query string, args ...any) {
+	t.Helper()
+	if _, err := e.openDB(t).Exec(query, args...); err != nil {
+		t.Fatalf("exec %q: %v", query, err)
+	}
+}
+
+func (e env) journalCount(t *testing.T) int {
+	t.Helper()
+	var n int
+	if err := e.openDB(t).QueryRow(`SELECT count(*) FROM pull_operations`).Scan(&n); err != nil {
+		t.Fatalf("count pull_operations: %v", err)
+	}
+	return n
+}
+
+// workDirs は、セーブフォルダの親ディレクトリにある stage と old の名前を返す。
+func (e env) workDirs(t *testing.T, kind string) []string {
+	t.Helper()
+	matches, err := filepath.Glob(filepath.Join(filepath.Dir(e.saveDir), ".cloudlaunch-"+kind+"-*"))
+	if err != nil {
+		t.Fatalf("glob: %v", err)
+	}
+	return matches
+}
+
+// readFiles はセーブフォルダの全ファイルを、区切りを / にした相対パスをキーにして返す。
+func readFiles(t *testing.T, root string) map[string]string {
+	t.Helper()
+	files := map[string]string{}
+	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		b, err := os.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(root, p)
+		if err != nil {
+			return err
+		}
+		files[filepath.ToSlash(rel)] = string(b)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("read files: %v", err)
+	}
+	return files
 }
 
 func (e env) base(t *testing.T) string {

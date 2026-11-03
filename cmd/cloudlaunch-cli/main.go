@@ -24,8 +24,9 @@ const usage = `usage:
   cloudlaunch-cli game add --title <タイトル> --save-dir <パス> --exe <パス> [--brand <ブランド>] [--id <gameId>] [--data-dir <dir>]
   cloudlaunch-cli status --game <gameId> [--data-dir <dir>]
   cloudlaunch-cli push --game <gameId> [--data-dir <dir>]
+  cloudlaunch-cli pull --game <gameId> [--data-dir <dir>]
 
-status と push はリモートの接続先と鍵を環境変数から読む:
+status・push・pull はリモートの接続先と鍵を環境変数から読む:
   CLOUDLAUNCH_S3_ENDPOINT, CLOUDLAUNCH_S3_BUCKET, CLOUDLAUNCH_S3_ACCESS_KEY_ID, CLOUDLAUNCH_S3_SECRET_ACCESS_KEY,
   CLOUDLAUNCH_S3_REGION（省くと auto）`
 
@@ -45,6 +46,9 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 	}
 	if len(args) >= 1 && args[0] == "push" {
 		return push(ctx, args[1:], stdout)
+	}
+	if len(args) >= 1 && args[0] == "pull" {
+		return pull(ctx, args[1:], stdout)
 	}
 	return errors.New(usage)
 }
@@ -106,6 +110,37 @@ func push(ctx context.Context, args []string, stdout io.Writer) error {
 		return err
 	}
 	_, err = fmt.Fprintln(stdout, "アップロードしました")
+	return err
+}
+
+// pull は、push と同じくコマンドの実行を承認とみなして確認を出さない。
+func pull(ctx context.Context, args []string, stdout io.Writer) error {
+	core, gameID, closeStore, err := openCore(ctx, "pull", args)
+	if err != nil {
+		return err
+	}
+	defer closeStore()
+
+	plan, err := core.Status(ctx, gameID)
+	if err != nil {
+		return err
+	}
+	if err := printPlan(stdout, plan); err != nil {
+		return err
+	}
+	if plan.Decision != syncore.DecisionPull {
+		if _, err := fmt.Fprintln(stdout, "判定が Pull でないので、ダウンロードしません"); err != nil {
+			return err
+		}
+		return recordBaseIfNeeded(ctx, core, plan, stdout)
+	}
+	if err := core.Pull(ctx, plan); err != nil {
+		if errors.Is(err, syncore.ErrPlanStale) {
+			return fmt.Errorf("状況が変わりました。もう一度実行してください: %w", err)
+		}
+		return err
+	}
+	_, err = fmt.Fprintln(stdout, "ダウンロードしました")
 	return err
 }
 
