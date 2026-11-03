@@ -2,3 +2,6 @@
 go = "1.27.3"
 golangci-lint = "2.15.0"
 lefthook = "2.2.2"
+
+[env]
+_.file = { path = ".env", redact = true }
