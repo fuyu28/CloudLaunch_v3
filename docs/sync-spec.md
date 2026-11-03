@@ -223,7 +223,7 @@ Push と Pull の実行中は、`%LOCALAPPDATA%\CloudLaunch\sync.lock` を OS �
 3. Pull ジャーナルに `{ opId, gameId, live のパス, stage のパス, old のパス }` を書く
 4. stage に全ファイルを取得する
 5. stage を検証する。全エントリの sha256 と size が manifest と一致し、manifest にないファイルがないこと
-6. live をハッシュし直し、承認した時点から変わっていれば中止する
+6. live をハッシュし直し、HEAD を読み直す。live が承認した時点から変わっているか、HEAD が承認した世代から変わっていれば中止する
 7. live を old にリネームし、続けて stage を live にリネームする。live が存在しなければ、前半のリネームは行わない
 8. base を書き込む
 9. old をバックアップへ移し、古いバックアップを削除して 3 個に保つ。old がなければ行わない
