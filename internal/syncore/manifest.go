@@ -32,6 +32,8 @@ type Manifest struct {
 	Entries    []Entry `json:"entries"`
 }
 
+var emptyManifestHash = ManifestHash(nil)
+
 // ManifestHash は entries を並べ替えず、渡された順のまま正規化 JSON にする。
 func ManifestHash(entries []Entry) string {
 	b := []byte{'['}
