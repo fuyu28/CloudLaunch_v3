@@ -110,12 +110,24 @@ jobs:
       - name: Test
         run: go test -race -cover ./...
 
+  # 仕様書の変更（.md だけの PR）でも一覧が変わるので、changes の結果によらず走らせる
+  spec-ids:
+    name: Spec IDs
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: List spec IDs without tests
+        run: scripts/spec-ids.sh >> "$GITHUB_STEP_SUMMARY"
+
   # ブランチ保護の必須チェックはこのジョブだけにする。matrix のジョブを if で飛ばすとチェック名が展開されずに報告され、
   # 必須チェックの名前と合わなくなるため。ジョブを足したら needs にも足す
   ci-ok:
     name: CI OK
     if: always()
-    needs: [changes, lint, test]
+    needs: [changes, lint, test, spec-ids]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
