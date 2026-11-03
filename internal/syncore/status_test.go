@@ -77,12 +77,116 @@ func TestStatusなしの意味(t *testing.T) {
 }
 
 func TestStatusBaseあり(t *testing.T) {
-	t.Run("4章/base あり → 未実装のエラー", func(t *testing.T) {
-		e := newEnv(t)
-		e.setBase(t, syncore.ManifestHash(nil))
+	base := map[string]string{"slot1.sav": "base"}
+	changed := map[string]string{"slot1.sav": "changed"}
+	other := map[string]string{"slot1.sav": "other"}
 
-		if _, err := e.status(t); err == nil {
-			t.Fatal("Status succeeded, want not implemented error")
+	tests := []struct {
+		name             string
+		local            map[string]string // nil ならセーブフォルダにファイルを置かない
+		remote           map[string]string // nil なら HEAD を置かない
+		wantDecision     syncore.Decision
+		wantRecordBase   bool
+		wantLocalMissing bool
+	}{
+		{name: "4-D6 base B・local B・remote B → 変更なし", local: base, remote: base, wantDecision: syncore.DecisionNoChange},
+		{name: "4-D7 base B・local 変化・remote B → Push", local: changed, remote: base, wantDecision: syncore.DecisionPush},
+		{name: "4-D8 base B・local B・remote 変化 → Pull", local: base, remote: other, wantDecision: syncore.DecisionPull},
+		{name: "4-D9 base B・local 変化・remote 変化（local と同じ） → 変更なし（base を更新）", local: changed, remote: changed, wantDecision: syncore.DecisionNoChange, wantRecordBase: true},
+		{name: "4-D10 base B・local 変化・remote 変化（local と異なる） → 競合", local: changed, remote: other, wantDecision: syncore.DecisionConflict},
+		{name: "4-D11 base B・local なし・remote B または変化 → 競合（ローカルにセーブが見つからない）", remote: other, wantDecision: syncore.DecisionConflict, wantLocalMissing: true},
+		{name: "4-D12 base B・local B または変化・remote なし → Push", local: changed, wantDecision: syncore.DecisionPush},
+		{name: "4-D13 base B・local なし・remote なし → 変更なし", wantDecision: syncore.DecisionNoChange},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			e := newEnv(t)
+			e.setBase(t, syncore.ManifestHash(entriesOf(base)))
+			writeFiles(t, e.saveDir, tt.local)
+			if tt.remote != nil {
+				e.putGeneration(t, entriesOf(tt.remote))
+			}
+
+			plan, err := e.status(t)
+			if err != nil {
+				t.Fatalf("Status: %v", err)
+			}
+			got := [3]any{plan.Decision, plan.RecordBase, plan.LocalMissing}
+			want := [3]any{tt.wantDecision, tt.wantRecordBase, tt.wantLocalMissing}
+			if got != want {
+				t.Errorf("(Decision, RecordBase, LocalMissing) = %v, want %v", got, want)
+			}
+		})
+	}
+
+	t.Run("4章/base が空 manifest なら、ファイルのない local を空 manifest として比べる", func(t *testing.T) {
+		e := newEnv(t)
+		empty := syncore.ManifestHash(nil)
+		e.setBase(t, empty)
+		e.putGeneration(t, []syncore.Entry{})
+
+		plan, err := e.status(t)
+		if err != nil {
+			t.Fatalf("Status: %v", err)
+		}
+		if plan.Decision != syncore.DecisionNoChange || plan.LocalMissing || plan.Local.Hash != empty {
+			t.Errorf("(Decision, LocalMissing, Local.Hash) = (%v, %v, %q), want (変更なし, false, %q)", plan.Decision, plan.LocalMissing, plan.Local.Hash, empty)
+		}
+	})
+
+	t.Run("4章/base を更新/base を local の manifest ハッシュにする", func(t *testing.T) {
+		e := newEnv(t)
+		e.setBase(t, syncore.ManifestHash(entriesOf(base)))
+		writeFiles(t, e.saveDir, changed)
+		e.putGeneration(t, entriesOf(changed))
+		plan, err := e.status(t)
+		if err != nil {
+			t.Fatalf("Status: %v", err)
+		}
+		if !plan.RecordBase {
+			t.Fatalf("RecordBase = false, want true")
+		}
+
+		if err := e.core.RecordBase(t.Context(), plan); err != nil {
+			t.Fatalf("RecordBase: %v", err)
+		}
+		if got, want := e.base(t), syncore.ManifestHash(entriesOf(changed)); got != want {
+			t.Errorf("base = %q, want %q", got, want)
+		}
+	})
+}
+
+func TestStatus複数PC(t *testing.T) {
+	t.Run("4章/複数 PC/Push と Pull の後に、相手の Push を Pull と判定する", func(t *testing.T) {
+		a := newEnv(t)
+		b := newEnvWithRemote(t, a.remote)
+		removeSaveDir(t, b)
+		if err := a.core.Push(t.Context(), approvedPush(t, a, map[string]string{"slot1.sav": "one"})); err != nil {
+			t.Fatalf("A の Push: %v", err)
+		}
+		pull, err := b.status(t)
+		if err != nil {
+			t.Fatalf("B の Status: %v", err)
+		}
+		if err := b.core.Pull(t.Context(), pull); err != nil {
+			t.Fatalf("B の Pull: %v", err)
+		}
+
+		writeFiles(t, a.saveDir, map[string]string{"slot1.sav": "two"})
+		push, err := a.status(t)
+		if err != nil {
+			t.Fatalf("A の 2 回目の Status: %v", err)
+		}
+		if err := a.core.Push(t.Context(), push); err != nil {
+			t.Fatalf("A の 2 回目の Push: %v", err)
+		}
+
+		got, err := b.status(t)
+		if err != nil {
+			t.Fatalf("B の 2 回目の Status: %v", err)
+		}
+		if got.Decision != syncore.DecisionPull {
+			t.Errorf("Decision = %v, want Pull", got.Decision)
 		}
 	})
 }

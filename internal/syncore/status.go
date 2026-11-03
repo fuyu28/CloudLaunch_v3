@@ -82,9 +82,11 @@ type Plan struct {
 	Decision Decision
 	// RecordBase は、判定が「base を記録」の行に当たったことを表す
 	RecordBase bool
-	Base       string // 空なら base なし
-	Local      LocalState
-	Remote     RemoteState
+	// LocalMissing は、判定が「base あり・local なし → 競合」の行に当たったことを表す。「ローカルにセーブが見つかりません」と警告する
+	LocalMissing bool
+	Base         string // 空なら base なし
+	Local        LocalState
+	Remote       RemoteState
 }
 
 type LocalState struct {
