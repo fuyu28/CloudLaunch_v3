@@ -103,7 +103,7 @@ func localEntries(ctx context.Context, root string) ([]Entry, error) {
 		if d.IsDir() {
 			return nil
 		}
-		// 通常のファイル以外を飛ばすと、リンク先のセーブが同期されないまま失われうる（仕様書 11 章の未決事項）
+		// 通常のファイル以外を飛ばすと、リンク先のセーブが同期されないまま失われうる（仕様書 2 章）
 		if !d.Type().IsRegular() {
 			return fmt.Errorf("%s is not a regular file (%s)", p, d.Type())
 		}
