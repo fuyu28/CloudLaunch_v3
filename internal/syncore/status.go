@@ -124,6 +124,10 @@ func (c *Core) Status(ctx context.Context, gameID string) (Plan, error) {
 	return plan, nil
 }
 
+func (c *Core) RecordBase(ctx context.Context, plan Plan) error {
+	return errors.New("not implemented")
+}
+
 // decideWithoutBase は判定表の「base なし」の 5 行に当たる。空のハッシュは「なし」を表す。
 func decideWithoutBase(localHash, remoteHash string) (Decision, bool) {
 	switch {

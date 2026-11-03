@@ -103,3 +103,66 @@ func TestStatusリモートの失敗(t *testing.T) {
 		}
 	})
 }
+
+// approvedRecordBase は、リモートと同じ files をセーブフォルダに置いて Status を呼び、判定が「base を記録」の plan を返す。
+func approvedRecordBase(t *testing.T, e env, files map[string]string) syncore.Plan {
+	t.Helper()
+	writeFiles(t, e.saveDir, files)
+	e.putGeneration(t, entriesOf(files))
+	plan, err := e.status(t)
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if plan.Decision != syncore.DecisionNoChange || !plan.RecordBase {
+		t.Fatalf("(Decision, RecordBase) = (%v, %v), want (変更なし, true)", plan.Decision, plan.RecordBase)
+	}
+	return plan
+}
+
+func TestRecordBase(t *testing.T) {
+	files := map[string]string{"slot1.sav": "one"}
+
+	t.Run("4章/base を記録/base を local の manifest ハッシュにする", func(t *testing.T) {
+		e := newEnv(t)
+		plan := approvedRecordBase(t, e, files)
+
+		if err := e.core.RecordBase(t.Context(), plan); err != nil {
+			t.Fatalf("RecordBase: %v", err)
+		}
+		if got, want := e.base(t), syncore.ManifestHash(entriesOf(files)); got != want {
+			t.Errorf("base = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("4章/base を記録/リモートを読み書きしない", func(t *testing.T) {
+		e := newEnv(t)
+		plan := approvedRecordBase(t, e, files)
+		e.remote.Before = func(op memstore.Op, key string) error {
+			t.Errorf("リモートを呼んだ: op=%v key=%s", op, key)
+			return nil
+		}
+
+		if err := e.core.RecordBase(t.Context(), plan); err != nil {
+			t.Fatalf("RecordBase: %v", err)
+		}
+	})
+
+	t.Run("4章/base を記録/判定が「base を記録」でない plan はエラー", func(t *testing.T) {
+		e := newEnv(t)
+		writeFiles(t, e.saveDir, files)
+		plan, err := e.status(t)
+		if err != nil {
+			t.Fatalf("Status: %v", err)
+		}
+		if plan.Decision != syncore.DecisionPush {
+			t.Fatalf("Decision = %v, want Push", plan.Decision)
+		}
+
+		if err := e.core.RecordBase(t.Context(), plan); err == nil {
+			t.Fatal("RecordBase succeeded, want an error")
+		}
+		if base := e.base(t); base != "" {
+			t.Errorf("base = %q, want 空", base)
+		}
+	})
+}
