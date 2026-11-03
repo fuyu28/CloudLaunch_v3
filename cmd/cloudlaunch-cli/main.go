@@ -60,7 +60,22 @@ func status(ctx context.Context, args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	return printPlan(stdout, plan)
+	if err := printPlan(stdout, plan); err != nil {
+		return err
+	}
+	return recordBaseIfNeeded(ctx, core, plan, stdout)
+}
+
+// recordBaseIfNeeded は、データを転送しないので確認を取らない（仕様書 4 章）。
+func recordBaseIfNeeded(ctx context.Context, core *syncore.Core, plan syncore.Plan, stdout io.Writer) error {
+	if !plan.RecordBase {
+		return nil
+	}
+	if err := core.RecordBase(ctx, plan); err != nil {
+		return err
+	}
+	_, err := fmt.Fprintln(stdout, "base を記録しました")
+	return err
 }
 
 // push は、コマンドの実行を承認とみなして確認を出さない（仕様書 7 章の確認は GUI が出す）。
@@ -79,8 +94,10 @@ func push(ctx context.Context, args []string, stdout io.Writer) error {
 		return err
 	}
 	if plan.Decision != syncore.DecisionPush {
-		_, err := fmt.Fprintln(stdout, "判定が Push でないので、アップロードしません")
-		return err
+		if _, err := fmt.Fprintln(stdout, "判定が Push でないので、アップロードしません"); err != nil {
+			return err
+		}
+		return recordBaseIfNeeded(ctx, core, plan, stdout)
 	}
 	if err := core.Push(ctx, plan); err != nil {
 		if errors.Is(err, syncore.ErrPlanStale) {

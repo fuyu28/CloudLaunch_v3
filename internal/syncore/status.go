@@ -124,8 +124,16 @@ func (c *Core) Status(ctx context.Context, gameID string) (Plan, error) {
 	return plan, nil
 }
 
+// RecordBase は判定が「base を記録」の plan だけを受け付ける。リモートは読み直さない。
+// Status の時点で local と remote が一致していたので、その後にどちらかが変わっても、次の判定は判定表どおりに決まる。
 func (c *Core) RecordBase(ctx context.Context, plan Plan) error {
-	return errors.New("not implemented")
+	if !plan.RecordBase {
+		return fmt.Errorf("record base %s: plan is not a record-base decision", plan.GameID)
+	}
+	if err := c.local.SetBase(ctx, plan.GameID, plan.Local.Hash); err != nil {
+		return fmt.Errorf("set base: %w", err)
+	}
+	return nil
 }
 
 // decideWithoutBase は判定表の「base なし」の 5 行に当たる。空のハッシュは「なし」を表す。
