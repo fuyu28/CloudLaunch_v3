@@ -18,8 +18,34 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # 対象を「変わったら走らせるもの」の列挙にすると、埋め込みの SQL やテストのコーパスのような書き漏れで検査が飛ぶので、
+  # 「走らせなくてよいもの」を除く形にする
+  changes:
+    name: Changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - name: Detect changed areas
+        id: filter
+        if: github.event_name == 'pull_request'
+        uses: dorny/paths-filter@v3
+        with:
+          predicate-quantifier: every
+          filters: |
+            code:
+              - '**'
+              - '!**/*.md'
+
   lint:
     name: Lint (${{ matrix.goos }})
+    needs: changes
+    # dev と main への push では、取り込んだ結果を確かめるため常に走らせる
+    if: github.event_name == 'push' || needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     strategy:
@@ -51,6 +77,8 @@ jobs:
 
   test:
     name: Test (${{ matrix.os }})
+    needs: changes
+    if: github.event_name == 'push' || needs.changes.outputs.code == 'true'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     strategy:
@@ -81,3 +109,17 @@ jobs:
 
       - name: Test
         run: go test -race -cover ./...
+
+  # ブランチ保護の必須チェックはこのジョブだけにする。matrix のジョブを if で飛ばすとチェック名が展開されずに報告され、
+  # 必須チェックの名前と合わなくなるため。ジョブを足したら needs にも足す
+  ci-ok:
+    name: CI OK
+    if: always()
+    needs: [changes, lint, test]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # 飛ばしたジョブ（skipped）は成功として扱う
+      - name: Fail if any job failed
+        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
+        run: exit 1
