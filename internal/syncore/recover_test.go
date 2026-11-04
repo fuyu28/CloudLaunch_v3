@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -159,8 +160,49 @@ func TestRecover(t *testing.T) {
 		if diff := cmp.Diff(remote, readFiles(t, stage)); diff != "" {
 			t.Errorf("stage (-want +got):\n%s", diff)
 		}
+		if diff := cmp.Diff(map[string]string{"new.sav": "made by game"}, readFiles(t, e.saveDir)); diff != "" {
+			t.Errorf("セーブフォルダ (-want +got):\n%s", diff)
+		}
 		if n := e.journalCount(t); n != 1 {
 			t.Errorf("ジャーナルの行の数 = %d, want 1", n)
+		}
+	})
+
+	t.Run("6章/起動時の復旧/パスの状態を確かめられない → 行を残してエラー", func(t *testing.T) {
+		if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+			t.Skip("ディレクトリの権限で Lstat を失敗させられない")
+		}
+		e := newEnv(t)
+		writeFiles(t, e.saveDir, local)
+		parent := filepath.Dir(e.saveDir)
+		// stage と old を、読めないディレクトリの下にあることにする
+		locked := filepath.Join(parent, "locked")
+		if err := os.Mkdir(locked, 0o700); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		stage := filepath.Join(locked, ".cloudlaunch-stage-"+testOpID)
+		writeFiles(t, stage, remote)
+		if err := e.store.InsertPullOperation(context.Background(), testOpID, testGameID, e.saveDir, stage,
+			filepath.Join(locked, ".cloudlaunch-old-"+testOpID), testNow); err != nil {
+			t.Fatalf("InsertPullOperation: %v", err)
+		}
+		if err := os.Chmod(locked, 0); err != nil {
+			t.Fatalf("chmod: %v", err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(locked, 0o700) })
+
+		got, err := e.core.Recover(t.Context())
+		if err == nil {
+			t.Fatal("Recover error = nil, want an error")
+		}
+		if len(got) != 0 {
+			t.Errorf("Recover = %v, want なし", got)
+		}
+		if n := e.journalCount(t); n != 1 {
+			t.Errorf("ジャーナルの行の数 = %d, want 1", n)
+		}
+		if diff := cmp.Diff(local, readFiles(t, e.saveDir)); diff != "" {
+			t.Errorf("セーブフォルダ (-want +got):\n%s", diff)
 		}
 	})
 
