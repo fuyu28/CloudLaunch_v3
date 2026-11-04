@@ -23,8 +23,8 @@ dev のコード全体のレビューで、この規則が一部のディレク�
 ### ディレクトリの見分け方
 
 - 事項: 中へ進んでよいディレクトリを、モードのどのビットで見分けるか
-- 決定内容: 種類のビット（`Mode().Type()`、`DirEntry.Type()`）が `ModeDir` だけのものを、通常のディレクトリとして中へ進む。`ModeDir` にほかの種類のビットが付いていれば、通常のファイル以外としてエラーにする。セーブフォルダそのものも同じ規則で確かめる
-- 判断理由: Go は、name surrogate でないディレクトリの reparse point に `ModeDir|ModeIrregular` を付ける。`IsDir()` は `ModeDir` だけを見るので、`ModeIrregular` を見落とす。`platform` パッケージで reparse point の属性を直接読む案は、Go が付けるモードで見分けられるので採らない
+- 決定内容: 種類のビット（`Mode().Type()`、`DirEntry.Type()`）が `ModeDir` だけのものを、通常のディレクトリとして中へ進む。`ModeDir` にほかの種類のビットが付いていれば、通常のファイル以外としてエラーにする。セーブフォルダそのものも同じ規則で確かめる。Pull の手順 9 でバックアップへコピーするとき（`copyTree`）も、同じ規則で中へ進むかを決める
+- 判断理由: `copyTree` は、通常のファイル以外をエラーにする規則を 2 章のセーブフォルダの規則と揃えている（2026-11-04_11-27_pull-backup-and-recover.md）ので、ディレクトリの見分け方も揃える。Go は、name surrogate でないディレクトリの reparse point に `ModeDir|ModeIrregular` を付ける。`IsDir()` は `ModeDir` だけを見るので、`ModeIrregular` を見落とす。`platform` パッケージで reparse point の属性を直接読む案は、Go が付けるモードで見分けられるので採らない
 
 ### テスト
 
