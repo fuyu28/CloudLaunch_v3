@@ -1,6 +1,7 @@
 package syncore_test
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -159,6 +160,30 @@ func TestPush(t *testing.T) {
 		}
 		if keys := e.keys(t, "games/"); len(keys) != 0 {
 			t.Errorf("リモートに書いた: %v", keys)
+		}
+	})
+
+	t.Run("5-P7 HEAD を書いた後にキャンセルされても、base を更新する", func(t *testing.T) {
+		e := newEnv(t)
+		plan := approvedPush(t, e, files)
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		// 偽のリモートの Put は ctx を見ないので、HEAD は書けて、その後の ctx だけがキャンセルされた状態になる
+		e.remote.Before = func(op memstore.Op, key string) error {
+			if op == memstore.OpPut && key == headKey() {
+				cancel()
+			}
+			return nil
+		}
+
+		if err := e.core.Push(ctx, plan); err != nil {
+			t.Fatalf("Push: %v", err)
+		}
+		if head, _ := e.getObject(t, headKey()); head != pushGeneration {
+			t.Errorf("HEAD = %q, want %q", head, pushGeneration)
+		}
+		if got, want := e.base(t), syncore.ManifestHash(entriesOf(files)); got != want {
+			t.Errorf("base = %q, want %q", got, want)
 		}
 	})
 }
