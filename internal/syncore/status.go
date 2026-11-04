@@ -48,6 +48,7 @@ type Config struct {
 	Now           func() time.Time
 	NewGeneration func() (string, error)
 	Rename        func(oldpath, newpath string) error
+	SyncFile      func(f *os.File) error
 }
 
 type Core struct {
