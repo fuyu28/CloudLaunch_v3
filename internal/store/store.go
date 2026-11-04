@@ -17,8 +17,10 @@ import (
 //go:embed migrations/*.sql
 var migrations embed.FS
 
-// PRAGMA は実行した接続にしか効かず、database/sql は接続を作り直すので、Open 後に一度 Exec するのではなく DSN で全接続に適用する
-const dsnParams = "?_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)"
+// PRAGMA は実行した接続にしか効かず、database/sql は接続を作り直すので、Open 後に一度 Exec するのではなく DSN で全接続に適用する。
+// synchronous は既定も FULL だが明示する。同期コアは、ファイルとリネームを書き出した後の DB の書き込みがディスクへ
+// 届くことを前提にしている（仕様書 3 章「ディスクへの書き出し」）。WAL の NORMAL では、コミットが届く前に戻りうる
+const dsnParams = "?_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=synchronous(FULL)"
 
 const timeLayout = "2006-01-02T15:04:05.000Z"
 

@@ -30,6 +30,9 @@ func (c *Core) Pull(ctx context.Context, plan Plan) error {
 	if c.backupsDir == "" {
 		return fmt.Errorf("pull %s: %w", plan.GameID, errBackupsDirNotSet)
 	}
+	if c.rename == nil {
+		return fmt.Errorf("pull %s: %w", plan.GameID, errRenameNotSet)
+	}
 	release, err := c.acquire(ctx)
 	if err != nil {
 		return fmt.Errorf("pull %s: %w", plan.GameID, err)
@@ -69,12 +72,14 @@ func (c *Core) Pull(ctx context.Context, plan Plan) error {
 	if err != nil {
 		return c.abortPull(ctx, opID, stage, err)
 	}
+	// ここから先で失敗したときは、ジャーナルを残す。残った状態は復旧表の行に当たり、Recover が片付ける。
+	// live → old の失敗でも stage を消して中止しない。リネームが済んでから書き出しに失敗していると、
+	// ジャーナルを消せばセーブフォルダがないまま復旧されない（6-R2 に当たる状態を Recover に任せる）
 	if hadLive {
 		if err := c.rename(live, old); err != nil {
-			return c.abortPull(ctx, opID, stage, fmt.Errorf("move save folder to old: %w", err))
+			return fmt.Errorf("move save folder to old: %w", err)
 		}
 	}
-	// ここから先で失敗したときは、ジャーナルを残す。残った状態は復旧表の行に当たり、Recover が片付ける
 	if err := c.rename(stage, live); err != nil {
 		return fmt.Errorf("move stage to save folder: %w", err)
 	}
@@ -168,6 +173,9 @@ func (c *Core) downloadObject(ctx context.Context, key, dst string) error {
 		return fmt.Errorf("create file in stage: %w", err)
 	}
 	_, err = io.Copy(f, r)
+	if err == nil {
+		err = c.syncFile(f)
+	}
 	if closeErr := f.Close(); err == nil {
 		err = closeErr
 	}

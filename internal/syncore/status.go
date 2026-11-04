@@ -44,10 +44,12 @@ type Config struct {
 	Locker Locker
 	// Processes は、Push・Pull がゲームの実行中を拒否するために使う（仕様書 7 章）
 	Processes ProcessChecker
-	// Now・NewGeneration・Rename は、nil なら実際の時刻・UUIDv7 の採番・os.Rename を使う
+	// Rename は、リネームをディスクへ書き出してから戻り、移す先があれば失敗する（仕様書 3 章「ディスクへの書き出し」）。
+	// os.Rename はどちらも満たさないので既定にせず、nil なら Pull と Recover は何も変える前にエラーにする
+	Rename func(oldpath, newpath string) error
+	// Now・NewGeneration・SyncFile は、nil なら実際の時刻・UUIDv7 の採番・(*os.File).Sync を使う
 	Now           func() time.Time
 	NewGeneration func() (string, error)
-	Rename        func(oldpath, newpath string) error
 	SyncFile      func(f *os.File) error
 }
 
@@ -62,6 +64,7 @@ type Core struct {
 	now           func() time.Time
 	newGeneration func() (string, error)
 	rename        func(oldpath, newpath string) error
+	syncFile      func(f *os.File) error
 }
 
 func New(cfg Config) *Core {
@@ -76,12 +79,13 @@ func New(cfg Config) *Core {
 		now:           cfg.Now,
 		newGeneration: cfg.NewGeneration,
 		rename:        cfg.Rename,
+		syncFile:      cfg.SyncFile,
 	}
 	if c.now == nil {
 		c.now = time.Now
 	}
-	if c.rename == nil {
-		c.rename = os.Rename
+	if c.syncFile == nil {
+		c.syncFile = (*os.File).Sync
 	}
 	if c.newGeneration == nil {
 		c.newGeneration = func() (string, error) {

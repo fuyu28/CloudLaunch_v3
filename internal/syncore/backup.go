@@ -19,7 +19,10 @@ const (
 	backupsKept      = 3
 )
 
-var errBackupsDirNotSet = errors.New("backups directory is not configured")
+var (
+	errBackupsDirNotSet = errors.New("backups directory is not configured")
+	errRenameNotSet     = errors.New("rename is not configured")
+)
 
 var backupNamePattern = regexp.MustCompile(`^[0-9]{8}T[0-9]{6}\.[0-9]{3}Z-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
@@ -69,7 +72,7 @@ func (c *Core) moveToBackup(ctx context.Context, gameID, old, name string) error
 		return errors.Join(renameErr, fmt.Errorf("remove partial backup: %w", err))
 	}
 	// 途中までのコピーは 3 個に保つ処理の対象にならず、消さないと残り続ける
-	if err := copyTree(ctx, old, partial); err != nil {
+	if err := c.copyTree(ctx, old, partial); err != nil {
 		if rmErr := os.RemoveAll(partial); rmErr != nil {
 			err = errors.Join(err, fmt.Errorf("remove partial backup: %w", rmErr))
 		}
@@ -88,11 +91,11 @@ func removeOld(old string) error {
 	return nil
 }
 
-// copyTree は src の下の通常のファイルとディレクトリを dst にコピーし、mtime を合わせる。
+// copyTree は src の下の通常のファイルとディレクトリを dst にコピーし、mtime を合わせる。ファイルはディスクへ書き出す。
 // 通常のファイル以外があればエラーにする（仕様書 2 章のセーブフォルダの規則と揃える）。
 // ただし、ディレクトリは isPlainDir ではなく IsDir で見分け、クラウドのフォルダのような reparse point の中もコピーする。
 // ここで拒むと、手順 9 も復旧の 6-R3 も毎回同じところで失敗し、ジャーナルが残り続ける。中身を読めるなら写して残すほうがよい
-func copyTree(ctx context.Context, src, dst string) error {
+func (c *Core) copyTree(ctx context.Context, src, dst string) error {
 	return filepath.WalkDir(src, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -109,14 +112,16 @@ func copyTree(ctx context.Context, src, dst string) error {
 		case d.IsDir():
 			return os.MkdirAll(target, 0o755)
 		case d.Type().IsRegular():
-			return copyFile(p, target)
+			return c.copyFile(p, target)
 		default:
 			return fmt.Errorf("%s is not a regular file (%s)", p, d.Type())
 		}
 	})
 }
 
-func copyFile(src, dst string) error {
+// copyFile は、中身を書き出して閉じてから mtime を合わせる。書き込んだハンドルを閉じるときに mtime が
+// 更新されうるため、閉じる前には合わせない。mtime の変更は書き出さないが、失われても中身は残る。
+func (c *Core) copyFile(src, dst string) error {
 	in, err := os.Open(src)
 	if err != nil {
 		return err
@@ -131,6 +136,9 @@ func copyFile(src, dst string) error {
 		return err
 	}
 	_, err = io.Copy(out, in)
+	if err == nil {
+		err = c.syncFile(out)
+	}
 	if closeErr := out.Close(); err == nil {
 		err = closeErr
 	}
