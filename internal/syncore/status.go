@@ -23,6 +23,7 @@ type LocalStore interface {
 	SetBase(ctx context.Context, gameID, manifestHash string) error
 	InsertPullOperation(ctx context.Context, opID, gameID, livePath, stagePath, oldPath string, createdAt time.Time) error
 	DeletePullOperation(ctx context.Context, opID string) error
+	ListPullOperations(ctx context.Context) ([]PullOperation, error)
 }
 
 type Config struct {

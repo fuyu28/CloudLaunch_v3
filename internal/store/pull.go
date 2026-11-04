@@ -6,6 +6,8 @@ import (
 	"database/sql"
 	"fmt"
 	"time"
+
+	"github.com/fuyu28/CloudLaunch_v3/internal/syncore"
 )
 
 // InsertPullOperation は、同じゲームの行が残っていれば UNIQUE 制約で失敗する。
@@ -16,6 +18,10 @@ func (s *Store) InsertPullOperation(ctx context.Context, opID, gameID, livePath,
 		return fmt.Errorf("insert pull_operations: %w", err)
 	}
 	return nil
+}
+
+func (s *Store) ListPullOperations(ctx context.Context) ([]syncore.PullOperation, error) {
+	return nil, nil
 }
 
 // DeletePullOperation は、opID の行がなければ sql.ErrNoRows を返す。
