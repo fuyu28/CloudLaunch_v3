@@ -90,6 +90,8 @@ func removeOld(old string) error {
 
 // copyTree は src の下の通常のファイルとディレクトリを dst にコピーし、mtime を合わせる。
 // 通常のファイル以外があればエラーにする（仕様書 2 章のセーブフォルダの規則と揃える）。
+// ただし、ディレクトリは isPlainDir ではなく IsDir で見分け、クラウドのフォルダのような reparse point の中もコピーする。
+// ここで拒むと、手順 9 も復旧の 6-R3 も毎回同じところで失敗し、ジャーナルが残り続ける。中身を読めるなら写して残すほうがよい
 func copyTree(ctx context.Context, src, dst string) error {
 	return filepath.WalkDir(src, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -109,7 +111,7 @@ func copyTree(ctx context.Context, src, dst string) error {
 		case d.Type().IsRegular():
 			return copyFile(p, target)
 		default:
-			return fmt.Errorf("%s is not a regular file", p)
+			return fmt.Errorf("%s is not a regular file (%s)", p, d.Type())
 		}
 	})
 }

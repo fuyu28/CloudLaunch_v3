@@ -84,6 +84,13 @@ func appendJSONString(b []byte, s string) []byte {
 	return append(b, '"')
 }
 
+// isPlainDir は、種類のビットが ModeDir だけかを返す。IsDir だけで見ないのは、Go が Windows で、
+// name surrogate でないディレクトリの reparse point（OneDrive のクラウドのフォルダなど）に
+// ModeDir|ModeIrregular を付けるため。IsDir は ModeIrregular を見落とし、中まで読んでしまう（仕様書 2 章）
+func isPlainDir(t fs.FileMode) bool {
+	return t == fs.ModeDir
+}
+
 // localEntries は root 以下の通常のファイルを path の昇順で返す。root がなければ空を返す。
 func localEntries(ctx context.Context, root string) ([]Entry, error) {
 	info, err := os.Lstat(root)
@@ -93,8 +100,8 @@ func localEntries(ctx context.Context, root string) ([]Entry, error) {
 	if err != nil {
 		return nil, fmt.Errorf("stat save folder: %w", err)
 	}
-	if !info.IsDir() {
-		return nil, fmt.Errorf("save folder %s is not a directory (%s)", root, info.Mode().Type())
+	if !isPlainDir(info.Mode().Type()) {
+		return nil, fmt.Errorf("save folder %s is not a plain directory (%s)", root, info.Mode().Type())
 	}
 
 	var rels []string
@@ -102,10 +109,13 @@ func localEntries(ctx context.Context, root string) ([]Entry, error) {
 		if err != nil {
 			return err
 		}
-		if d.IsDir() {
+		if isPlainDir(d.Type()) {
 			return nil
 		}
 		// 通常のファイル以外を飛ばすと、リンク先のセーブが同期されないまま失われうる（仕様書 2 章）
+		if d.IsDir() {
+			return fmt.Errorf("%s is a directory reparse point or another special directory (%s)", p, d.Type())
+		}
 		if !d.Type().IsRegular() {
 			return fmt.Errorf("%s is not a regular file (%s)", p, d.Type())
 		}
