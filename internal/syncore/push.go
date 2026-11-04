@@ -68,6 +68,9 @@ func (c *Core) Push(ctx context.Context, plan Plan) error {
 	if err := c.remote.Put(ctx, headKey(plan.GameID), strings.NewReader(generation), int64(len(generation))); err != nil {
 		return err
 	}
+	// HEAD を書いた時点でリモートでは Push が終わっているので、キャンセルされても最後まで進める。
+	// 途中で止めると、成功した Push を失敗と伝える
+	ctx = context.WithoutCancel(ctx)
 	if err := c.local.SetBase(ctx, plan.GameID, plan.Local.Hash); err != nil {
 		return fmt.Errorf("set base: %w", err)
 	}
