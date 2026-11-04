@@ -49,4 +49,13 @@ func TestPullOperation(t *testing.T) {
 			t.Error("2 つ目の InsertPullOperation が成功した")
 		}
 	})
+
+	t.Run("3章/Pull ジャーナル/ない行を削除するとエラー", func(t *testing.T) {
+		s, _ := openTemp(t)
+		createTestGame(t, s)
+
+		if err := s.DeletePullOperation(context.Background(), "missing"); err == nil {
+			t.Error("ない行の DeletePullOperation が成功した")
+		}
+	})
 }
