@@ -4,6 +4,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"os"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -73,6 +74,34 @@ func TestGameRunning(t *testing.T) {
 
 		if err := e.core.Pull(t.Context(), plan); !errors.Is(err, syncore.ErrGameRunning) {
 			t.Fatalf("Pull error = %v, want ErrGameRunning", err)
+		}
+		assertAborted(t, e, map[string]string{})
+	})
+
+	t.Run("7章/実行中の確認/実行ファイルが見つからなければ Push を ErrGameExeNotFound で拒否し、何も書かない", func(t *testing.T) {
+		e := newEnv(t)
+		plan := approvedPush(t, e, files)
+		if err := os.Remove(e.exePath); err != nil {
+			t.Fatalf("remove exe: %v", err)
+		}
+
+		if err := e.core.Push(t.Context(), plan); !errors.Is(err, syncore.ErrGameExeNotFound) {
+			t.Fatalf("Push error = %v, want ErrGameExeNotFound", err)
+		}
+		if keys := e.keys(t, "games/"); len(keys) != 0 {
+			t.Errorf("リモートに書いた: %v", keys)
+		}
+	})
+
+	t.Run("7章/実行中の確認/実行ファイルが見つからなければ Pull を ErrGameExeNotFound で拒否し、何も書かない", func(t *testing.T) {
+		e := newEnv(t)
+		plan := approvedPull(t, e, files)
+		if err := os.Remove(e.exePath); err != nil {
+			t.Fatalf("remove exe: %v", err)
+		}
+
+		if err := e.core.Pull(t.Context(), plan); !errors.Is(err, syncore.ErrGameExeNotFound) {
+			t.Fatalf("Pull error = %v, want ErrGameExeNotFound", err)
 		}
 		assertAborted(t, e, map[string]string{})
 	})

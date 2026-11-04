@@ -6,7 +6,11 @@ import (
 	"fmt"
 )
 
-var ErrGameRunning = errors.New("the game is running")
+var (
+	ErrGameRunning = errors.New("the game is running")
+	// ErrGameExeNotFound は、登録した実行ファイルがなく、実行中かを確かめられないことを表す。設定を直してもらう
+	ErrGameExeNotFound = errors.New("the game executable is not found")
+)
 
 // ProcessChecker は、exePath の実行ファイルのプロセスが実行中かを返す。
 type ProcessChecker interface {

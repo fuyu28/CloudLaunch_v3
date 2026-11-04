@@ -61,14 +61,10 @@ func waitRunning(t *testing.T, exePath string, want bool) {
 }
 
 func TestProcesses(t *testing.T) {
-	t.Run("7章/実行中の確認/存在しないパスは実行中でない", func(t *testing.T) {
+	t.Run("7章/実行中の確認/登録した実行ファイルがなければエラー", func(t *testing.T) {
 		missing := filepath.Join(t.TempDir(), "missing", filepath.Base(os.Args[0]))
-		got, err := Processes{}.Running(missing)
-		if err != nil {
-			t.Fatalf("Running: %v", err)
-		}
-		if got {
-			t.Error("存在しない実行ファイルが実行中と判定された")
+		if got, err := (Processes{}).Running(missing); err == nil {
+			t.Errorf("Running = %v, nil, want an error", got)
 		}
 	})
 
@@ -90,6 +86,14 @@ func TestProcesses(t *testing.T) {
 			t.Skip("大文字小文字を区別しないのは Windows のファイルシステムだけ")
 		}
 		waitRunning(t, strings.ToUpper(exe), true)
+	})
+
+	t.Run("7章/実行中の確認/リンクを経由して登録したパスでも実行中になる", func(t *testing.T) {
+		link := filepath.Join(t.TempDir(), "link-"+filepath.Base(exe))
+		if err := os.Symlink(exe, link); err != nil {
+			t.Skipf("シンボリックリンクを作れない: %v", err)
+		}
+		waitRunning(t, link, true)
 	})
 
 	t.Run("7章/実行中の確認/kill した後は実行中でない", func(t *testing.T) {

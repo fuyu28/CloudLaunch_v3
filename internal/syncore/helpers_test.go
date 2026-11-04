@@ -118,7 +118,11 @@ func newEnvWithRemote(t *testing.T, remote *memstore.Store) env {
 		t.Fatalf("mkdir save: %v", err)
 	}
 
+	// 実行ファイルがなければ、Push・Pull は実行中かを確かめられずに止まる（仕様書 7 章）
 	exePath := filepath.Join(dir, "game.exe")
+	if err := os.WriteFile(exePath, nil, 0o700); err != nil {
+		t.Fatalf("write exe: %v", err)
+	}
 	dbPath := filepath.Join(dir, "cloudlaunch.db")
 	st, err := store.Open(context.Background(), dbPath)
 	if err != nil {
