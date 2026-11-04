@@ -3,7 +3,6 @@ package syncore
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -80,11 +79,13 @@ const (
 type Plan struct {
 	GameID   string
 	Decision Decision
-	// RecordBase は、判定が「base を記録」の行に当たったことを表す
+	// RecordBase は、判定が「base を記録」か「base を更新」の行に当たったことを表す。どちらも local のハッシュを base に書く
 	RecordBase bool
-	Base       string // 空なら base なし
-	Local      LocalState
-	Remote     RemoteState
+	// LocalMissing は、判定が「base あり・local なし → 競合」の行に当たったことを表す。「ローカルにセーブが見つかりません」と警告する
+	LocalMissing bool
+	Base         string // 空なら base なし
+	Local        LocalState
+	Remote       RemoteState
 }
 
 type LocalState struct {
@@ -104,16 +105,14 @@ func (c *Core) Status(ctx context.Context, gameID string) (Plan, error) {
 	if err != nil {
 		return Plan{}, fmt.Errorf("read game %s: %w", gameID, err)
 	}
-	if base != "" {
-		return Plan{}, errors.New("status with a base is not implemented yet")
-	}
 
 	entries, err := localEntries(ctx, saveFolder)
 	if err != nil {
 		return Plan{}, err
 	}
 	local := LocalState{Entries: entries}
-	if len(entries) > 0 {
+	// base が空 manifest なら、ファイルのない local を「なし」にしない。空にして Push した後に、毎回競合と判定しないため（仕様書 4 章）
+	if len(entries) > 0 || base == emptyManifestHash {
 		local.Hash = ManifestHash(entries)
 	}
 	remote, err := c.readRemote(ctx, gameID)
@@ -122,11 +121,15 @@ func (c *Core) Status(ctx context.Context, gameID string) (Plan, error) {
 	}
 
 	plan := Plan{GameID: gameID, Base: base, Local: local, Remote: remote}
-	plan.Decision, plan.RecordBase = decideWithoutBase(local.Hash, remote.Hash)
+	if base == "" {
+		plan.Decision, plan.RecordBase = decideWithoutBase(local.Hash, remote.Hash)
+	} else {
+		plan.Decision, plan.RecordBase, plan.LocalMissing = decideWithBase(base, local.Hash, remote.Hash)
+	}
 	return plan, nil
 }
 
-// RecordBase は判定が「base を記録」の plan だけを受け付ける。リモートは読み直さない。
+// RecordBase は判定が「base を記録」か「base を更新」の plan だけを受け付ける。リモートは読み直さない。
 // Status の時点で local と remote が一致していたので、その後にどちらかが変わっても、次の判定は判定表どおりに決まる。
 func (c *Core) RecordBase(ctx context.Context, plan Plan) error {
 	if !plan.RecordBase {
@@ -151,5 +154,28 @@ func decideWithoutBase(localHash, remoteHash string) (Decision, bool) {
 		return DecisionNoChange, true
 	default:
 		return DecisionConflict, false
+	}
+}
+
+// decideWithBase は判定表の「base あり」の 8 行に当たる。空のハッシュは「なし」を表す。
+// 「なし」の行を先に調べるのは、判定表で local なし・remote なしの行が、B や変化の行より優先されるためである。
+func decideWithBase(base, localHash, remoteHash string) (decision Decision, recordBase, localMissing bool) {
+	switch {
+	case localHash == "" && remoteHash == "":
+		return DecisionNoChange, false, false
+	case localHash == "":
+		return DecisionConflict, false, true
+	case remoteHash == "":
+		return DecisionPush, false, false
+	case localHash == base && remoteHash == base:
+		return DecisionNoChange, false, false
+	case remoteHash == base:
+		return DecisionPush, false, false
+	case localHash == base:
+		return DecisionPull, false, false
+	case localHash == remoteHash:
+		return DecisionNoChange, true, false
+	default:
+		return DecisionConflict, false, false
 	}
 }

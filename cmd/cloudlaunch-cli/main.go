@@ -78,7 +78,7 @@ func recordBaseIfNeeded(ctx context.Context, core *syncore.Core, plan syncore.Pl
 	if err := core.RecordBase(ctx, plan); err != nil {
 		return err
 	}
-	_, err := fmt.Fprintln(stdout, "base を記録しました")
+	_, err := fmt.Fprintln(stdout, recordBaseLabel(plan)+"しました")
 	return err
 }
 
@@ -193,11 +193,21 @@ func printPlan(w io.Writer, plan syncore.Plan) error {
 		syncore.DecisionConflict: "競合",
 	}[plan.Decision]
 	if plan.RecordBase {
-		decision += "（base を記録）"
+		decision += "（" + recordBaseLabel(plan) + "）"
+	}
+	if plan.LocalMissing {
+		decision += "（ローカルにセーブが見つかりません）"
 	}
 	_, err := fmt.Fprintf(w, "判定: %s\nbase: %s\nlocal: %s\nremote: %s\n",
 		decision, orDash(plan.Base), orDash(plan.Local.Hash), orDash(plan.Remote.Hash))
 	return err
+}
+
+func recordBaseLabel(plan syncore.Plan) string {
+	if plan.Base == "" {
+		return "base を記録"
+	}
+	return "base を更新"
 }
 
 func orDash(s string) string {
