@@ -234,6 +234,8 @@ func explainSyncError(err error) error {
 		return fmt.Errorf("別の同期が実行中です: %w", err)
 	case errors.Is(err, syncore.ErrGameRunning):
 		return fmt.Errorf("ゲームが実行中です。終了してからもう一度実行してください: %w", err)
+	case errors.Is(err, syncore.ErrGameExeNotFound):
+		return fmt.Errorf("登録した実行ファイルが見つかりません。ゲームの実行ファイルのパスを直してください: %w", err)
 	}
 	return err
 }

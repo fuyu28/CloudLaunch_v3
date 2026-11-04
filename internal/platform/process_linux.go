@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 )
 
 // listProcesses は、/proc/{pid}/exe を読めないプロセス（ほかの利用者のもの、終わったばかりのものなど）を飛ばす。
@@ -24,6 +25,8 @@ func listProcesses() ([]processEntry, error) {
 		if err != nil {
 			continue
 		}
+		// 動いている間に実行ファイルを消すか置き換えると、リンクの末尾に「 (deleted)」が付く
+		path = strings.TrimSuffix(path, " (deleted)")
 		procs = append(procs, processEntry{name: filepath.Base(path), path: path})
 	}
 	return procs, nil

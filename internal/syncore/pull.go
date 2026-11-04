@@ -113,10 +113,10 @@ func (c *Core) prepareStage(ctx context.Context, plan Plan, game GameLocal, stag
 		return fmt.Errorf("downloaded files do not match manifest %s", plan.Remote.Generation)
 	}
 
-	if err := ensureLocalUnchanged(ctx, game.SaveFolderPath, plan); err != nil {
-		return err
-	}
 	if err := c.ensureGameNotRunning(game.ExePath); err != nil {
+		return fmt.Errorf("pull %s: %w", plan.GameID, err)
+	}
+	if err := ensureLocalUnchanged(ctx, game.SaveFolderPath, plan); err != nil {
 		return err
 	}
 	head, err := c.readHead(ctx, plan.GameID)
