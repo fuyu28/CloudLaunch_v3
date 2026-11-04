@@ -47,6 +47,7 @@ type Core struct {
 	logger        *slog.Logger
 	deviceName    string
 	backupsDir    string
+	locker        Locker
 	now           func() time.Time
 	newGeneration func() (string, error)
 	rename        func(oldpath, newpath string) error
@@ -59,6 +60,7 @@ func New(cfg Config) *Core {
 		logger:        cfg.Logger,
 		deviceName:    cfg.DeviceName,
 		backupsDir:    cfg.BackupsDir,
+		locker:        cfg.Locker,
 		now:           cfg.Now,
 		newGeneration: cfg.NewGeneration,
 		rename:        cfg.Rename,

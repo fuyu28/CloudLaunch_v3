@@ -44,11 +44,10 @@ internal/syncore/      セーブ同期のコア（仕様書 2・4〜7 章）
 internal/metasync/     メタ情報の同期（仕様書 8 章）。ゲームの tombstone の確認と掃除もここが持つ
 internal/store/        SQLite（goose の migration を含む）
 internal/objstore/     S3 互換オブジェクトストアのクライアント
-internal/platform/     OS 固有の処理（ファイルロック、reparse point の検出、プロセス検出）
-internal/synclock/     PC 全体の同期ロック（仕様書 3 章）
+internal/platform/     OS 固有の処理（PC 全体の同期ロックに使うファイルロック、reparse point の検出、プロセス検出）
 ```
 
-- 理由: `docs/adr/2026-10-23_00-30_package-structure.md`・`docs/adr/2026-10-23_00-30_remote-object-store.md`・`docs/adr/2026-10-23_00-30_db-migration-goose.md`
+- 理由: `docs/adr/2026-10-23_00-30_package-structure.md`・`docs/adr/2026-10-23_00-30_remote-object-store.md`・`docs/adr/2026-10-23_00-30_db-migration-goose.md`・`docs/adr/2026-11-04_15-21_sync-lock.md`（synclock を作らない）
 - パッケージは責務で分ける。`services`・`domain`・`util` のような、何でも入る名前のパッケージは作らない
 - syncore の中は、仕様書の章に合わせてファイルを分ける。独立して意味を持つ部分（最初の候補は manifest）が育ったら、サブパッケージに切り出す
 - 依存の向き: syncore と metasync が必要な操作だけのインターフェースを定義し、store・objstore・platform がそれを実装する。syncore と metasync は互いに import せず、cmd で組み合わせる
