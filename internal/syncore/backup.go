@@ -104,7 +104,7 @@ func copyTree(ctx context.Context, src, dst string) error {
 		}
 		target := filepath.Join(dst, rel)
 		switch {
-		case d.IsDir():
+		case isPlainDir(d.Type()):
 			return os.MkdirAll(target, 0o755)
 		case d.Type().IsRegular():
 			return copyFile(p, target)
