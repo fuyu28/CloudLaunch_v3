@@ -42,6 +42,8 @@ type Config struct {
 	BackupsDir string
 	// Locker は、Push・Pull・Recover が実行中に握る PC 全体の同期ロック（仕様書 3 章）
 	Locker Locker
+	// Processes は、Push・Pull がゲームの実行中を拒否するために使う（仕様書 7 章）
+	Processes ProcessChecker
 	// Now・NewGeneration・Rename は、nil なら実際の時刻・UUIDv7 の採番・os.Rename を使う
 	Now           func() time.Time
 	NewGeneration func() (string, error)

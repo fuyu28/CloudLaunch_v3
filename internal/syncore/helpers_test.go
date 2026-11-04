@@ -43,6 +43,9 @@ type env struct {
 	// rename は、テストがリネームに失敗を仕込むためのもの。fn が nil でなければ、os.Rename の前に呼ぶ
 	rename *renameHook
 	lock   *fakeLocker
+	procs  *fakeProcesses
+	// exePath は、登録したゲームの実行ファイルのパス
+	exePath string
 }
 
 type renameHook struct {
@@ -79,6 +82,27 @@ func (l *fakeLocker) state() (acquired int, held bool) {
 	return l.acquired, l.held
 }
 
+// fakeProcesses は、ゲームのプロセスの検出の偽物。runningFrom が 0 でなければ、その回目以降の呼び出しで
+// 実行中を返す（2 なら、1 回目の確認は通り、転送の後の 2 回目で実行中になる）。
+type fakeProcesses struct {
+	mu          sync.Mutex
+	runningFrom int
+	paths       []string
+}
+
+func (p *fakeProcesses) Running(exePath string) (bool, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.paths = append(p.paths, exePath)
+	return p.runningFrom > 0 && len(p.paths) >= p.runningFrom, nil
+}
+
+func (p *fakeProcesses) asked() []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]string(nil), p.paths...)
+}
+
 // newEnv は、セーブフォルダを持つゲームを 1 つ登録した DB と、空のリモートを用意する。
 func newEnv(t *testing.T) env {
 	t.Helper()
@@ -94,6 +118,7 @@ func newEnvWithRemote(t *testing.T, remote *memstore.Store) env {
 		t.Fatalf("mkdir save: %v", err)
 	}
 
+	exePath := filepath.Join(dir, "game.exe")
 	dbPath := filepath.Join(dir, "cloudlaunch.db")
 	st, err := store.Open(context.Background(), dbPath)
 	if err != nil {
@@ -104,7 +129,7 @@ func newEnvWithRemote(t *testing.T, remote *memstore.Store) env {
 		ID:             testGameID,
 		Title:          "Game",
 		SaveFolderPath: saveDir,
-		ExePath:        filepath.Join(dir, "game.exe"),
+		ExePath:        exePath,
 		CreatedAt:      time.Date(2026, 10, 27, 0, 0, 0, 0, time.UTC),
 	}); err != nil {
 		t.Fatalf("CreateGame: %v", err)
@@ -113,6 +138,7 @@ func newEnvWithRemote(t *testing.T, remote *memstore.Store) env {
 	backupsDir := filepath.Join(dir, "backups")
 	hook := &renameHook{}
 	lock := &fakeLocker{}
+	procs := &fakeProcesses{}
 	core := syncore.New(syncore.Config{
 		Remote:        remote,
 		Local:         st,
@@ -120,6 +146,7 @@ func newEnvWithRemote(t *testing.T, remote *memstore.Store) env {
 		DeviceName:    testDeviceName,
 		BackupsDir:    backupsDir,
 		Locker:        lock,
+		Processes:     procs,
 		Now:           func() time.Time { return testNow },
 		NewGeneration: func() (string, error) { return pushGeneration, nil },
 		Rename: func(oldpath, newpath string) error {
@@ -131,7 +158,7 @@ func newEnvWithRemote(t *testing.T, remote *memstore.Store) env {
 			return os.Rename(oldpath, newpath)
 		},
 	})
-	return env{core: core, store: st, remote: remote, saveDir: saveDir, dbPath: dbPath, backupsDir: backupsDir, rename: hook, lock: lock}
+	return env{core: core, store: st, remote: remote, saveDir: saveDir, dbPath: dbPath, backupsDir: backupsDir, rename: hook, lock: lock, procs: procs, exePath: exePath}
 }
 
 // gameBackups は、ゲームのバックアップのディレクトリにある名前を、名前の順で返す。ディレクトリがなければ空を返す。
