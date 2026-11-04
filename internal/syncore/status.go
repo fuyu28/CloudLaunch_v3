@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
 	"time"
 
 	"github.com/google/uuid"
@@ -42,8 +43,10 @@ type Core struct {
 	local         LocalStore
 	logger        *slog.Logger
 	deviceName    string
+	backupsDir    string
 	now           func() time.Time
 	newGeneration func() (string, error)
+	rename        func(oldpath, newpath string) error
 }
 
 func New(cfg Config) *Core {
@@ -52,11 +55,16 @@ func New(cfg Config) *Core {
 		local:         cfg.Local,
 		logger:        cfg.Logger,
 		deviceName:    cfg.DeviceName,
+		backupsDir:    cfg.BackupsDir,
 		now:           cfg.Now,
 		newGeneration: cfg.NewGeneration,
+		rename:        cfg.Rename,
 	}
 	if c.now == nil {
 		c.now = time.Now
+	}
+	if c.rename == nil {
+		c.rename = os.Rename
 	}
 	if c.newGeneration == nil {
 		c.newGeneration = func() (string, error) {

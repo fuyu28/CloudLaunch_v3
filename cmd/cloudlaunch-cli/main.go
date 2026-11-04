@@ -171,7 +171,7 @@ func openCore(ctx context.Context, name string, args []string) (core *syncore.Co
 	if err != nil {
 		return nil, "", nil, fmt.Errorf("hostname: %w", err)
 	}
-	s, err := openStore(ctx, *dataDir)
+	s, dir, err := openStore(ctx, *dataDir)
 	if err != nil {
 		return nil, "", nil, err
 	}
@@ -181,6 +181,7 @@ func openCore(ctx context.Context, name string, args []string) (core *syncore.Co
 		Local:      s,
 		Logger:     slog.New(slog.NewTextHandler(os.Stderr, nil)),
 		DeviceName: host,
+		BackupsDir: filepath.Join(dir, "backups"),
 	})
 	return core, *game, func() { _ = s.Close() }, nil
 }
@@ -243,7 +244,7 @@ func gameAdd(ctx context.Context, args []string, stdout io.Writer) error {
 		return err
 	}
 
-	s, err := openStore(ctx, *dataDir)
+	s, _, err := openStore(ctx, *dataDir)
 	if err != nil {
 		return err
 	}
@@ -278,18 +279,20 @@ func resolveGameID(id string) (string, error) {
 	return u.String(), nil
 }
 
-func openStore(ctx context.Context, dataDir string) (*store.Store, error) {
+// openStore は、dataDir が空なら既定の場所を使い、実際に使ったディレクトリも返す。
+func openStore(ctx context.Context, dataDir string) (*store.Store, string, error) {
 	if dataDir == "" {
 		d, err := defaultDataDir()
 		if err != nil {
-			return nil, err
+			return nil, "", err
 		}
 		dataDir = d
 	}
 	if err := os.MkdirAll(dataDir, 0o700); err != nil {
-		return nil, fmt.Errorf("create data dir: %w", err)
+		return nil, "", fmt.Errorf("create data dir: %w", err)
 	}
-	return store.Open(ctx, filepath.Join(dataDir, "cloudlaunch.db"))
+	s, err := store.Open(ctx, filepath.Join(dataDir, "cloudlaunch.db"))
+	return s, dataDir, err
 }
 
 // defaultDataDir は Windows では仕様書 3 章の保存先、Linux では XDG Base Directory の慣例に従う。
