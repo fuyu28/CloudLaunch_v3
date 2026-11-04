@@ -163,12 +163,13 @@ func TestPush(t *testing.T) {
 		}
 	})
 
-	t.Run("5-P7 HEAD を書いた後にキャンセルされても、base を更新する", func(t *testing.T) {
+	t.Run("5-P7 HEAD を書くときにキャンセルされても、base を更新する", func(t *testing.T) {
 		e := newEnv(t)
 		plan := approvedPush(t, e, files)
 		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
-		// 偽のリモートの Put は ctx を見ないので、HEAD は書けて、その後の ctx だけがキャンセルされた状態になる
+		// HEAD の PUT の直前にキャンセルする。偽のリモートの Put は ctx を見ないので、HEAD が書けた後の base の更新を確かめる。
+		// 本物のリモートで、PUT の応答を待つ間にキャンセルされる場合は、このテストでは再現しない
 		e.remote.Before = func(op memstore.Op, key string) error {
 			if op == memstore.OpPut && key == headKey() {
 				cancel()

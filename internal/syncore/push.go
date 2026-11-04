@@ -65,12 +65,12 @@ func (c *Core) Push(ctx context.Context, plan Plan) error {
 		return fmt.Errorf("HEAD changed from %q to %q after approval: %w", plan.Remote.Generation, head, ErrPlanStale)
 	}
 
+	// HEAD の PUT を始めた後は、キャンセルされても最後まで進める。リモートに HEAD が書けた後で止めると
+	// （応答を待つ間のキャンセルも含む）、成功した Push を失敗と伝える
+	ctx = context.WithoutCancel(ctx)
 	if err := c.remote.Put(ctx, headKey(plan.GameID), strings.NewReader(generation), int64(len(generation))); err != nil {
 		return err
 	}
-	// HEAD を書いた時点でリモートでは Push が終わっているので、キャンセルされても最後まで進める。
-	// 途中で止めると、成功した Push を失敗と伝える
-	ctx = context.WithoutCancel(ctx)
 	if err := c.local.SetBase(ctx, plan.GameID, plan.Local.Hash); err != nil {
 		return fmt.Errorf("set base: %w", err)
 	}
