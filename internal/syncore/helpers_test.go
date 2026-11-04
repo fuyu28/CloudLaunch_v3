@@ -34,7 +34,9 @@ const (
 var testNow = time.Date(2026, 11, 3, 1, 2, 3, 4_000_000, time.UTC)
 
 type env struct {
-	core       *syncore.Core
+	core *syncore.Core
+	// cfg は core を作った設定。coreWithout が 1 項目だけ変えたコアを作るために持つ
+	cfg        syncore.Config
 	store      *store.Store
 	remote     *memstore.Store
 	saveDir    string
@@ -208,7 +210,7 @@ func newEnvWithRemote(t *testing.T, remote *memstore.Store) env {
 	ops := &opLog{}
 	lock := &fakeLocker{}
 	procs := &fakeProcesses{}
-	core := syncore.New(syncore.Config{
+	cfg := syncore.Config{
 		Remote:        remote,
 		Local:         st,
 		Logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -231,8 +233,16 @@ func newEnvWithRemote(t *testing.T, remote *memstore.Store) env {
 			return nil
 		},
 		SyncFile: ops.sync,
-	})
-	return env{core: core, store: st, remote: remote, saveDir: saveDir, dbPath: dbPath, backupsDir: backupsDir, rename: hook, ops: ops, lock: lock, procs: procs, exePath: exePath}
+	}
+	return env{core: syncore.New(cfg), cfg: cfg, store: st, remote: remote, saveDir: saveDir, dbPath: dbPath, backupsDir: backupsDir, rename: hook, ops: ops, lock: lock, procs: procs, exePath: exePath}
+}
+
+// coreWithout は、e のコアと同じ設定から edit で 1 項目だけ外したコアを作る。必須の項目がないときの確認で、
+// 外した項目のほかは揃っているようにするため（別の必須の項目がないことで先に止まると、確認したいことを確かめない）。
+func (e env) coreWithout(edit func(cfg *syncore.Config)) *syncore.Core {
+	cfg := e.cfg
+	edit(&cfg)
+	return syncore.New(cfg)
 }
 
 // gameBackups は、ゲームのバックアップのディレクトリにある名前を、名前の順で返す。ディレクトリがなければ空を返す。

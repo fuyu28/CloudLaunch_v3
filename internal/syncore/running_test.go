@@ -2,8 +2,6 @@ package syncore_test
 
 import (
 	"errors"
-	"io"
-	"log/slog"
 	"os"
 	"testing"
 
@@ -108,14 +106,7 @@ func TestGameRunning(t *testing.T) {
 
 	t.Run("7章/実行中の確認/Processes がなければ、何も変える前にエラー", func(t *testing.T) {
 		withoutProcesses := func(e env) *syncore.Core {
-			return syncore.New(syncore.Config{
-				Remote:     e.remote,
-				Local:      e.store,
-				Logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
-				DeviceName: testDeviceName,
-				BackupsDir: e.backupsDir,
-				Locker:     e.lock,
-			})
+			return e.coreWithout(func(cfg *syncore.Config) { cfg.Processes = nil })
 		}
 
 		t.Run("Push", func(t *testing.T) {

@@ -2,8 +2,6 @@ package syncore_test
 
 import (
 	"errors"
-	"io"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -29,7 +27,7 @@ func TestPullの書き出し(t *testing.T) {
 	remote := map[string]string{"slot1.sav": "new one", "dir/slot2.sav": "new two", "dir/sub/slot3.sav": "new three"}
 	injected := errors.New("injected")
 
-	t.Run("6-L4 stage のファイルは、6-L7 のリネームの前にすべて書き出す", func(t *testing.T) {
+	t.Run("6-L4 stage のファイルは、stage を live に移す前にすべて書き出す", func(t *testing.T) {
 		e := newEnv(t)
 		plan := pullOverLocal(t, e, local, remote)
 
@@ -166,18 +164,38 @@ func TestPullの書き出し(t *testing.T) {
 		}
 	})
 
+	t.Run("6-L9 old をバックアップへ移した後に書き出しに失敗したら、コピーせずにジャーナルを残してエラー", func(t *testing.T) {
+		e := newEnv(t)
+		plan := pullOverLocal(t, e, local, remote)
+		e.rename.fn = func(oldpath, newpath string) error {
+			if strings.HasPrefix(filepath.Base(oldpath), ".cloudlaunch-old-") && strings.HasPrefix(newpath, e.backupsDir) {
+				if err := os.Rename(oldpath, newpath); err != nil {
+					return err
+				}
+				return injected
+			}
+			return nil
+		}
+
+		if err := e.core.Pull(t.Context(), plan); !errors.Is(err, injected) {
+			t.Fatalf("Pull error = %v, want %v", err, injected)
+		}
+		names := e.gameBackups(t)
+		if len(names) != 1 || !backupNamePattern.MatchString(names[0]) {
+			t.Fatalf("バックアップ = %v, want 最終の名前の 1 つだけ", names)
+		}
+		if diff := cmp.Diff(local, readFiles(t, filepath.Join(e.backupsDir, testGameID, names[0]))); diff != "" {
+			t.Errorf("バックアップ (-want +got):\n%s", diff)
+		}
+		if n := e.journalCount(t); n != 1 {
+			t.Errorf("ジャーナルの行の数 = %d, want 1", n)
+		}
+	})
+
 	t.Run("6章/Pull/Rename がなければ、ジャーナルを書く前にエラー", func(t *testing.T) {
 		e := newEnv(t)
 		plan := approvedPull(t, e, remote)
-		core := syncore.New(syncore.Config{
-			Remote:     e.remote,
-			Local:      e.store,
-			Logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
-			DeviceName: testDeviceName,
-			BackupsDir: e.backupsDir,
-			Locker:     e.lock,
-			Processes:  e.procs,
-		})
+		core := e.coreWithout(func(cfg *syncore.Config) { cfg.Rename = nil })
 
 		if err := core.Pull(t.Context(), plan); err == nil {
 			t.Fatal("Pull error = nil, want an error")
@@ -219,15 +237,7 @@ func TestRecoverの書き出し(t *testing.T) {
 		e := newEnv(t)
 		stage, _ := interruptedPull(t, e)
 		writeFiles(t, stage, remote)
-		core := syncore.New(syncore.Config{
-			Remote:     e.remote,
-			Local:      e.store,
-			Logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
-			DeviceName: testDeviceName,
-			BackupsDir: e.backupsDir,
-			Locker:     e.lock,
-			Processes:  e.procs,
-		})
+		core := e.coreWithout(func(cfg *syncore.Config) { cfg.Rename = nil })
 
 		if _, err := core.Recover(t.Context()); err == nil {
 			t.Fatal("Recover error = nil, want an error")

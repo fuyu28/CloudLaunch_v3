@@ -67,6 +67,11 @@ func (c *Core) moveToBackup(ctx context.Context, gameID, old, name string) error
 	if renameErr == nil {
 		return nil
 	}
+	// リネームが済んでから書き出しに失敗したのなら、old はもうないのでコピーできない。エラーのまま返し、
+	// ジャーナルを残す。次の復旧では old がないので 6-R4 に当たり、バックアップはそのまま残る
+	if _, err := os.Lstat(old); errors.Is(err, fs.ErrNotExist) {
+		return renameErr
+	}
 	partial := filepath.Join(dir, ".partial-"+name)
 	if err := os.RemoveAll(partial); err != nil {
 		return errors.Join(renameErr, fmt.Errorf("remove partial backup: %w", err))
