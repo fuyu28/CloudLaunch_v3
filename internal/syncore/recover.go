@@ -29,21 +29,6 @@ const (
 	RecoveryNothing                             // 6-R4
 )
 
-// String は仕様書の復旧表の ID を返す。
-func (rc RecoveryCase) String() string {
-	switch rc {
-	case RecoveryRemoveStage:
-		return "6-R1"
-	case RecoveryRestoreOld:
-		return "6-R2"
-	case RecoveryBackupOld:
-		return "6-R3"
-	case RecoveryNothing:
-		return "6-R4"
-	}
-	return fmt.Sprintf("RecoveryCase(%d)", int(rc))
-}
-
 type Recovery struct {
 	OpID   string
 	GameID string

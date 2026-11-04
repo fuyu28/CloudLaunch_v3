@@ -72,7 +72,7 @@ func recoverPulls(ctx context.Context, args []string, stdout io.Writer) error {
 
 	recovered, err := syncore.New(localConfig(s, dir)).Recover(ctx)
 	for _, r := range recovered {
-		if _, werr := fmt.Fprintf(stdout, "%s: game %s, op %s\n", r.Case, r.GameID, r.OpID); werr != nil {
+		if _, werr := fmt.Fprintf(stdout, "%s: game %s, op %s\n", recoveryLabel(r.Case), r.GameID, r.OpID); werr != nil {
 			return errors.Join(err, werr)
 		}
 	}
@@ -212,6 +212,21 @@ func openCore(ctx context.Context, name string, args []string) (core *syncore.Co
 	cfg.Remote = remote
 	cfg.DeviceName = host
 	return syncore.New(cfg), *game, func() { _ = s.Close() }, nil
+}
+
+// recoveryLabel は、R2 で確かめるときに仕様書の復旧表と突き合わせられるよう、行の ID を添える。
+func recoveryLabel(rc syncore.RecoveryCase) string {
+	switch rc {
+	case syncore.RecoveryRemoveStage:
+		return "stage を削除した（6-R1）"
+	case syncore.RecoveryRestoreOld:
+		return "退避したセーブを戻した（6-R2）"
+	case syncore.RecoveryBackupOld:
+		return "退避したセーブをバックアップへ移した（6-R3）"
+	case syncore.RecoveryNothing:
+		return "片付けるものはなかった（6-R4）"
+	}
+	return fmt.Sprintf("不明な復旧（%d）", int(rc))
 }
 
 // localConfig は、recover と、リモートを使うコマンドで、バックアップの置き場所を揃えるために 1 か所で組み立てる。
