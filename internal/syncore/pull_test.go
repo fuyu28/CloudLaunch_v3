@@ -261,6 +261,59 @@ func TestPull中止(t *testing.T) {
 	})
 }
 
+func TestPull空manifestのbase(t *testing.T) {
+	files := map[string]string{"slot1.sav": "one"}
+	emptyHash := syncore.ManifestHash(nil)
+
+	t.Run("6-L6 base が空 manifest で、セーブフォルダが空 → 変わっていないとして取り込む", func(t *testing.T) {
+		e := newEnv(t)
+		e.setBase(t, emptyHash)
+		plan := approvedPull(t, e, files)
+
+		if err := e.core.Pull(t.Context(), plan); err != nil {
+			t.Fatalf("Pull: %v", err)
+		}
+		if diff := cmp.Diff(files, readFiles(t, e.saveDir)); diff != "" {
+			t.Errorf("セーブフォルダ (-want +got):\n%s", diff)
+		}
+	})
+
+	t.Run("6-L6 base が空 manifest で、セーブフォルダがない → 変わっていないとして取り込む", func(t *testing.T) {
+		e := newEnv(t)
+		removeSaveDir(t, e)
+		e.setBase(t, emptyHash)
+		plan := approvedPull(t, e, files)
+
+		if err := e.core.Pull(t.Context(), plan); err != nil {
+			t.Fatalf("Pull: %v", err)
+		}
+		if diff := cmp.Diff(files, readFiles(t, e.saveDir)); diff != "" {
+			t.Errorf("セーブフォルダ (-want +got):\n%s", diff)
+		}
+	})
+
+	t.Run("6-L6 base が空 manifest で、承認後にファイルができた → ErrPlanStale", func(t *testing.T) {
+		e := newEnv(t)
+		e.setBase(t, emptyHash)
+		plan := approvedPull(t, e, files)
+		changed := map[string]string{"slot1.sav": "local"}
+		writeFiles(t, e.saveDir, changed)
+
+		if err := e.core.Pull(t.Context(), plan); !errors.Is(err, syncore.ErrPlanStale) {
+			t.Fatalf("Pull error = %v, want ErrPlanStale", err)
+		}
+		if diff := cmp.Diff(changed, readFiles(t, e.saveDir)); diff != "" {
+			t.Errorf("セーブフォルダ (-want +got):\n%s", diff)
+		}
+		if n := e.journalCount(t); n != 0 {
+			t.Errorf("ジャーナルの行の数 = %d, want 0", n)
+		}
+		if got := e.base(t); got != emptyHash {
+			t.Errorf("base = %q, want 空 manifest のハッシュ", got)
+		}
+	})
+}
+
 func TestPull不正なmanifest(t *testing.T) {
 	tests := []struct {
 		name  string
