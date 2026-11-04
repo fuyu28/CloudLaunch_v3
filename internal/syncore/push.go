@@ -40,6 +40,9 @@ func (c *Core) Push(ctx context.Context, plan Plan) error {
 		return fmt.Errorf("read game %s: %w", plan.GameID, err)
 	}
 	saveFolder := game.SaveFolderPath
+	if err := c.ensureGameNotRunning(game.ExePath); err != nil {
+		return fmt.Errorf("push %s: %w", plan.GameID, err)
+	}
 
 	if err := c.uploadMissing(ctx, plan.GameID, saveFolder, plan.Local.Entries); err != nil {
 		return err
@@ -48,6 +51,9 @@ func (c *Core) Push(ctx context.Context, plan Plan) error {
 	// 増えたファイルは、ここでハッシュし直して見つける（仕様書 5-P3）
 	if err := ensureLocalUnchanged(ctx, saveFolder, plan); err != nil {
 		return err
+	}
+	if err := c.ensureGameNotRunning(game.ExePath); err != nil {
+		return fmt.Errorf("push %s: %w", plan.GameID, err)
 	}
 
 	generation, err := c.newGeneration()
