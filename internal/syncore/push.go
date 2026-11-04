@@ -43,6 +43,11 @@ func (c *Core) Push(ctx context.Context, plan Plan) error {
 	if err := c.uploadMissing(ctx, plan.GameID, saveFolder, plan.Local.Entries); err != nil {
 		return err
 	}
+	// アップロード中の検証は、アップロードしたファイルしか読まない。リモートに object があったファイルの変化や、
+	// 増えたファイルは、ここでハッシュし直して見つける（仕様書 5-P3）
+	if err := ensureLocalUnchanged(ctx, saveFolder, plan); err != nil {
+		return err
+	}
 
 	generation, err := c.newGeneration()
 	if err != nil {

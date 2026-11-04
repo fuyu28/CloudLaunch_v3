@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -193,13 +195,12 @@ func TestPush中止(t *testing.T) {
 	files := map[string]string{"slot1.sav": "one", "slot2.sav": "two"}
 	injected := errors.New("injected")
 
-	t.Run("5-P3 承認後にファイルが書き換わっていたら ErrPlanStale、HEAD を変えない", func(t *testing.T) {
-		e := newEnv(t)
-		plan := approvedPush(t, e, files)
-		writeFiles(t, e.saveDir, map[string]string{"slot2.sav": "changed"})
-
-		if err := e.core.Push(t.Context(), plan); !errors.Is(err, syncore.ErrPlanStale) {
-			t.Fatalf("Push error = %v, want ErrPlanStale", err)
+	// assertNothingPublished は、manifest も HEAD も書かず、base も変えていないことを確かめる。
+	// 中止の前にアップロードした object は残ってよい（仕様書 5-I1 と同じく、GC で消える）
+	assertNothingPublished := func(t *testing.T, e env) {
+		t.Helper()
+		if keys := e.keys(t, "games/"+testGameID+"/manifests/"); len(keys) != 0 {
+			t.Errorf("manifest を書いた: %v", keys)
 		}
 		if _, ok := e.getObject(t, headKey()); ok {
 			t.Error("HEAD を書いた")
@@ -207,6 +208,60 @@ func TestPush中止(t *testing.T) {
 		if base := e.base(t); base != "" {
 			t.Errorf("base = %q, want 空", base)
 		}
+	}
+
+	t.Run("5-P3 承認後にファイルが書き換わっていたら ErrPlanStale、ハッシュと違う中身の object を書かない", func(t *testing.T) {
+		e := newEnv(t)
+		plan := approvedPush(t, e, files)
+		writeFiles(t, e.saveDir, map[string]string{"slot2.sav": "changed"})
+
+		if err := e.core.Push(t.Context(), plan); !errors.Is(err, syncore.ErrPlanStale) {
+			t.Fatalf("Push error = %v, want ErrPlanStale", err)
+		}
+		// アップロード中の検証がなければ、objects/{sha256("two")} に "changed" を書いてしまう。
+		// 後でハッシュし直す確認では、これを防げない
+		if body, ok := e.getObject(t, objectKey("two")); ok {
+			t.Errorf("objects/{sha256(\"two\")} に %q を書いた", body)
+		}
+		assertNothingPublished(t, e)
+	})
+
+	t.Run("5-P3 承認後に、リモートに object があるファイルが消えていたら ErrPlanStale、manifest も HEAD も書かない", func(t *testing.T) {
+		e := newEnv(t)
+		e.putObject(t, objectKey("one"), "one")
+		plan := approvedPush(t, e, files)
+		if err := os.Remove(filepath.Join(e.saveDir, "slot1.sav")); err != nil {
+			t.Fatalf("remove: %v", err)
+		}
+
+		if err := e.core.Push(t.Context(), plan); !errors.Is(err, syncore.ErrPlanStale) {
+			t.Fatalf("Push error = %v, want ErrPlanStale", err)
+		}
+		assertNothingPublished(t, e)
+	})
+
+	t.Run("5-P3 承認後に、リモートに object があるファイルが変わっていたら ErrPlanStale、manifest も HEAD も書かない", func(t *testing.T) {
+		e := newEnv(t)
+		// slot1.sav の object はリモートにあるので、アップロードせず、アップロード中の検証も通らない
+		e.putObject(t, objectKey("one"), "one")
+		plan := approvedPush(t, e, files)
+		writeFiles(t, e.saveDir, map[string]string{"slot1.sav": "changed"})
+
+		if err := e.core.Push(t.Context(), plan); !errors.Is(err, syncore.ErrPlanStale) {
+			t.Fatalf("Push error = %v, want ErrPlanStale", err)
+		}
+		assertNothingPublished(t, e)
+	})
+
+	t.Run("5-P3 承認後に、ファイルが増えていたら ErrPlanStale、manifest も HEAD も書かない", func(t *testing.T) {
+		e := newEnv(t)
+		plan := approvedPush(t, e, files)
+		writeFiles(t, e.saveDir, map[string]string{"new.sav": "new"})
+
+		if err := e.core.Push(t.Context(), plan); !errors.Is(err, syncore.ErrPlanStale) {
+			t.Fatalf("Push error = %v, want ErrPlanStale", err)
+		}
+		assertNothingPublished(t, e)
 	})
 
 	t.Run("5-P5 承認後に HEAD が変わっていたら ErrPlanStale、HEAD を変えない", func(t *testing.T) {

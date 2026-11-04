@@ -109,7 +109,20 @@ type LocalState struct {
 	Hash    string // ファイルが 1 つもなく、base が空 manifest のハッシュでなければ空
 }
 
-// localHash は、Status の判定と Pull の手順 6 の確認で、同じ local を同じハッシュにするために 1 か所で決める。
+// ensureLocalUnchanged は、Push（5-P3）と Pull（6-L6）が、承認の後にセーブフォルダが変わっていないかを確かめる（仕様書 7 章）。
+// DB の base ではなく plan.Base を使う。plan.Local.Hash は plan.Base から計算したもので、同じ base で計算し直さないと比べられない
+func ensureLocalUnchanged(ctx context.Context, folder string, plan Plan) error {
+	entries, err := localEntries(ctx, folder)
+	if err != nil {
+		return err
+	}
+	if localHash(entries, plan.Base) != plan.Local.Hash {
+		return fmt.Errorf("save folder changed after approval: %w", ErrPlanStale)
+	}
+	return nil
+}
+
+// localHash は、Status の判定と、Push・Pull の承認後の確認（ensureLocalUnchanged）で、同じ local を同じハッシュにするために 1 か所で決める。
 // base が空 manifest なら、ファイルのない local を「なし」にしない。空にして Push した後に、毎回競合と判定しないため（仕様書 4 章）
 func localHash(entries []Entry, base string) string {
 	if len(entries) > 0 || base == emptyManifestHash {
