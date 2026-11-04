@@ -72,14 +72,18 @@ func (c *Core) Pull(ctx context.Context, plan Plan) error {
 	if err != nil {
 		return c.abortPull(ctx, opID, stage, err)
 	}
-	// ここから先で失敗したときは、ジャーナルを残す。残った状態は復旧表の行に当たり、Recover が片付ける。
-	// live → old の失敗でも stage を消して中止しない。リネームが済んでから書き出しに失敗していると、
-	// ジャーナルを消せばセーブフォルダがないまま復旧されない（6-R2 に当たる状態を Recover に任せる）
 	if hadLive {
 		if err := c.rename(live, old); err != nil {
-			return fmt.Errorf("move save folder to old: %w", err)
+			err = fmt.Errorf("move save folder to old: %w", err)
+			// live が残っていれば、リネームしていないので 6-A1 と同じく片付ける。live がなければ、リネームが済んでから
+			// 書き出しに失敗している。ジャーナルを消すとセーブフォルダがないまま復旧されないので、残して 6-R2 に任せる
+			if stillLive, statErr := exists(live); statErr == nil && stillLive {
+				return c.abortPull(ctx, opID, stage, err)
+			}
+			return err
 		}
 	}
+	// ここから先で失敗したときは、ジャーナルを残す。残った状態は復旧表の行に当たり、Recover が片付ける
 	if err := c.rename(stage, live); err != nil {
 		return fmt.Errorf("move stage to save folder: %w", err)
 	}
