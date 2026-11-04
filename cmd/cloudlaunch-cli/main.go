@@ -25,6 +25,7 @@ const usage = `usage:
   cloudlaunch-cli status --game <gameId> [--data-dir <dir>]
   cloudlaunch-cli push --game <gameId> [--data-dir <dir>]
   cloudlaunch-cli pull --game <gameId> [--data-dir <dir>]
+  cloudlaunch-cli recover [--data-dir <dir>]
 
 status・push・pull はリモートの接続先と鍵を環境変数から読む:
   CLOUDLAUNCH_S3_ENDPOINT, CLOUDLAUNCH_S3_BUCKET, CLOUDLAUNCH_S3_ACCESS_KEY_ID, CLOUDLAUNCH_S3_SECRET_ACCESS_KEY,
@@ -50,7 +51,43 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 	if len(args) >= 1 && args[0] == "pull" {
 		return pull(ctx, args[1:], stdout)
 	}
+	if len(args) >= 1 && args[0] == "recover" {
+		return recoverPulls(ctx, args[1:], stdout)
+	}
 	return errors.New(usage)
+}
+
+// recoverPulls は、復旧できた行を出してから、失敗した行のエラーを返す。リモートには触れないので、接続先を読まない。
+func recoverPulls(ctx context.Context, args []string, stdout io.Writer) error {
+	fs := flag.NewFlagSet("recover", flag.ContinueOnError)
+	dataDir := fs.String("data-dir", "", "DB などを置くディレクトリ")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	s, dir, err := openStore(ctx, *dataDir)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = s.Close() }()
+
+	core := syncore.New(syncore.Config{
+		Local:      s,
+		Logger:     slog.New(slog.NewTextHandler(os.Stderr, nil)),
+		BackupsDir: filepath.Join(dir, "backups"),
+	})
+	recovered, err := core.Recover(ctx)
+	for _, r := range recovered {
+		if _, werr := fmt.Fprintf(stdout, "%s: game %s, op %s\n", r.Case, r.GameID, r.OpID); werr != nil {
+			return errors.Join(err, werr)
+		}
+	}
+	if err != nil {
+		return err
+	}
+	if len(recovered) == 0 {
+		_, err = fmt.Fprintln(stdout, "復旧する Pull はありません")
+	}
+	return err
 }
 
 func status(ctx context.Context, args []string, stdout io.Writer) error {
