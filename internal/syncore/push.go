@@ -35,10 +35,11 @@ func (c *Core) Push(ctx context.Context, plan Plan) error {
 		return fmt.Errorf("push %s: %w", plan.GameID, err)
 	}
 	defer release()
-	saveFolder, _, err := c.local.GameLocal(ctx, plan.GameID)
+	game, err := c.local.GameLocal(ctx, plan.GameID)
 	if err != nil {
 		return fmt.Errorf("read game %s: %w", plan.GameID, err)
 	}
+	saveFolder := game.SaveFolderPath
 
 	if err := c.uploadMissing(ctx, plan.GameID, saveFolder, plan.Local.Entries); err != nil {
 		return err

@@ -316,9 +316,9 @@ func readFiles(t *testing.T, root string) map[string]string {
 
 func (e env) base(t *testing.T) string {
 	t.Helper()
-	_, base, err := e.store.GameLocal(context.Background(), testGameID)
+	game, err := e.store.GameLocal(context.Background(), testGameID)
 	if err != nil {
 		t.Fatalf("GameLocal: %v", err)
 	}
-	return base
+	return game.BaseManifestHash
 }

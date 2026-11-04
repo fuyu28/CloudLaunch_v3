@@ -35,10 +35,11 @@ func (c *Core) Pull(ctx context.Context, plan Plan) error {
 		return fmt.Errorf("pull %s: %w", plan.GameID, err)
 	}
 	defer release()
-	live, _, err := c.local.GameLocal(ctx, plan.GameID)
+	game, err := c.local.GameLocal(ctx, plan.GameID)
 	if err != nil {
 		return fmt.Errorf("read game %s: %w", plan.GameID, err)
 	}
+	live := game.SaveFolderPath
 
 	// stage と old は、リネームで入れ替えられるよう live と同じディレクトリに置く（仕様書 3 章）
 	parent := filepath.Dir(live)
