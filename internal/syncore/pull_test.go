@@ -164,31 +164,6 @@ func TestPull(t *testing.T) {
 		}
 	})
 
-	t.Run("6-L7 セーブフォルダがあれば old に退避し、手順 9 を行わずにジャーナルを残す", func(t *testing.T) {
-		e := newEnv(t)
-		if err := os.Mkdir(filepath.Join(e.saveDir, "empty"), 0o700); err != nil {
-			t.Fatalf("mkdir: %v", err)
-		}
-		plan := approvedPull(t, e, files)
-
-		if err := e.core.Pull(t.Context(), plan); err != nil {
-			t.Fatalf("Pull: %v", err)
-		}
-		if diff := cmp.Diff(files, readFiles(t, e.saveDir)); diff != "" {
-			t.Errorf("セーブフォルダ (-want +got):\n%s", diff)
-		}
-		old := e.workDirs(t, "old")
-		if len(old) != 1 {
-			t.Fatalf("old = %v, want 1 つ", old)
-		}
-		if _, err := os.Stat(filepath.Join(old[0], "empty")); err != nil {
-			t.Errorf("old に元のセーブフォルダの中身がない: %v", err)
-		}
-		if n := e.journalCount(t); n != 1 {
-			t.Errorf("ジャーナルの行の数 = %d, want 1", n)
-		}
-	})
-
 	t.Run("6章/Pull/判定が Pull でない plan はエラー", func(t *testing.T) {
 		e := newEnv(t)
 		plan, err := e.status(t)

@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"io/fs"
 	"log/slog"
@@ -32,11 +33,18 @@ const (
 var testNow = time.Date(2026, 11, 3, 1, 2, 3, 4_000_000, time.UTC)
 
 type env struct {
-	core    *syncore.Core
-	store   *store.Store
-	remote  *memstore.Store
-	saveDir string
-	dbPath  string
+	core       *syncore.Core
+	store      *store.Store
+	remote     *memstore.Store
+	saveDir    string
+	dbPath     string
+	backupsDir string
+	// rename は、テストがリネームに失敗を仕込むためのもの。fn が nil でなければ、os.Rename の前に呼ぶ
+	rename *renameHook
+}
+
+type renameHook struct {
+	fn func(oldpath, newpath string) error
 }
 
 // newEnv は、セーブフォルダを持つゲームを 1 つ登録した DB と、空のリモートを用意する。
@@ -70,15 +78,43 @@ func newEnvWithRemote(t *testing.T, remote *memstore.Store) env {
 		t.Fatalf("CreateGame: %v", err)
 	}
 
+	backupsDir := filepath.Join(dir, "backups")
+	hook := &renameHook{}
 	core := syncore.New(syncore.Config{
 		Remote:        remote,
 		Local:         st,
 		Logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
 		DeviceName:    testDeviceName,
+		BackupsDir:    backupsDir,
 		Now:           func() time.Time { return testNow },
 		NewGeneration: func() (string, error) { return pushGeneration, nil },
+		Rename: func(oldpath, newpath string) error {
+			if hook.fn != nil {
+				if err := hook.fn(oldpath, newpath); err != nil {
+					return err
+				}
+			}
+			return os.Rename(oldpath, newpath)
+		},
 	})
-	return env{core: core, store: st, remote: remote, saveDir: saveDir, dbPath: dbPath}
+	return env{core: core, store: st, remote: remote, saveDir: saveDir, dbPath: dbPath, backupsDir: backupsDir, rename: hook}
+}
+
+// gameBackups は、ゲームのバックアップのディレクトリにある名前を、名前の順で返す。ディレクトリがなければ空を返す。
+func (e env) gameBackups(t *testing.T) []string {
+	t.Helper()
+	entries, err := os.ReadDir(filepath.Join(e.backupsDir, testGameID))
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		t.Fatalf("read backups: %v", err)
+	}
+	names := make([]string, len(entries))
+	for i, d := range entries {
+		names[i] = d.Name()
+	}
+	return names
 }
 
 func (e env) status(t *testing.T) (syncore.Plan, error) {

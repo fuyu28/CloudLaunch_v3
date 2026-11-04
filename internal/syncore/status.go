@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
 	"time"
 
 	"github.com/google/uuid"
@@ -29,9 +30,12 @@ type Config struct {
 	Local      LocalStore
 	Logger     *slog.Logger
 	DeviceName string
-	// Now と NewGeneration は、nil なら実際の時刻と UUIDv7 の採番を使う
+	// BackupsDir は、Pull で退避したセーブを置くディレクトリ。その下の {gameId}/ に置く
+	BackupsDir string
+	// Now・NewGeneration・Rename は、nil なら実際の時刻・UUIDv7 の採番・os.Rename を使う
 	Now           func() time.Time
 	NewGeneration func() (string, error)
+	Rename        func(oldpath, newpath string) error
 }
 
 type Core struct {
@@ -39,8 +43,10 @@ type Core struct {
 	local         LocalStore
 	logger        *slog.Logger
 	deviceName    string
+	backupsDir    string
 	now           func() time.Time
 	newGeneration func() (string, error)
+	rename        func(oldpath, newpath string) error
 }
 
 func New(cfg Config) *Core {
@@ -49,11 +55,16 @@ func New(cfg Config) *Core {
 		local:         cfg.Local,
 		logger:        cfg.Logger,
 		deviceName:    cfg.DeviceName,
+		backupsDir:    cfg.BackupsDir,
 		now:           cfg.Now,
 		newGeneration: cfg.NewGeneration,
+		rename:        cfg.Rename,
 	}
 	if c.now == nil {
 		c.now = time.Now
+	}
+	if c.rename == nil {
+		c.rename = os.Rename
 	}
 	if c.newGeneration == nil {
 		c.newGeneration = func() (string, error) {

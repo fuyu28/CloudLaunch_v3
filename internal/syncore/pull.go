@@ -18,8 +18,8 @@ import (
 
 var drivePattern = regexp.MustCompile(`[A-Za-z]:`)
 
-// Pull は判定が Pull の plan だけを受け付ける。手順 9（バックアップへの移動）は行わず、old ができたときは
-// ジャーナルを残して成功とする。残った状態は復旧表の「old と live があり、stage がない」の行に当たる。
+// Pull は判定が Pull の plan だけを受け付ける。入れ替えを始めた後に失敗したときは、ジャーナルを残してエラーを返す。
+// 残った状態は仕様書 6 章の復旧表の行に当たり、Recover が片付ける。
 func (c *Core) Pull(ctx context.Context, plan Plan) error {
 	if plan.Decision != DecisionPull {
 		return fmt.Errorf("pull %s: decision is %v, not Pull", plan.GameID, plan.Decision)
@@ -44,7 +44,8 @@ func (c *Core) Pull(ctx context.Context, plan Plan) error {
 	opID := u.String()
 	stage := filepath.Join(parent, ".cloudlaunch-stage-"+opID)
 	old := filepath.Join(parent, ".cloudlaunch-old-"+opID)
-	if err := c.local.InsertPullOperation(ctx, opID, plan.GameID, live, stage, old, c.now()); err != nil {
+	startedAt := c.now()
+	if err := c.local.InsertPullOperation(ctx, opID, plan.GameID, live, stage, old, startedAt); err != nil {
 		return fmt.Errorf("write pull journal: %w", err)
 	}
 
@@ -59,21 +60,22 @@ func (c *Core) Pull(ctx context.Context, plan Plan) error {
 		return c.abortPull(ctx, opID, stage, fmt.Errorf("stat save folder: %w", err))
 	}
 	if hadLive {
-		if err := os.Rename(live, old); err != nil {
+		if err := c.rename(live, old); err != nil {
 			return c.abortPull(ctx, opID, stage, fmt.Errorf("move save folder to old: %w", err))
 		}
 	}
 	// ここから先で失敗したときは、ジャーナルを残す。残った状態は復旧表の行に当たり、Recover が片付ける
-	if err := os.Rename(stage, live); err != nil {
+	if err := c.rename(stage, live); err != nil {
 		return fmt.Errorf("move stage to save folder: %w", err)
 	}
 	if err := c.local.SetBase(ctx, plan.GameID, plan.Remote.Hash); err != nil {
 		return fmt.Errorf("set base: %w", err)
 	}
 	if hadLive {
-		c.logger.WarnContext(ctx, "pulled; left the old save folder and the journal because backup is not implemented yet",
-			"game", plan.GameID, "generation", plan.Remote.Generation, "old", old)
-		return nil
+		if err := c.moveToBackup(plan.GameID, old, backupName(startedAt, opID)); err != nil {
+			return fmt.Errorf("move old save folder to backup: %w", err)
+		}
+		c.pruneBackups(ctx, plan.GameID)
 	}
 	if err := c.local.DeletePullOperation(ctx, opID); err != nil {
 		return fmt.Errorf("delete pull journal: %w", err)
