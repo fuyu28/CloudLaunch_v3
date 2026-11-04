@@ -1,0 +1,50 @@
+# pull-empty-manifest-base
+
+- 日時: 2026-11-04 11:59 (JST)
+
+## 当初の要求 / 背景
+
+base が空 manifest のハッシュのゲームで、セーブフォルダにファイルがないまま Pull すると、手順 6 で毎回 `ErrPlanStale` になり、取り込めない。dev のコード全体のレビューで見つかった。
+
+起こる順序の例:
+
+1. PC-A がセーブフォルダを空にして Push し、base が空 manifest のハッシュになる
+2. PC-B が新しいセーブを Push する
+3. PC-A の `Status` は、判定表の「B / B / 変化」の行（4-D8）に当たり、Pull を返す
+4. PC-A の `Pull` は手順 6 で live のハッシュを計算し直し、承認した時点のハッシュと比べるが、一致せずに `ErrPlanStale` を返す。`Status` からやり直しても同じ plan が返るので、何度やっても取り込めない
+
+原因は、「ファイルのない local をどう表すか」の規則を、`Status`（`status.go`）と `Pull` の手順 6（`pull.go` の `prepareStage`）が別々に書いていることにある。仕様書 4 章は、base が空 manifest のときは、ファイルのない local を空 manifest として比べると決めている。2026-11-04_00-18_status-with-base.md でこの規則を `Status` に入れたときに、`Pull` の手順 6 を合わせなかった。
+
+## 仕様
+
+- local のハッシュの規則を、`Status` と `Pull` でどう共有するか
+- `Pull` が base をどこから得るか
+- `LocalState.Hash` のドキュメント
+
+## 決定事項
+
+### local のハッシュの規則の共有
+
+- 事項: ファイルのない local のハッシュを、`Status` と `Pull` の手順 6 で同じにする方法
+- 決定内容: entries と base から local のハッシュを返す内部の関数を 1 つ作り、`Status` と `prepareStage` の両方から呼ぶ。ファイルがあればその manifest ハッシュを、ファイルがなく base が空 manifest のハッシュなら空 manifest のハッシュを、それ以外は空を返す
+- 判断理由: 規則が 2 か所にあったことが不具合の原因である。手順 6 は「承認した時点から変わっていないか」を `plan.Local.Hash` と比べて確かめるので、同じ関数で計算すれば、変わっていない live は必ず一致する
+
+### `Pull` が base を得る場所
+
+- 事項: 手順 6 で使う base を、DB から読み直すか、plan から取るか
+- 決定内容: `plan.Base` を使う
+- 判断理由: `plan.Local.Hash` は `plan.Base` から計算したものなので、同じ base で計算し直さないと比べる意味がない。承認の後に base が変わった場合は、DB から読み直すと、live が変わっていなくても一致しなくなる。base の変化を検出する役は手順 6 にはない
+
+### `LocalState.Hash` のドキュメント
+
+- 事項: `LocalState.Hash` のコメント「ファイルが 1 つもなければ空」が、base が空 manifest のときの振る舞いと食い違っている
+- 決定内容: 「ファイルがなく、base が空 manifest のハッシュでなければ空」に直す
+- 判断理由: 呼び出し側（`Pull`、今後の GUI）は、このコメントを契約として読む。今回の不具合は、このコメントのとおりに `Pull` を書いたことで起きた
+
+## 結果 / 影響
+
+（作業の後に書く）
+
+## 更新履歴
+
+- 2026-11-04 11:59 作成
