@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -41,10 +42,41 @@ type env struct {
 	backupsDir string
 	// rename は、テストがリネームに失敗を仕込むためのもの。fn が nil でなければ、os.Rename の前に呼ぶ
 	rename *renameHook
+	lock   *fakeLocker
 }
 
 type renameHook struct {
 	fn func(oldpath, newpath string) error
+}
+
+// fakeLocker は、PC 全体の同期ロックの偽物。deny が真のあいだは、ほかの同期が握っているものとして取れない。
+type fakeLocker struct {
+	mu       sync.Mutex
+	deny     bool
+	held     bool
+	acquired int
+}
+
+func (l *fakeLocker) TryLock() (func() error, bool, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.deny || l.held {
+		return nil, false, nil
+	}
+	l.held = true
+	l.acquired++
+	return func() error {
+		l.mu.Lock()
+		defer l.mu.Unlock()
+		l.held = false
+		return nil
+	}, true, nil
+}
+
+func (l *fakeLocker) state() (acquired int, held bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.acquired, l.held
 }
 
 // newEnv は、セーブフォルダを持つゲームを 1 つ登録した DB と、空のリモートを用意する。
@@ -80,12 +112,14 @@ func newEnvWithRemote(t *testing.T, remote *memstore.Store) env {
 
 	backupsDir := filepath.Join(dir, "backups")
 	hook := &renameHook{}
+	lock := &fakeLocker{}
 	core := syncore.New(syncore.Config{
 		Remote:        remote,
 		Local:         st,
 		Logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
 		DeviceName:    testDeviceName,
 		BackupsDir:    backupsDir,
+		Locker:        lock,
 		Now:           func() time.Time { return testNow },
 		NewGeneration: func() (string, error) { return pushGeneration, nil },
 		Rename: func(oldpath, newpath string) error {
@@ -97,7 +131,7 @@ func newEnvWithRemote(t *testing.T, remote *memstore.Store) env {
 			return os.Rename(oldpath, newpath)
 		},
 	})
-	return env{core: core, store: st, remote: remote, saveDir: saveDir, dbPath: dbPath, backupsDir: backupsDir, rename: hook}
+	return env{core: core, store: st, remote: remote, saveDir: saveDir, dbPath: dbPath, backupsDir: backupsDir, rename: hook, lock: lock}
 }
 
 // gameBackups は、ゲームのバックアップのディレクトリにある名前を、名前の順で返す。ディレクトリがなければ空を返す。

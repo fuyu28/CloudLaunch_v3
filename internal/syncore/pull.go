@@ -30,6 +30,11 @@ func (c *Core) Pull(ctx context.Context, plan Plan) error {
 	if c.backupsDir == "" {
 		return fmt.Errorf("pull %s: %w", plan.GameID, errBackupsDirNotSet)
 	}
+	release, err := c.acquire(ctx)
+	if err != nil {
+		return fmt.Errorf("pull %s: %w", plan.GameID, err)
+	}
+	defer release()
 	live, _, err := c.local.GameLocal(ctx, plan.GameID)
 	if err != nil {
 		return fmt.Errorf("read game %s: %w", plan.GameID, err)

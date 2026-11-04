@@ -33,6 +33,8 @@ type Config struct {
 	DeviceName string
 	// BackupsDir は、Pull で退避したセーブを置くディレクトリ。その下の {gameId}/ に置く
 	BackupsDir string
+	// Locker は、Push・Pull・Recover が実行中に握る PC 全体の同期ロック（仕様書 3 章）
+	Locker Locker
 	// Now・NewGeneration・Rename は、nil なら実際の時刻・UUIDv7 の採番・os.Rename を使う
 	Now           func() time.Time
 	NewGeneration func() (string, error)
@@ -45,6 +47,7 @@ type Core struct {
 	logger        *slog.Logger
 	deviceName    string
 	backupsDir    string
+	locker        Locker
 	now           func() time.Time
 	newGeneration func() (string, error)
 	rename        func(oldpath, newpath string) error
@@ -57,6 +60,7 @@ func New(cfg Config) *Core {
 		logger:        cfg.Logger,
 		deviceName:    cfg.DeviceName,
 		backupsDir:    cfg.BackupsDir,
+		locker:        cfg.Locker,
 		now:           cfg.Now,
 		newGeneration: cfg.NewGeneration,
 		rename:        cfg.Rename,

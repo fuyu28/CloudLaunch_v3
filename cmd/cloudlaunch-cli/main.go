@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/fuyu28/CloudLaunch_v3/internal/objstore"
+	"github.com/fuyu28/CloudLaunch_v3/internal/platform"
 	"github.com/fuyu28/CloudLaunch_v3/internal/store"
 	"github.com/fuyu28/CloudLaunch_v3/internal/syncore"
 )
@@ -77,7 +78,7 @@ func recoverPulls(ctx context.Context, args []string, stdout io.Writer) error {
 		}
 	}
 	if err != nil {
-		return err
+		return explainSyncError(err)
 	}
 	if len(recovered) == 0 {
 		_, err = fmt.Fprintln(stdout, "復旧する Pull はありません")
@@ -136,10 +137,7 @@ func push(ctx context.Context, args []string, stdout io.Writer) error {
 		return recordBaseIfNeeded(ctx, core, plan, stdout)
 	}
 	if err := core.Push(ctx, plan); err != nil {
-		if errors.Is(err, syncore.ErrPlanStale) {
-			return fmt.Errorf("状況が変わりました。もう一度実行してください: %w", err)
-		}
-		return err
+		return explainSyncError(err)
 	}
 	_, err = fmt.Fprintln(stdout, "アップロードしました")
 	return err
@@ -167,10 +165,7 @@ func pull(ctx context.Context, args []string, stdout io.Writer) error {
 		return recordBaseIfNeeded(ctx, core, plan, stdout)
 	}
 	if err := core.Pull(ctx, plan); err != nil {
-		if errors.Is(err, syncore.ErrPlanStale) {
-			return fmt.Errorf("状況が変わりました。もう一度実行してください: %w", err)
-		}
-		return err
+		return explainSyncError(err)
 	}
 	_, err = fmt.Fprintln(stdout, "ダウンロードしました")
 	return err
@@ -229,12 +224,24 @@ func recoveryLabel(rc syncore.RecoveryCase) string {
 	return fmt.Sprintf("不明な復旧（%d）", int(rc))
 }
 
-// localConfig は、recover と、リモートを使うコマンドで、バックアップの置き場所を揃えるために 1 か所で組み立てる。
+// explainSyncError は、呼び出し側がすることの決まっているエラーに、利用者向けの説明を添える。
+func explainSyncError(err error) error {
+	switch {
+	case errors.Is(err, syncore.ErrPlanStale):
+		return fmt.Errorf("状況が変わりました。もう一度実行してください: %w", err)
+	case errors.Is(err, syncore.ErrSyncInProgress):
+		return fmt.Errorf("別の同期が実行中です: %w", err)
+	}
+	return err
+}
+
+// localConfig は、recover と、リモートを使うコマンドで、バックアップの置き場所と同期ロックを揃えるために 1 か所で組み立てる。
 func localConfig(s *store.Store, dataDir string) syncore.Config {
 	return syncore.Config{
 		Local:      s,
 		Logger:     slog.New(slog.NewTextHandler(os.Stderr, nil)),
 		BackupsDir: filepath.Join(dataDir, "backups"),
+		Locker:     platform.NewFileLock(filepath.Join(dataDir, "sync.lock")),
 	}
 }
 

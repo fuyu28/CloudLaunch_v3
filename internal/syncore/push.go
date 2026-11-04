@@ -30,6 +30,11 @@ func (c *Core) Push(ctx context.Context, plan Plan) error {
 	if plan.Decision != DecisionPush {
 		return fmt.Errorf("push %s: decision is %v, not Push", plan.GameID, plan.Decision)
 	}
+	release, err := c.acquire(ctx)
+	if err != nil {
+		return fmt.Errorf("push %s: %w", plan.GameID, err)
+	}
+	defer release()
 	saveFolder, _, err := c.local.GameLocal(ctx, plan.GameID)
 	if err != nil {
 		return fmt.Errorf("read game %s: %w", plan.GameID, err)
