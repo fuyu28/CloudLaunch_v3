@@ -165,7 +165,7 @@ func TestPullバックアップ(t *testing.T) {
 		}
 	})
 
-	t.Run("6-L9 コピーの途中でキャンセル → .partial を残さず、old とジャーナルを残してエラー", func(t *testing.T) {
+	t.Run("6-L9 入れ替えの後にキャンセルされても、手順 10 まで行う", func(t *testing.T) {
 		e := newEnv(t)
 		plan := pullOverLocal(t, e, local, remote)
 		ctx, cancel := context.WithCancel(t.Context())
@@ -179,8 +179,29 @@ func TestPullバックアップ(t *testing.T) {
 			return nil
 		}
 
-		if err := e.core.Pull(ctx, plan); !errors.Is(err, context.Canceled) {
-			t.Fatalf("Pull error = %v, want context.Canceled", err)
+		if err := e.core.Pull(ctx, plan); err != nil {
+			t.Fatalf("Pull: %v", err)
+		}
+		assertBackedUp(t, e, local, remote)
+	})
+
+	t.Run("6-L9 コピーが途中で失敗 → .partial を残さず、old とジャーナルを残してエラー", func(t *testing.T) {
+		e := newEnv(t)
+		plan := pullOverLocal(t, e, local, remote)
+		// リネームを失敗させてコピーの経路に入れ、old の最後（名前の順）に通常のファイルでないものを置いて、
+		// ほかのファイルをコピーした後でコピーを失敗させる
+		e.rename.fn = func(oldpath, newpath string) error {
+			if strings.HasPrefix(filepath.Base(oldpath), ".cloudlaunch-old-") && strings.HasPrefix(newpath, e.backupsDir) {
+				if err := os.Symlink("slot1.sav", filepath.Join(oldpath, "zz-link")); err != nil {
+					t.Skipf("シンボリックリンクを作れない: %v", err)
+				}
+				return errors.New("injected: cross-device")
+			}
+			return nil
+		}
+
+		if err := e.core.Pull(t.Context(), plan); err == nil {
+			t.Fatal("Pull error = nil, want an error")
 		}
 		if names := e.gameBackups(t); len(names) != 0 {
 			t.Errorf("バックアップのディレクトリに残っている: %v", names)
@@ -189,15 +210,15 @@ func TestPullバックアップ(t *testing.T) {
 		if len(old) != 1 {
 			t.Fatalf("old = %v, want 1 つ", old)
 		}
-		if diff := cmp.Diff(local, readFiles(t, old[0])); diff != "" {
-			t.Errorf("old (-want +got):\n%s", diff)
+		if _, err := os.Lstat(filepath.Join(old[0], "slot1.sav")); err != nil {
+			t.Errorf("old のファイルがない: %v", err)
 		}
 		if n := e.journalCount(t); n != 1 {
 			t.Errorf("ジャーナルの行の数 = %d, want 1", n)
 		}
 	})
 
-	t.Run("6-L9 BackupsDir が設定されていない → ジャーナルを書く前にエラー", func(t *testing.T) {
+	t.Run("6章/Pull/BackupsDir が設定されていない → ジャーナルを書く前にエラー", func(t *testing.T) {
 		e := newEnv(t)
 		e.core = syncore.New(syncore.Config{
 			Remote:     e.remote,
