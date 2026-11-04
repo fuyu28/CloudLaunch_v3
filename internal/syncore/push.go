@@ -43,6 +43,15 @@ func (c *Core) Push(ctx context.Context, plan Plan) error {
 	if err := c.uploadMissing(ctx, plan.GameID, saveFolder, plan.Local.Entries); err != nil {
 		return err
 	}
+	// アップロード中の検証は、アップロードしたファイルしか読まない。リモートに object があったファイルの変化や、
+	// 増えたファイルは、ここでハッシュし直して見つける（仕様書 5-P3）
+	entries, err := localEntries(ctx, saveFolder)
+	if err != nil {
+		return err
+	}
+	if localHash(entries, plan.Base) != plan.Local.Hash {
+		return fmt.Errorf("save folder changed after approval: %w", ErrPlanStale)
+	}
 
 	generation, err := c.newGeneration()
 	if err != nil {
