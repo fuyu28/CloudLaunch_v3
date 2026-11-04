@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -107,11 +108,14 @@ func TestFileLockHelperProcess(t *testing.T) {
 	if path == "" {
 		t.Skip("TestFileLock の子プロセスとしてだけ動く")
 	}
-	if _, ok, err := NewFileLock(path).TryLock(); err != nil || !ok {
+	unlock, ok, err := NewFileLock(path).TryLock()
+	if err != nil || !ok {
 		fmt.Fprintf(os.Stderr, "TryLock: ok = %v, err = %v\n", ok, err)
 		os.Exit(2)
 	}
 	fmt.Println("locked")
 	time.Sleep(time.Minute)
+	// unlock を捨てると、開いたファイルが GC で閉じられてロックが外れうるので、待つ間は参照を保つ
+	runtime.KeepAlive(unlock)
 	os.Exit(0)
 }

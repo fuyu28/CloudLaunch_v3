@@ -76,23 +76,22 @@ func TestLock(t *testing.T) {
 			name string
 			run  func(t *testing.T, e env) error
 		}{
-			{"Push", func(t *testing.T, e env) error { return e.core.Push(t.Context(), approvedPush(t, e, files)) }},
-			{"Pull", func(t *testing.T, e env) error { return e.core.Pull(t.Context(), approvedPull(t, e, files)) }},
-			{"Recover", func(t *testing.T, e env) error {
+			{"Push の後", func(t *testing.T, e env) error { return e.core.Push(t.Context(), approvedPush(t, e, files)) }},
+			{"Pull の後", func(t *testing.T, e env) error { return e.core.Pull(t.Context(), approvedPull(t, e, files)) }},
+			{"Recover の後", func(t *testing.T, e env) error {
 				interruptedPull(t, e)
 				_, err := e.core.Recover(t.Context())
 				return err
 			}},
 		}
 		for _, tt := range tests {
-			e := newEnv(t)
-			if err := tt.run(t, e); err != nil {
-				t.Fatalf("%s: %v", tt.name, err)
-			}
-			acquired, held := e.lock.state()
-			if acquired != 1 || held {
-				t.Errorf("%s のロック: 取った回数 = %d、握ったまま = %v, want 1 回、解放済み", tt.name, acquired, held)
-			}
+			t.Run(tt.name, func(t *testing.T) {
+				e := newEnv(t)
+				if err := tt.run(t, e); err != nil {
+					t.Fatalf("%v", err)
+				}
+				assertReleasedOnce(t, e)
+			})
 		}
 	})
 
@@ -114,19 +113,49 @@ func TestLock(t *testing.T) {
 	})
 
 	t.Run("3章/排他/Locker がなければ、何も変える前にエラー", func(t *testing.T) {
-		e := newEnv(t)
-		plan := approvedPull(t, e, files)
-		e.core = syncore.New(syncore.Config{
-			Remote:     e.remote,
-			Local:      e.store,
-			Logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
-			DeviceName: testDeviceName,
-			BackupsDir: e.backupsDir,
+		withoutLocker := func(e env) *syncore.Core {
+			return syncore.New(syncore.Config{
+				Remote:     e.remote,
+				Local:      e.store,
+				Logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+				DeviceName: testDeviceName,
+				BackupsDir: e.backupsDir,
+			})
+		}
+
+		t.Run("Push", func(t *testing.T) {
+			e := newEnv(t)
+			plan := approvedPush(t, e, files)
+			if err := withoutLocker(e).Push(t.Context(), plan); err == nil {
+				t.Fatal("Push error = nil, want an error")
+			}
+			if keys := e.keys(t, "games/"); len(keys) != 0 {
+				t.Errorf("リモートに書いた: %v", keys)
+			}
 		})
 
-		if err := e.core.Pull(t.Context(), plan); err == nil {
-			t.Fatal("Pull error = nil, want an error")
-		}
-		assertAborted(t, e, map[string]string{})
+		t.Run("Pull", func(t *testing.T) {
+			e := newEnv(t)
+			plan := approvedPull(t, e, files)
+			if err := withoutLocker(e).Pull(t.Context(), plan); err == nil {
+				t.Fatal("Pull error = nil, want an error")
+			}
+			assertAborted(t, e, map[string]string{})
+		})
+
+		t.Run("Recover", func(t *testing.T) {
+			e := newEnv(t)
+			stage, _ := interruptedPull(t, e)
+			writeFiles(t, stage, files)
+			if _, err := withoutLocker(e).Recover(t.Context()); err == nil {
+				t.Fatal("Recover error = nil, want an error")
+			}
+			if diff := cmp.Diff(files, readFiles(t, stage)); diff != "" {
+				t.Errorf("stage (-want +got):\n%s", diff)
+			}
+			if n := e.journalCount(t); n != 1 {
+				t.Errorf("ジャーナルの行の数 = %d, want 1", n)
+			}
+		})
 	})
 }

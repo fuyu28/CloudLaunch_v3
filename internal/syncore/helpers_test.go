@@ -73,7 +73,6 @@ func (l *fakeLocker) TryLock() (func() error, bool, error) {
 	}, true, nil
 }
 
-// state は、取った回数と、今握っているかを返す。
 func (l *fakeLocker) state() (acquired int, held bool) {
 	l.mu.Lock()
 	defer l.mu.Unlock()

@@ -4,8 +4,6 @@ package platform
 import (
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 
 	"golang.org/x/sys/windows"
 )
@@ -13,12 +11,9 @@ import (
 // TryLock は、ほかのハンドルがロックを握っていれば ok に false を返す。LockFileEx はハンドルごとに
 // 効くので、同じプロセスの中でも、別に開いたハンドルとは取り合う。
 func (l *FileLock) TryLock() (unlock func() error, ok bool, err error) {
-	if err := os.MkdirAll(filepath.Dir(l.path), 0o700); err != nil {
-		return nil, false, fmt.Errorf("create directory of lock file: %w", err)
-	}
-	f, err := os.OpenFile(l.path, os.O_RDWR|os.O_CREATE, 0o600)
+	f, err := l.open()
 	if err != nil {
-		return nil, false, fmt.Errorf("open lock file: %w", err)
+		return nil, false, err
 	}
 	h := windows.Handle(f.Fd())
 	// ファイルの先頭 1 バイトをロックする。中身は書かないので、ロックする範囲はどこでもよい

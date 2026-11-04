@@ -7,7 +7,6 @@ import (
 	"fmt"
 )
 
-// ErrSyncInProgress は、PC 全体の同期ロックが取れなかったことを表す。
 var ErrSyncInProgress = errors.New("another sync is in progress")
 
 // Locker は、待たずに失敗する排他ロック。取れなかったときは ok に false、err に nil を返す。
