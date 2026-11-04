@@ -6,6 +6,8 @@ import (
 	"database/sql"
 	"fmt"
 	"time"
+
+	"github.com/fuyu28/CloudLaunch_v3/internal/syncore"
 )
 
 // NewGame の ID と日時は呼び出し側が決める。
@@ -44,15 +46,17 @@ func (s *Store) CreateGame(ctx context.Context, g NewGame) error {
 	return nil
 }
 
-// GameLocal は、base が未設定なら baseManifestHash に空文字を返す。
-func (s *Store) GameLocal(ctx context.Context, gameID string) (saveFolderPath, baseManifestHash string, err error) {
+// GameLocal は、base が未設定なら BaseManifestHash に空文字を返す。
+func (s *Store) GameLocal(ctx context.Context, gameID string) (syncore.GameLocal, error) {
+	var g syncore.GameLocal
 	var base sql.NullString
 	if err := s.db.QueryRowContext(ctx,
-		`SELECT save_folder_path, base_manifest_hash FROM game_locals WHERE game_id = ?`, gameID,
-	).Scan(&saveFolderPath, &base); err != nil {
-		return "", "", fmt.Errorf("select game_locals: %w", err)
+		`SELECT save_folder_path, exe_path, base_manifest_hash FROM game_locals WHERE game_id = ?`, gameID,
+	).Scan(&g.SaveFolderPath, &g.ExePath, &base); err != nil {
+		return syncore.GameLocal{}, fmt.Errorf("select game_locals: %w", err)
 	}
-	return saveFolderPath, base.String, nil
+	g.BaseManifestHash = base.String
+	return g, nil
 }
 
 func (s *Store) SetBase(ctx context.Context, gameID, manifestHash string) error {

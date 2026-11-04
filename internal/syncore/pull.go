@@ -35,9 +35,13 @@ func (c *Core) Pull(ctx context.Context, plan Plan) error {
 		return fmt.Errorf("pull %s: %w", plan.GameID, err)
 	}
 	defer release()
-	live, _, err := c.local.GameLocal(ctx, plan.GameID)
+	game, err := c.local.GameLocal(ctx, plan.GameID)
 	if err != nil {
 		return fmt.Errorf("read game %s: %w", plan.GameID, err)
+	}
+	live := game.SaveFolderPath
+	if err := c.ensureGameNotRunning(game.ExePath); err != nil {
+		return fmt.Errorf("pull %s: %w", plan.GameID, err)
 	}
 
 	// stage と old は、リネームで入れ替えられるよう live と同じディレクトリに置く（仕様書 3 章）
@@ -57,7 +61,7 @@ func (c *Core) Pull(ctx context.Context, plan Plan) error {
 		return fmt.Errorf("write pull journal: %w", err)
 	}
 
-	if err := c.prepareStage(ctx, plan, live, stage); err != nil {
+	if err := c.prepareStage(ctx, plan, game, stage); err != nil {
 		return c.abortPull(ctx, opID, stage, err)
 	}
 
@@ -93,7 +97,7 @@ func (c *Core) Pull(ctx context.Context, plan Plan) error {
 }
 
 // prepareStage は手順 4〜6 を行う。
-func (c *Core) prepareStage(ctx context.Context, plan Plan, live, stage string) error {
+func (c *Core) prepareStage(ctx context.Context, plan Plan, game GameLocal, stage string) error {
 	if err := os.Mkdir(stage, 0o755); err != nil {
 		return fmt.Errorf("create stage: %w", err)
 	}
@@ -109,7 +113,10 @@ func (c *Core) prepareStage(ctx context.Context, plan Plan, live, stage string) 
 		return fmt.Errorf("downloaded files do not match manifest %s", plan.Remote.Generation)
 	}
 
-	if err := ensureLocalUnchanged(ctx, live, plan); err != nil {
+	if err := c.ensureGameNotRunning(game.ExePath); err != nil {
+		return fmt.Errorf("pull %s: %w", plan.GameID, err)
+	}
+	if err := ensureLocalUnchanged(ctx, game.SaveFolderPath, plan); err != nil {
 		return err
 	}
 	head, err := c.readHead(ctx, plan.GameID)

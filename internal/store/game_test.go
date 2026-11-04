@@ -4,6 +4,10 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	"github.com/google/go-cmp/cmp"
+
+	"github.com/fuyu28/CloudLaunch_v3/internal/syncore"
 )
 
 const testGameID = "0192d4e8-0000-7000-8000-000000000001"
@@ -22,16 +26,17 @@ func createTestGame(t *testing.T, s *Store) {
 }
 
 func TestGameLocal(t *testing.T) {
-	t.Run("store/GameLocal がセーブフォルダと base を返す", func(t *testing.T) {
+	t.Run("store/GameLocal がセーブフォルダと実行ファイルのパスと base を返す", func(t *testing.T) {
 		s, _ := openTemp(t)
 		createTestGame(t, s)
 
-		saveFolder, base, err := s.GameLocal(context.Background(), testGameID)
+		got, err := s.GameLocal(context.Background(), testGameID)
 		if err != nil {
 			t.Fatalf("GameLocal: %v", err)
 		}
-		if saveFolder != "/save" || base != "" {
-			t.Errorf("GameLocal = (%q, %q), want (%q, %q)", saveFolder, base, "/save", "")
+		want := syncore.GameLocal{SaveFolderPath: "/save", ExePath: "/game.exe"}
+		if diff := cmp.Diff(want, got); diff != "" {
+			t.Errorf("GameLocal (-want +got):\n%s", diff)
 		}
 	})
 
@@ -44,12 +49,12 @@ func TestGameLocal(t *testing.T) {
 		if err := s.SetBase(ctx, testGameID, hash); err != nil {
 			t.Fatalf("SetBase: %v", err)
 		}
-		_, base, err := s.GameLocal(ctx, testGameID)
+		got, err := s.GameLocal(ctx, testGameID)
 		if err != nil {
 			t.Fatalf("GameLocal: %v", err)
 		}
-		if base != hash {
-			t.Errorf("base = %q, want %q", base, hash)
+		if got.BaseManifestHash != hash {
+			t.Errorf("base = %q, want %q", got.BaseManifestHash, hash)
 		}
 	})
 }

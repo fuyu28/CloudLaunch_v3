@@ -18,8 +18,15 @@ type ObjectStore interface {
 	List(ctx context.Context, prefix string) ([]string, error)
 }
 
+// GameLocal は、ゲームのローカル情報（同期しない）のうち、同期コアが使うもの。BaseManifestHash は未設定なら空。
+type GameLocal struct {
+	SaveFolderPath   string
+	ExePath          string
+	BaseManifestHash string
+}
+
 type LocalStore interface {
-	GameLocal(ctx context.Context, gameID string) (saveFolderPath, baseManifestHash string, err error)
+	GameLocal(ctx context.Context, gameID string) (GameLocal, error)
 	SetBase(ctx context.Context, gameID, manifestHash string) error
 	InsertPullOperation(ctx context.Context, opID, gameID, livePath, stagePath, oldPath string, createdAt time.Time) error
 	DeletePullOperation(ctx context.Context, opID string) error
@@ -35,6 +42,8 @@ type Config struct {
 	BackupsDir string
 	// Locker は、Push・Pull・Recover が実行中に握る PC 全体の同期ロック（仕様書 3 章）
 	Locker Locker
+	// Processes は、Push・Pull がゲームの実行中を拒否するために使う（仕様書 7 章）
+	Processes ProcessChecker
 	// Now・NewGeneration・Rename は、nil なら実際の時刻・UUIDv7 の採番・os.Rename を使う
 	Now           func() time.Time
 	NewGeneration func() (string, error)
@@ -48,6 +57,7 @@ type Core struct {
 	deviceName    string
 	backupsDir    string
 	locker        Locker
+	processes     ProcessChecker
 	now           func() time.Time
 	newGeneration func() (string, error)
 	rename        func(oldpath, newpath string) error
@@ -61,6 +71,7 @@ func New(cfg Config) *Core {
 		deviceName:    cfg.DeviceName,
 		backupsDir:    cfg.BackupsDir,
 		locker:        cfg.Locker,
+		processes:     cfg.Processes,
 		now:           cfg.Now,
 		newGeneration: cfg.NewGeneration,
 		rename:        cfg.Rename,
@@ -139,10 +150,11 @@ type RemoteState struct {
 
 // Status はローカルにもリモートにも書き込まない。
 func (c *Core) Status(ctx context.Context, gameID string) (Plan, error) {
-	saveFolder, base, err := c.local.GameLocal(ctx, gameID)
+	game, err := c.local.GameLocal(ctx, gameID)
 	if err != nil {
 		return Plan{}, fmt.Errorf("read game %s: %w", gameID, err)
 	}
+	saveFolder, base := game.SaveFolderPath, game.BaseManifestHash
 
 	entries, err := localEntries(ctx, saveFolder)
 	if err != nil {

@@ -206,6 +206,7 @@ func openCore(ctx context.Context, name string, args []string) (core *syncore.Co
 	cfg := localConfig(s, dir)
 	cfg.Remote = remote
 	cfg.DeviceName = host
+	cfg.Processes = platform.Processes{}
 	return syncore.New(cfg), *game, func() { _ = s.Close() }, nil
 }
 
@@ -231,6 +232,10 @@ func explainSyncError(err error) error {
 		return fmt.Errorf("状況が変わりました。もう一度実行してください: %w", err)
 	case errors.Is(err, syncore.ErrSyncInProgress):
 		return fmt.Errorf("別の同期が実行中です: %w", err)
+	case errors.Is(err, syncore.ErrGameRunning):
+		return fmt.Errorf("ゲームが実行中です。終了してからもう一度実行してください: %w", err)
+	case errors.Is(err, syncore.ErrGameExeNotFound):
+		return fmt.Errorf("登録した実行ファイルが見つかりません。ゲームの実行ファイルのパスを直してください: %w", err)
 	}
 	return err
 }
