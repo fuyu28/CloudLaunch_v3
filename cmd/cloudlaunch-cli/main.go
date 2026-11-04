@@ -25,6 +25,7 @@ const usage = `usage:
   cloudlaunch-cli status --game <gameId> [--data-dir <dir>]
   cloudlaunch-cli push --game <gameId> [--data-dir <dir>]
   cloudlaunch-cli pull --game <gameId> [--data-dir <dir>]
+  cloudlaunch-cli recover [--data-dir <dir>]
 
 status・push・pull はリモートの接続先と鍵を環境変数から読む:
   CLOUDLAUNCH_S3_ENDPOINT, CLOUDLAUNCH_S3_BUCKET, CLOUDLAUNCH_S3_ACCESS_KEY_ID, CLOUDLAUNCH_S3_SECRET_ACCESS_KEY,
@@ -50,7 +51,38 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 	if len(args) >= 1 && args[0] == "pull" {
 		return pull(ctx, args[1:], stdout)
 	}
+	if len(args) >= 1 && args[0] == "recover" {
+		return recoverPulls(ctx, args[1:], stdout)
+	}
 	return errors.New(usage)
+}
+
+// recoverPulls は、復旧できた行を出してから、失敗した行のエラーを返す。リモートには触れないので、接続先を読まない。
+func recoverPulls(ctx context.Context, args []string, stdout io.Writer) error {
+	fs := flag.NewFlagSet("recover", flag.ContinueOnError)
+	dataDir := fs.String("data-dir", "", "DB などを置くディレクトリ")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	s, dir, err := openStore(ctx, *dataDir)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = s.Close() }()
+
+	recovered, err := syncore.New(localConfig(s, dir)).Recover(ctx)
+	for _, r := range recovered {
+		if _, werr := fmt.Fprintf(stdout, "%s: game %s, op %s\n", recoveryLabel(r.Case), r.GameID, r.OpID); werr != nil {
+			return errors.Join(err, werr)
+		}
+	}
+	if err != nil {
+		return err
+	}
+	if len(recovered) == 0 {
+		_, err = fmt.Fprintln(stdout, "復旧する Pull はありません")
+	}
+	return err
 }
 
 func status(ctx context.Context, args []string, stdout io.Writer) error {
@@ -176,14 +208,34 @@ func openCore(ctx context.Context, name string, args []string) (core *syncore.Co
 		return nil, "", nil, err
 	}
 
-	core = syncore.New(syncore.Config{
-		Remote:     remote,
+	cfg := localConfig(s, dir)
+	cfg.Remote = remote
+	cfg.DeviceName = host
+	return syncore.New(cfg), *game, func() { _ = s.Close() }, nil
+}
+
+// recoveryLabel は、R2 で確かめるときに仕様書の復旧表と突き合わせられるよう、行の ID を添える。
+func recoveryLabel(rc syncore.RecoveryCase) string {
+	switch rc {
+	case syncore.RecoveryRemoveStage:
+		return "stage を削除した（6-R1）"
+	case syncore.RecoveryRestoreOld:
+		return "退避したセーブを戻した（6-R2）"
+	case syncore.RecoveryBackupOld:
+		return "退避したセーブをバックアップへ移した（6-R3）"
+	case syncore.RecoveryNothing:
+		return "片付けるものはなかった（6-R4）"
+	}
+	return fmt.Sprintf("不明な復旧（%d）", int(rc))
+}
+
+// localConfig は、recover と、リモートを使うコマンドで、バックアップの置き場所を揃えるために 1 か所で組み立てる。
+func localConfig(s *store.Store, dataDir string) syncore.Config {
+	return syncore.Config{
 		Local:      s,
 		Logger:     slog.New(slog.NewTextHandler(os.Stderr, nil)),
-		DeviceName: host,
-		BackupsDir: filepath.Join(dir, "backups"),
-	})
-	return core, *game, func() { _ = s.Close() }, nil
+		BackupsDir: filepath.Join(dataDir, "backups"),
+	}
 }
 
 func printPlan(w io.Writer, plan syncore.Plan) error {
