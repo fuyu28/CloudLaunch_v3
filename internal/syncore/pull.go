@@ -105,11 +105,8 @@ func (c *Core) prepareStage(ctx context.Context, plan Plan, live, stage string) 
 	if err != nil {
 		return err
 	}
-	liveHash := ""
-	if len(liveEntries) > 0 {
-		liveHash = ManifestHash(liveEntries)
-	}
-	if liveHash != plan.Local.Hash {
+	// DB の base ではなく plan.Base を使う。plan.Local.Hash は plan.Base から計算したもので、同じ base で計算し直さないと比べられない
+	if localHash(liveEntries, plan.Base) != plan.Local.Hash {
 		return fmt.Errorf("save folder changed after approval: %w", ErrPlanStale)
 	}
 	head, err := c.readHead(ctx, plan.GameID)

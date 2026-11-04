@@ -101,7 +101,16 @@ type Plan struct {
 
 type LocalState struct {
 	Entries []Entry
-	Hash    string // ファイルが 1 つもなければ空
+	Hash    string // ファイルが 1 つもなく、base が空 manifest のハッシュでなければ空
+}
+
+// localHash は、Status の判定と Pull の手順 6 の確認で、同じ local を同じハッシュにするために 1 か所で決める。
+// base が空 manifest なら、ファイルのない local を「なし」にしない。空にして Push した後に、毎回競合と判定しないため（仕様書 4 章）
+func localHash(entries []Entry, base string) string {
+	if len(entries) > 0 || base == emptyManifestHash {
+		return ManifestHash(entries)
+	}
+	return ""
 }
 
 type RemoteState struct {
@@ -121,11 +130,7 @@ func (c *Core) Status(ctx context.Context, gameID string) (Plan, error) {
 	if err != nil {
 		return Plan{}, err
 	}
-	local := LocalState{Entries: entries}
-	// base が空 manifest なら、ファイルのない local を「なし」にしない。空にして Push した後に、毎回競合と判定しないため（仕様書 4 章）
-	if len(entries) > 0 || base == emptyManifestHash {
-		local.Hash = ManifestHash(entries)
-	}
+	local := LocalState{Entries: entries, Hash: localHash(entries, base)}
 	remote, err := c.readRemote(ctx, gameID)
 	if err != nil {
 		return Plan{}, err
