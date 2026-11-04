@@ -62,7 +62,8 @@ func (c *Core) Recover(ctx context.Context) ([]Recovery, error) {
 	for _, op := range ops {
 		rc, err := c.recoverOne(ctx, op)
 		if err == nil {
-			err = c.local.DeletePullOperation(ctx, op.OpID)
+			// ファイルはもう直したので、キャンセルで行が残って失敗と伝わらないようにする
+			err = c.local.DeletePullOperation(context.WithoutCancel(ctx), op.OpID)
 		}
 		if err != nil {
 			errs = append(errs, fmt.Errorf("recover pull %s of game %s: %w", op.OpID, op.GameID, err))
@@ -99,27 +100,28 @@ func (c *Core) recoverOne(ctx context.Context, op PullOperation) (RecoveryCase, 
 		}
 		return RecoveryRemoveStage, nil
 	case hasOld && !hasLive:
-		if err := c.rename(op.OldPath, op.LivePath); err != nil {
-			return 0, fmt.Errorf("move old back to save folder: %w", err)
-		}
+		// stage を先に消す。old を戻した後で stage を消せないと、戻したことが伝わらず、次の復旧で 6-R1 と出るため。
+		// 先に消して中断しても、old があり live がない状態のままなので、次も 6-R2 に当たる
 		if err := os.RemoveAll(op.StagePath); err != nil {
 			return 0, fmt.Errorf("remove stage: %w", err)
+		}
+		if err := c.rename(op.OldPath, op.LivePath); err != nil {
+			return 0, fmt.Errorf("move old back to save folder: %w", err)
 		}
 		return RecoveryRestoreOld, nil
 	case hasOld:
 		// base が書けていなくても、ここでは書かずに次の判定で記録させる（仕様書 6 章 6-R3）
-		name := backupName(op.CreatedAt, op.OpID)
-		if err := c.moveToBackup(ctx, op.GameID, op.OldPath, name); err != nil {
-			return 0, fmt.Errorf("move old save folder to backup: %w", err)
+		if err := c.backupOld(ctx, op.GameID, op.OldPath, op.CreatedAt, op.OpID); err != nil {
+			return 0, err
 		}
-		c.pruneBackups(ctx, op.GameID, name)
 		return RecoveryBackupOld, nil
 	default:
 		return RecoveryNothing, nil
 	}
 }
 
-// exists は、存在しない以外のエラー（仕様書 6 章で行を残してエラーにする場合）をそのまま返す。
+// exists は、存在しない以外のエラーを、存在しないとみなさずに包んで返す（仕様書 6 章で、パスの状態を確かめられない
+// ときは行を残してエラーにするため）。
 func exists(path string) (bool, error) {
 	_, err := os.Lstat(path)
 	if errors.Is(err, fs.ErrNotExist) {

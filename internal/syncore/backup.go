@@ -27,6 +27,17 @@ func backupName(startedAt time.Time, opID string) string {
 	return startedAt.UTC().Format(backupTimeLayout) + "-" + opID
 }
 
+// backupOld は、Pull の手順 9 と復旧の 6-R3 で共有する。startedAt と opID は Pull ジャーナルの行の値で、
+// どちらから呼んでも同じバックアップ名になる。
+func (c *Core) backupOld(ctx context.Context, gameID, old string, startedAt time.Time, opID string) error {
+	name := backupName(startedAt, opID)
+	if err := c.moveToBackup(ctx, gameID, old, name); err != nil {
+		return fmt.Errorf("move old save folder to backup: %w", err)
+	}
+	c.pruneBackups(ctx, gameID, name)
+	return nil
+}
+
 // moveToBackup は old を backups/{gameId}/{name} へ移す。リネームで移せなければ、.partial- の名前にコピーしてから
 // 最終の名前にリネームし、old を削除する。最終の名前は同じボリュームの中のリネームでしか現れないので、
 // 最終の名前があれば中身は完全であり、そのときは old を削除するだけにする。この順にすると、どこで中断しても、

@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -57,11 +56,9 @@ func (c *Core) Pull(ctx context.Context, plan Plan) error {
 		return c.abortPull(ctx, opID, stage, err)
 	}
 
-	hadLive := true
-	if _, err := os.Lstat(live); errors.Is(err, fs.ErrNotExist) {
-		hadLive = false
-	} else if err != nil {
-		return c.abortPull(ctx, opID, stage, fmt.Errorf("stat save folder: %w", err))
+	hadLive, err := exists(live)
+	if err != nil {
+		return c.abortPull(ctx, opID, stage, err)
 	}
 	if hadLive {
 		if err := c.rename(live, old); err != nil {
@@ -79,11 +76,9 @@ func (c *Core) Pull(ctx context.Context, plan Plan) error {
 		return fmt.Errorf("set base: %w", err)
 	}
 	if hadLive {
-		name := backupName(startedAt, opID)
-		if err := c.moveToBackup(ctx, plan.GameID, old, name); err != nil {
-			return fmt.Errorf("move old save folder to backup: %w", err)
+		if err := c.backupOld(ctx, plan.GameID, old, startedAt, opID); err != nil {
+			return err
 		}
-		c.pruneBackups(ctx, plan.GameID, name)
 	}
 	if err := c.local.DeletePullOperation(ctx, opID); err != nil {
 		return fmt.Errorf("delete pull journal: %w", err)

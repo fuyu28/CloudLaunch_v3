@@ -70,12 +70,7 @@ func recoverPulls(ctx context.Context, args []string, stdout io.Writer) error {
 	}
 	defer func() { _ = s.Close() }()
 
-	core := syncore.New(syncore.Config{
-		Local:      s,
-		Logger:     slog.New(slog.NewTextHandler(os.Stderr, nil)),
-		BackupsDir: filepath.Join(dir, "backups"),
-	})
-	recovered, err := core.Recover(ctx)
+	recovered, err := syncore.New(localConfig(s, dir)).Recover(ctx)
 	for _, r := range recovered {
 		if _, werr := fmt.Fprintf(stdout, "%s: game %s, op %s\n", r.Case, r.GameID, r.OpID); werr != nil {
 			return errors.Join(err, werr)
@@ -213,14 +208,19 @@ func openCore(ctx context.Context, name string, args []string) (core *syncore.Co
 		return nil, "", nil, err
 	}
 
-	core = syncore.New(syncore.Config{
-		Remote:     remote,
+	cfg := localConfig(s, dir)
+	cfg.Remote = remote
+	cfg.DeviceName = host
+	return syncore.New(cfg), *game, func() { _ = s.Close() }, nil
+}
+
+// localConfig は、recover と、リモートを使うコマンドで、バックアップの置き場所を揃えるために 1 か所で組み立てる。
+func localConfig(s *store.Store, dataDir string) syncore.Config {
+	return syncore.Config{
 		Local:      s,
 		Logger:     slog.New(slog.NewTextHandler(os.Stderr, nil)),
-		DeviceName: host,
-		BackupsDir: filepath.Join(dir, "backups"),
-	})
-	return core, *game, func() { _ = s.Close() }, nil
+		BackupsDir: filepath.Join(dataDir, "backups"),
+	}
 }
 
 func printPlan(w io.Writer, plan syncore.Plan) error {
