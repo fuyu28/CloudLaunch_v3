@@ -29,7 +29,7 @@ func (c *Core) Pull(ctx context.Context, plan Plan) error {
 	}
 	// 手順 9 で見つけると、live を入れ替えた後なので old とジャーナルが残る。何も変える前に止める
 	if c.backupsDir == "" {
-		return errors.New("backups directory is not configured")
+		return fmt.Errorf("pull %s: %w", plan.GameID, errBackupsDirNotSet)
 	}
 	live, _, err := c.local.GameLocal(ctx, plan.GameID)
 	if err != nil {
@@ -72,6 +72,9 @@ func (c *Core) Pull(ctx context.Context, plan Plan) error {
 	if err := c.rename(stage, live); err != nil {
 		return fmt.Errorf("move stage to save folder: %w", err)
 	}
+	// live を入れ替えた後は、キャンセルされても最後まで進める。途中で止めると、セーブは新しくなったのに
+	// Pull が失敗と伝わり、old とジャーナルが残る
+	ctx = context.WithoutCancel(ctx)
 	if err := c.local.SetBase(ctx, plan.GameID, plan.Remote.Hash); err != nil {
 		return fmt.Errorf("set base: %w", err)
 	}
@@ -82,9 +85,8 @@ func (c *Core) Pull(ctx context.Context, plan Plan) error {
 		}
 		c.pruneBackups(ctx, plan.GameID, name)
 	}
-	// ここまでで Pull は終わっているので、エラーを返すと成功を失敗と伝えることになる。残った行は 6-R4 が消す
-	if err := c.local.DeletePullOperation(context.WithoutCancel(ctx), opID); err != nil {
-		c.logger.WarnContext(ctx, "could not delete pull journal", "game", plan.GameID, "op", opID, "error", err)
+	if err := c.local.DeletePullOperation(ctx, opID); err != nil {
+		return fmt.Errorf("delete pull journal: %w", err)
 	}
 	c.logger.InfoContext(ctx, "pulled", "game", plan.GameID, "generation", plan.Remote.Generation)
 	return nil

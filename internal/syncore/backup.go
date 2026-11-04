@@ -19,6 +19,8 @@ const (
 	backupsKept      = 3
 )
 
+var errBackupsDirNotSet = errors.New("backups directory is not configured")
+
 var backupNamePattern = regexp.MustCompile(`^[0-9]{8}T[0-9]{6}\.[0-9]{3}Z-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
 func backupName(startedAt time.Time, opID string) string {
@@ -30,6 +32,10 @@ func backupName(startedAt time.Time, opID string) string {
 // 最終の名前があれば中身は完全であり、そのときは old を削除するだけにする。この順にすると、どこで中断しても、
 // 完全なコピーを途中まで消えた old で上書きしない。
 func (c *Core) moveToBackup(ctx context.Context, gameID, old, name string) error {
+	// 空のまま Join すると、作業ディレクトリの下に移してしまう
+	if c.backupsDir == "" {
+		return errBackupsDirNotSet
+	}
 	dir := filepath.Join(c.backupsDir, gameID)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("create backups directory: %w", err)
