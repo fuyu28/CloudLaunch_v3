@@ -1,6 +1,7 @@
 package syncore_test
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -207,6 +208,25 @@ func TestPull中止(t *testing.T) {
 
 		if err := e.core.Pull(t.Context(), plan); !errors.Is(err, injected) {
 			t.Fatalf("Pull error = %v, want %v", err, injected)
+		}
+		assertAborted(t, e, map[string]string{})
+	})
+
+	t.Run("6-A1 キャンセルで中止しても、stage とジャーナルを削除する", func(t *testing.T) {
+		e := newEnv(t)
+		plan := approvedPull(t, e, files)
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		e.remote.Before = func(op memstore.Op, key string) error {
+			if op == memstore.OpGet && strings.Contains(key, "/objects/") {
+				cancel()
+				return context.Canceled
+			}
+			return nil
+		}
+
+		if err := e.core.Pull(ctx, plan); !errors.Is(err, context.Canceled) {
+			t.Fatalf("Pull error = %v, want context.Canceled", err)
 		}
 		assertAborted(t, e, map[string]string{})
 	})

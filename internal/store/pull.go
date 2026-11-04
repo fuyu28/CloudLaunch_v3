@@ -3,6 +3,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"time"
 )
@@ -17,9 +18,18 @@ func (s *Store) InsertPullOperation(ctx context.Context, opID, gameID, livePath,
 	return nil
 }
 
+// DeletePullOperation は、opID の行がなければ sql.ErrNoRows を返す。
 func (s *Store) DeletePullOperation(ctx context.Context, opID string) error {
-	if _, err := s.db.ExecContext(ctx, `DELETE FROM pull_operations WHERE op_id = ?`, opID); err != nil {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM pull_operations WHERE op_id = ?`, opID)
+	if err != nil {
 		return fmt.Errorf("delete pull_operations: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("delete pull_operations: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("delete pull_operations %s: %w", opID, sql.ErrNoRows)
 	}
 	return nil
 }

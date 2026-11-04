@@ -27,6 +27,10 @@ func (c *Core) Pull(ctx context.Context, plan Plan) error {
 	if err := validateEntries(plan.Remote.Manifest.Entries); err != nil {
 		return fmt.Errorf("pull %s: invalid manifest %s: %w", plan.GameID, plan.Remote.Generation, err)
 	}
+	// 手順 9 で見つけると、live を入れ替えた後なので old とジャーナルが残る。何も変える前に止める
+	if c.backupsDir == "" {
+		return fmt.Errorf("pull %s: %w", plan.GameID, errBackupsDirNotSet)
+	}
 	live, _, err := c.local.GameLocal(ctx, plan.GameID)
 	if err != nil {
 		return fmt.Errorf("read game %s: %w", plan.GameID, err)
@@ -68,14 +72,18 @@ func (c *Core) Pull(ctx context.Context, plan Plan) error {
 	if err := c.rename(stage, live); err != nil {
 		return fmt.Errorf("move stage to save folder: %w", err)
 	}
+	// live を入れ替えた後は、キャンセルされても最後まで進める。途中で止めると、セーブは新しくなったのに
+	// Pull が失敗と伝わり、old とジャーナルが残る
+	ctx = context.WithoutCancel(ctx)
 	if err := c.local.SetBase(ctx, plan.GameID, plan.Remote.Hash); err != nil {
 		return fmt.Errorf("set base: %w", err)
 	}
 	if hadLive {
-		if err := c.moveToBackup(plan.GameID, old, backupName(startedAt, opID)); err != nil {
+		name := backupName(startedAt, opID)
+		if err := c.moveToBackup(ctx, plan.GameID, old, name); err != nil {
 			return fmt.Errorf("move old save folder to backup: %w", err)
 		}
-		c.pruneBackups(ctx, plan.GameID)
+		c.pruneBackups(ctx, plan.GameID, name)
 	}
 	if err := c.local.DeletePullOperation(ctx, opID); err != nil {
 		return fmt.Errorf("delete pull journal: %w", err)
@@ -120,11 +128,12 @@ func (c *Core) prepareStage(ctx context.Context, plan Plan, live, stage string) 
 }
 
 // abortPull は stage を削除してからジャーナルを削除する。stage を削除できなければ、ジャーナルを残して Recover に任せる。
+// キャンセルで中止したときも片付けられるよう、ジャーナルの削除はキャンセルの効かない ctx で行う。
 func (c *Core) abortPull(ctx context.Context, opID, stage string, cause error) error {
 	if err := os.RemoveAll(stage); err != nil {
 		return errors.Join(cause, fmt.Errorf("remove stage: %w", err))
 	}
-	if err := c.local.DeletePullOperation(ctx, opID); err != nil {
+	if err := c.local.DeletePullOperation(context.WithoutCancel(ctx), opID); err != nil {
 		return errors.Join(cause, fmt.Errorf("delete pull journal: %w", err))
 	}
 	return cause

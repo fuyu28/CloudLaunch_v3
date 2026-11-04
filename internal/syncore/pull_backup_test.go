@@ -1,7 +1,10 @@
 package syncore_test
 
 import (
+	"context"
 	"errors"
+	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -159,6 +162,127 @@ func TestPullバックアップ(t *testing.T) {
 		}
 		if names := e.gameBackups(t); len(names) != 0 {
 			t.Errorf("バックアップ = %v, want なし", names)
+		}
+	})
+
+	t.Run("6-L9 入れ替えの後にキャンセルされても、手順 10 まで行う", func(t *testing.T) {
+		e := newEnv(t)
+		plan := pullOverLocal(t, e, local, remote)
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		// old をバックアップへリネームする時点でキャンセルし、リネームを失敗させてコピーの経路に入れる
+		e.rename.fn = func(oldpath, newpath string) error {
+			if strings.HasPrefix(filepath.Base(oldpath), ".cloudlaunch-old-") && strings.HasPrefix(newpath, e.backupsDir) {
+				cancel()
+				return errors.New("injected: cross-device")
+			}
+			return nil
+		}
+
+		if err := e.core.Pull(ctx, plan); err != nil {
+			t.Fatalf("Pull: %v", err)
+		}
+		assertBackedUp(t, e, local, remote)
+	})
+
+	t.Run("6-L9 コピーが途中で失敗 → .partial を残さず、old とジャーナルを残してエラー", func(t *testing.T) {
+		e := newEnv(t)
+		plan := pullOverLocal(t, e, local, remote)
+		// リネームを失敗させてコピーの経路に入れ、old の最後（名前の順）に通常のファイルでないものを置いて、
+		// ほかのファイルをコピーした後でコピーを失敗させる
+		e.rename.fn = func(oldpath, newpath string) error {
+			if strings.HasPrefix(filepath.Base(oldpath), ".cloudlaunch-old-") && strings.HasPrefix(newpath, e.backupsDir) {
+				if err := os.Symlink("slot1.sav", filepath.Join(oldpath, "zz-link")); err != nil {
+					t.Skipf("シンボリックリンクを作れない: %v", err)
+				}
+				return errors.New("injected: cross-device")
+			}
+			return nil
+		}
+
+		if err := e.core.Pull(t.Context(), plan); err == nil {
+			t.Fatal("Pull error = nil, want an error")
+		}
+		if names := e.gameBackups(t); len(names) != 0 {
+			t.Errorf("バックアップのディレクトリに残っている: %v", names)
+		}
+		old := e.workDirs(t, "old")
+		if len(old) != 1 {
+			t.Fatalf("old = %v, want 1 つ", old)
+		}
+		if _, err := os.Lstat(filepath.Join(old[0], "slot1.sav")); err != nil {
+			t.Errorf("old のファイルがない: %v", err)
+		}
+		if n := e.journalCount(t); n != 1 {
+			t.Errorf("ジャーナルの行の数 = %d, want 1", n)
+		}
+	})
+
+	t.Run("6章/Pull/BackupsDir が設定されていない → ジャーナルを書く前にエラー", func(t *testing.T) {
+		e := newEnv(t)
+		e.core = syncore.New(syncore.Config{
+			Remote:     e.remote,
+			Local:      e.store,
+			Logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+			DeviceName: testDeviceName,
+		})
+		plan := pullOverLocal(t, e, local, remote)
+
+		if err := e.core.Pull(t.Context(), plan); err == nil {
+			t.Fatal("Pull error = nil, want an error")
+		}
+		if diff := cmp.Diff(local, readFiles(t, e.saveDir)); diff != "" {
+			t.Errorf("セーブフォルダ (-want +got):\n%s", diff)
+		}
+		if dirs := append(e.workDirs(t, "stage"), e.workDirs(t, "old")...); len(dirs) != 0 {
+			t.Errorf("作業用のディレクトリが残っている: %v", dirs)
+		}
+		if n := e.journalCount(t); n != 0 {
+			t.Errorf("ジャーナルの行の数 = %d, want 0", n)
+		}
+	})
+
+	t.Run("3章/バックアップ/その Pull で作ったバックアップは、名前が古くても削除しない", func(t *testing.T) {
+		e := newEnv(t)
+		// 時計が進んでいた間に作った、testNow より新しい名前のバックアップ
+		future := []string{
+			"20271101T000000.000Z-0192d4e8-0000-7000-8000-000000000101",
+			"20271102T000000.000Z-0192d4e8-0000-7000-8000-000000000102",
+			"20271103T000000.000Z-0192d4e8-0000-7000-8000-000000000103",
+		}
+		mkdirBackups(t, e, future...)
+		plan := pullOverLocal(t, e, local, remote)
+
+		if err := e.core.Pull(t.Context(), plan); err != nil {
+			t.Fatalf("Pull: %v", err)
+		}
+		names := e.gameBackups(t)
+		if len(names) != 4 || !backupNamePattern.MatchString(names[0]) {
+			t.Fatalf("バックアップ = %v, want 作ったものと元の 3 つ", names)
+		}
+		if diff := cmp.Diff(local, readFiles(t, filepath.Join(e.backupsDir, testGameID, names[0]))); diff != "" {
+			t.Errorf("作ったバックアップ (-want +got):\n%s", diff)
+		}
+	})
+
+	t.Run("3章/バックアップ/空のディレクトリもバックアップに入る", func(t *testing.T) {
+		e := newEnv(t)
+		if err := os.Mkdir(filepath.Join(e.saveDir, "empty"), 0o700); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		plan := pullOverLocal(t, e, local, remote)
+		failRenameOldToBackups(e)
+
+		if err := e.core.Pull(t.Context(), plan); err != nil {
+			t.Fatalf("Pull: %v", err)
+		}
+		names := e.gameBackups(t)
+		if len(names) != 1 {
+			t.Fatalf("バックアップ = %v, want 1 つ", names)
+		}
+		info, err := os.Stat(filepath.Join(e.backupsDir, testGameID, names[0], "empty"))
+		if err != nil || !info.IsDir() {
+			t.Errorf("空のディレクトリがバックアップにない: %v", err)
 		}
 	})
 
