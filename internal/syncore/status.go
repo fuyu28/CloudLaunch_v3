@@ -29,9 +29,12 @@ type Config struct {
 	Local      LocalStore
 	Logger     *slog.Logger
 	DeviceName string
-	// Now と NewGeneration は、nil なら実際の時刻と UUIDv7 の採番を使う
+	// BackupsDir は、Pull で退避したセーブを置くディレクトリ。その下の {gameId}/ に置く
+	BackupsDir string
+	// Now・NewGeneration・Rename は、nil なら実際の時刻・UUIDv7 の採番・os.Rename を使う
 	Now           func() time.Time
 	NewGeneration func() (string, error)
+	Rename        func(oldpath, newpath string) error
 }
 
 type Core struct {
