@@ -56,6 +56,22 @@ func TestPullの書き出し(t *testing.T) {
 		assertAborted(t, e, map[string]string{})
 	})
 
+	t.Run("6-L7 live を old にリネームできず live が残っていたら、stage とジャーナルを削除する", func(t *testing.T) {
+		e := newEnv(t)
+		plan := approvedPull(t, e, remote)
+		e.rename.fn = func(oldpath, _ string) error {
+			if oldpath == e.saveDir {
+				return injected
+			}
+			return nil
+		}
+
+		if err := e.core.Pull(t.Context(), plan); !errors.Is(err, injected) {
+			t.Fatalf("Pull error = %v, want %v", err, injected)
+		}
+		assertAborted(t, e, map[string]string{})
+	})
+
 	t.Run("6-L7 live を old に移した後に書き出しに失敗したら、ジャーナルを残してエラー", func(t *testing.T) {
 		e := newEnv(t)
 		plan := pullOverLocal(t, e, local, remote)
