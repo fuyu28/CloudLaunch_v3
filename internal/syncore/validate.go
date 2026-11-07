@@ -40,10 +40,13 @@ func validateManifest(entries []Entry) error {
 type pathNode struct {
 	spelling string
 	isDir    bool
+	// from は、この名前を登録した path。エラーで、どのファイルを直せばよいかを示すために持つ
+	from string
 }
 
 // validatePaths は、paths のどれかが path の規則（6-M1〜6-M5・6-M10〜6-M13）に当たればエラーを返す。
-// local のファイルシステムでは 6-M13 は起きないので、local にかけても仕様書 2 章の検証と同じになる。
+// local にかけても仕様書 2 章の検証と同じになる。local で 6-M13 に当たる組み合わせは、大文字小文字を区別する
+// フォルダの `a` と `A/b.sav` のように綴りが違うものだけで、それは 6-M5 にも当たるため。
 //
 // 6-M5 と 6-M13 は、各 path のディレクトリの部分（短い順）と path 全体を、大文字に揃えた名前で 1 つの map に
 // 登録しながら調べる。ファイルとディレクトリを同じ map に置くので、並び順によらず衝突を見つけられる。
@@ -53,21 +56,30 @@ func validatePaths(paths []string) error {
 		if err := validatePath(p); err != nil {
 			return fmt.Errorf("path %q: %w", p, err)
 		}
-		for i := 0; i <= len(p); i++ {
-			if i < len(p) && p[i] != '/' {
-				continue
+		elems := strings.Split(p, "/")
+		// 接頭辞ごとに揃え直すと path の深さ×長さの手間になるので、要素ごとに揃えて継ぎ足す。
+		// Builder が返した文字列は、後で書き足しても変わらない
+		var folded strings.Builder
+		end := 0
+		for i, elem := range elems {
+			if i > 0 {
+				folded.WriteByte('/')
+				end++
 			}
-			node := pathNode{spelling: p[:i], isDir: i < len(p)}
+			end += len(elem)
+			spelling := p[:end]
 			// Windows はファイル名を大文字に揃えて比べるので、ToLower ではなく ToUpper で揃える
-			folded := strings.ToUpper(node.spelling)
-			other, ok := seen[folded]
+			folded.WriteString(strings.ToUpper(elem))
+			key := folded.String()
+			node := pathNode{spelling: spelling, isDir: i < len(elems)-1, from: p}
+			other, ok := seen[key]
 			switch {
 			case !ok:
-				seen[folded] = node
+				seen[key] = node
 			case other.isDir != node.isDir:
-				return fmt.Errorf("%q is used as both a file and a directory (%q)", other.spelling, node.spelling)
+				return fmt.Errorf("paths %q and %q use %q as both a file and a directory", other.from, p, spelling)
 			case !node.isDir || other.spelling != node.spelling:
-				return fmt.Errorf("paths %q and %q differ only in case", other.spelling, node.spelling)
+				return fmt.Errorf("paths %q and %q differ only in case (%q and %q)", other.from, p, other.spelling, spelling)
 			}
 		}
 	}
