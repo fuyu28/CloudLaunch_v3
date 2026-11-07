@@ -3,6 +3,7 @@ package syncore_test
 import (
 	"context"
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -85,21 +86,51 @@ func pullPlan(t *testing.T, e env) syncore.Plan {
 	return plan
 }
 
-// countingLocal は、ジャーナルを書いた回数を数える。
-type countingLocal struct {
+// journalWrite は、ジャーナルを書いた 1 回の中身と、その時点で stage があったか。
+type journalWrite struct {
+	op           syncore.PullOperation
+	stageExisted bool
+}
+
+// journalSpy は、ジャーナルを書くたびに journalWrite を記録してから、元の LocalStore に書く。
+// 終わった後の状態では、ジャーナルを書いてから 6-A1 で消した場合と、書かなかった場合を見分けられないため。
+type journalSpy struct {
 	syncore.LocalStore
-	inserts atomic.Int32
+	mu     sync.Mutex
+	writes []journalWrite
 }
 
-func (l *countingLocal) InsertPullOperation(ctx context.Context, opID, gameID, livePath, stagePath, oldPath string, createdAt time.Time) error {
-	l.inserts.Add(1)
-	return l.LocalStore.InsertPullOperation(ctx, opID, gameID, livePath, stagePath, oldPath, createdAt)
+func (s *journalSpy) InsertPullOperation(ctx context.Context, opID, gameID, livePath, stagePath, oldPath string, createdAt time.Time) error {
+	_, statErr := os.Stat(stagePath)
+	s.mu.Lock()
+	s.writes = append(s.writes, journalWrite{
+		op:           syncore.PullOperation{OpID: opID, GameID: gameID, LivePath: livePath, StagePath: stagePath, OldPath: oldPath, CreatedAt: createdAt},
+		stageExisted: !errors.Is(statErr, fs.ErrNotExist),
+	})
+	s.mu.Unlock()
+	return s.LocalStore.InsertPullOperation(ctx, opID, gameID, livePath, stagePath, oldPath, createdAt)
 }
 
-// assertPullRejected は、リモートの世代を不正な manifest として、object を取得せず、何も変えずに Pull が止まることを確かめる。
+func (s *journalSpy) recorded() []journalWrite {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]journalWrite(nil), s.writes...)
+}
+
+// coreWithJournalSpy は、e のコアと同じ設定で、ジャーナルの書き込みを記録するコアを作る。
+func (e env) coreWithJournalSpy() (*syncore.Core, *journalSpy) {
+	spy := &journalSpy{LocalStore: e.store}
+	cfg := e.cfg
+	cfg.Local = spy
+	return syncore.New(cfg), spy
+}
+
+// assertPullRejected は、リモートの世代を不正な manifest として、ジャーナルを書かず、object を取得せず、
+// 何も変えずに Pull が止まることを確かめる。
 func assertPullRejected(t *testing.T, e env) {
 	t.Helper()
 	plan := pullPlan(t, e)
+	core, spy := e.coreWithJournalSpy()
 	var gets atomic.Int32
 	e.remote.Before = func(op memstore.Op, key string) error {
 		if op == memstore.OpGet && strings.Contains(key, "/objects/") {
@@ -108,9 +139,12 @@ func assertPullRejected(t *testing.T, e env) {
 		return nil
 	}
 
-	err := e.core.Pull(t.Context(), plan, syncore.PullOptions{})
+	err := core.Pull(t.Context(), plan, syncore.PullOptions{})
 	if err == nil || errors.Is(err, syncore.ErrPlanStale) {
 		t.Fatalf("Pull error = %v, want an error other than ErrPlanStale", err)
+	}
+	if n := len(spy.recorded()); n != 0 {
+		t.Errorf("ジャーナルを %d 回書いた", n)
 	}
 	if n := gets.Load(); n != 0 {
 		t.Errorf("object を %d 回取得した", n)
@@ -194,40 +228,49 @@ func TestPull(t *testing.T) {
 		}
 	})
 
-	t.Run("6-L3 object を取得する前に、ジャーナルに live・stage・old のパスを書く", func(t *testing.T) {
+	t.Run("6-L3 stage を作る前に、ジャーナルに live・stage・old のパスを書く", func(t *testing.T) {
 		e := newEnv(t)
 		plan := approvedPull(t, e, files)
+		core, spy := e.coreWithJournalSpy()
+		parent := filepath.Dir(e.saveDir)
+		// ジャーナルの stage のパスが、実際に取得先にしているディレクトリと同じかを確かめるため、取得の時点の stage を控える
 		var once sync.Once
-		var journal []syncore.PullOperation
-		var listErr error
+		var stages []string
+		var globErr error
 		e.remote.Before = func(op memstore.Op, key string) error {
 			if op == memstore.OpGet && strings.Contains(key, "/objects/") {
-				once.Do(func() { journal, listErr = e.store.ListPullOperations(context.Background()) })
+				once.Do(func() { stages, globErr = filepath.Glob(filepath.Join(parent, ".cloudlaunch-stage-*")) })
 			}
 			return nil
 		}
 
-		if err := e.core.Pull(t.Context(), plan, syncore.PullOptions{}); err != nil {
+		if err := core.Pull(t.Context(), plan, syncore.PullOptions{}); err != nil {
 			t.Fatalf("Pull: %v", err)
 		}
-		if listErr != nil {
-			t.Fatalf("ListPullOperations: %v", listErr)
+		writes := spy.recorded()
+		if len(writes) != 1 || writes[0].op.OpID == "" {
+			t.Fatalf("ジャーナルの書き込み = %+v, want opId のある 1 回", writes)
 		}
-		if len(journal) != 1 || journal[0].OpID == "" {
-			t.Fatalf("object を取得する時点のジャーナル = %+v, want opId のある 1 行", journal)
+		if writes[0].stageExisted {
+			t.Error("stage を作った後にジャーナルを書いた")
 		}
-		opID := journal[0].OpID
-		parent := filepath.Dir(e.saveDir)
-		want := []syncore.PullOperation{{
+		opID := writes[0].op.OpID
+		want := syncore.PullOperation{
 			OpID:      opID,
 			GameID:    testGameID,
 			LivePath:  e.saveDir,
 			StagePath: filepath.Join(parent, ".cloudlaunch-stage-"+opID),
 			OldPath:   filepath.Join(parent, ".cloudlaunch-old-"+opID),
 			CreatedAt: testNow,
-		}}
-		if diff := cmp.Diff(want, journal); diff != "" {
+		}
+		if diff := cmp.Diff(want, writes[0].op); diff != "" {
 			t.Errorf("ジャーナル (-want +got):\n%s", diff)
+		}
+		if globErr != nil {
+			t.Fatalf("glob stage: %v", globErr)
+		}
+		if diff := cmp.Diff([]string{want.StagePath}, stages); diff != "" {
+			t.Errorf("取得の時点の stage (-want +got):\n%s", diff)
 		}
 	})
 
@@ -499,20 +542,10 @@ func TestPull不正なmanifest(t *testing.T) {
 		})
 	}
 
-	// 6-M 系は終わった後に何も残らないことを見るが、ジャーナルを書いてから 6-A1 で消しても同じ状態になる
 	t.Run("6-L2 不正な manifest → ジャーナルを書く前に中止する", func(t *testing.T) {
 		e := newEnv(t)
 		e.putGeneration(t, []syncore.Entry{{Path: "../a.sav", SHA256: sha256Hex("x"), Size: 1}})
-		plan := pullPlan(t, e)
-		local := &countingLocal{LocalStore: e.store}
-		core := e.coreWithout(func(cfg *syncore.Config) { cfg.Local = local })
-
-		if err := core.Pull(t.Context(), plan, syncore.PullOptions{}); err == nil {
-			t.Fatal("Pull error = nil, want an error")
-		}
-		if n := local.inserts.Load(); n != 0 {
-			t.Errorf("ジャーナルを %d 回書いた", n)
-		}
+		assertPullRejected(t, e)
 	})
 
 	t.Run("6-M6 entries がない", func(t *testing.T) {
