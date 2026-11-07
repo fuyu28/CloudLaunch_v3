@@ -3,8 +3,6 @@ package syncore_test
 import (
 	"context"
 	"errors"
-	"io"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -220,12 +218,7 @@ func TestPullバックアップ(t *testing.T) {
 
 	t.Run("6章/Pull/BackupsDir が設定されていない → ジャーナルを書く前にエラー", func(t *testing.T) {
 		e := newEnv(t)
-		e.core = syncore.New(syncore.Config{
-			Remote:     e.remote,
-			Local:      e.store,
-			Logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
-			DeviceName: testDeviceName,
-		})
+		e.core = e.coreWithout(func(cfg *syncore.Config) { cfg.BackupsDir = "" })
 		plan := pullOverLocal(t, e, local, remote)
 
 		if err := e.core.Pull(t.Context(), plan); err == nil {

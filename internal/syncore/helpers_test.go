@@ -34,7 +34,9 @@ const (
 var testNow = time.Date(2026, 11, 3, 1, 2, 3, 4_000_000, time.UTC)
 
 type env struct {
-	core       *syncore.Core
+	core *syncore.Core
+	// cfg は core を作った設定。coreWithout が 1 項目だけ変えたコアを作るために持つ
+	cfg        syncore.Config
 	store      *store.Store
 	remote     *memstore.Store
 	saveDir    string
@@ -42,14 +44,78 @@ type env struct {
 	backupsDir string
 	// rename は、テストがリネームに失敗を仕込むためのもの。fn が nil でなければ、os.Rename の前に呼ぶ
 	rename *renameHook
-	lock   *fakeLocker
-	procs  *fakeProcesses
+	// ops は、ファイルの書き出しとリネームを呼んだ順に記録する
+	ops   *opLog
+	lock  *fakeLocker
+	procs *fakeProcesses
 	// exePath は、登録したゲームの実行ファイルのパス
 	exePath string
 }
 
 type renameHook struct {
 	fn func(oldpath, newpath string) error
+}
+
+// fileOp は、コアが呼んだファイルの書き出し（kind が "sync"）かリネーム（kind が "rename"）の 1 回。
+type fileOp struct {
+	kind string
+	path string
+	to   string
+}
+
+// opLog は、書き出しとリネームを呼んだ順に記録する。stage への取得は並列なので、mu で守る。
+// failSync が nil でなければ、書き出しの前に呼び、エラーを返せばその書き出しを失敗させる。
+type opLog struct {
+	mu       sync.Mutex
+	ops      []fileOp
+	failSync func(path string) error
+}
+
+func (l *opLog) sync(f *os.File) error {
+	l.mu.Lock()
+	fail := l.failSync
+	l.ops = append(l.ops, fileOp{kind: "sync", path: f.Name()})
+	l.mu.Unlock()
+	if fail != nil {
+		if err := fail(f.Name()); err != nil {
+			return err
+		}
+	}
+	return f.Sync()
+}
+
+func (l *opLog) renamed(oldpath, newpath string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.ops = append(l.ops, fileOp{kind: "rename", path: oldpath, to: newpath})
+}
+
+// syncedBeforeRename は、isTarget に当たる最初のリネームより前に書き出したファイルのうち、そのリネームで移す
+// ディレクトリの中のものを、区切りを / にした相対パスの昇順で返す。当たるリネームがなければテストを止める。
+func (l *opLog) syncedBeforeRename(t *testing.T, isTarget func(op fileOp) bool) []string {
+	t.Helper()
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for i, op := range l.ops {
+		if op.kind != "rename" || !isTarget(op) {
+			continue
+		}
+		synced := []string{}
+		for _, s := range l.ops[:i] {
+			if s.kind != "sync" {
+				continue
+			}
+			rel, err := filepath.Rel(op.path, s.path)
+			if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+				continue
+			}
+			synced = append(synced, filepath.ToSlash(rel))
+		}
+		sort.Strings(synced)
+		return synced
+	}
+	t.Fatalf("当たるリネームがない: %+v", l.ops)
+	return nil
 }
 
 // fakeLocker は、PC 全体の同期ロックの偽物。deny が真のあいだは、ほかの同期が握っているものとして取れない。
@@ -141,9 +207,10 @@ func newEnvWithRemote(t *testing.T, remote *memstore.Store) env {
 
 	backupsDir := filepath.Join(dir, "backups")
 	hook := &renameHook{}
+	ops := &opLog{}
 	lock := &fakeLocker{}
 	procs := &fakeProcesses{}
-	core := syncore.New(syncore.Config{
+	cfg := syncore.Config{
 		Remote:        remote,
 		Local:         st,
 		Logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -159,10 +226,23 @@ func newEnvWithRemote(t *testing.T, remote *memstore.Store) env {
 					return err
 				}
 			}
-			return os.Rename(oldpath, newpath)
+			if err := os.Rename(oldpath, newpath); err != nil {
+				return err
+			}
+			ops.renamed(oldpath, newpath)
+			return nil
 		},
-	})
-	return env{core: core, store: st, remote: remote, saveDir: saveDir, dbPath: dbPath, backupsDir: backupsDir, rename: hook, lock: lock, procs: procs, exePath: exePath}
+		SyncFile: ops.sync,
+	}
+	return env{core: syncore.New(cfg), cfg: cfg, store: st, remote: remote, saveDir: saveDir, dbPath: dbPath, backupsDir: backupsDir, rename: hook, ops: ops, lock: lock, procs: procs, exePath: exePath}
+}
+
+// coreWithout は、e のコアと同じ設定から edit で 1 項目だけ外したコアを作る。必須の項目がないときの確認で、
+// 外した項目のほかは揃っているようにするため（別の必須の項目がないことで先に止まると、確認したいことを確かめない）。
+func (e env) coreWithout(edit func(cfg *syncore.Config)) *syncore.Core {
+	cfg := e.cfg
+	edit(&cfg)
+	return syncore.New(cfg)
 }
 
 // gameBackups は、ゲームのバックアップのディレクトリにある名前を、名前の順で返す。ディレクトリがなければ空を返す。

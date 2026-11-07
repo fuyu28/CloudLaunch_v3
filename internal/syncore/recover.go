@@ -38,6 +38,9 @@ type Recovery struct {
 // Recover は Pull ジャーナルの全行を復旧し、復旧できた行を返す。ある行で失敗しても残りの行を続け、
 // 失敗した行はジャーナルに残して、エラーをまとめて返す。行どうしは別のゲームで、互いに影響しないため。
 func (c *Core) Recover(ctx context.Context) ([]Recovery, error) {
+	if c.rename == nil {
+		return nil, fmt.Errorf("recover: %w", errRenameNotSet)
+	}
 	release, err := c.acquire(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("recover: %w", err)

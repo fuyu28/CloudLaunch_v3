@@ -30,6 +30,9 @@ func (c *Core) Pull(ctx context.Context, plan Plan) error {
 	if c.backupsDir == "" {
 		return fmt.Errorf("pull %s: %w", plan.GameID, errBackupsDirNotSet)
 	}
+	if c.rename == nil {
+		return fmt.Errorf("pull %s: %w", plan.GameID, errRenameNotSet)
+	}
 	release, err := c.acquire(ctx)
 	if err != nil {
 		return fmt.Errorf("pull %s: %w", plan.GameID, err)
@@ -71,7 +74,13 @@ func (c *Core) Pull(ctx context.Context, plan Plan) error {
 	}
 	if hadLive {
 		if err := c.rename(live, old); err != nil {
-			return c.abortPull(ctx, opID, stage, fmt.Errorf("move save folder to old: %w", err))
+			err = fmt.Errorf("move save folder to old: %w", err)
+			// live が残っていれば、リネームしていないので 6-A1 と同じく片付ける。live がなければ、リネームが済んでから
+			// 書き出しに失敗している。ジャーナルを消すとセーブフォルダがないまま復旧されないので、残して 6-R2 に任せる
+			if stillLive, statErr := exists(live); statErr == nil && stillLive {
+				return c.abortPull(ctx, opID, stage, err)
+			}
+			return err
 		}
 	}
 	// ここから先で失敗したときは、ジャーナルを残す。残った状態は復旧表の行に当たり、Recover が片付ける
@@ -168,6 +177,9 @@ func (c *Core) downloadObject(ctx context.Context, key, dst string) error {
 		return fmt.Errorf("create file in stage: %w", err)
 	}
 	_, err = io.Copy(f, r)
+	if err == nil {
+		err = c.syncFile(f)
+	}
 	if closeErr := f.Close(); err == nil {
 		err = closeErr
 	}

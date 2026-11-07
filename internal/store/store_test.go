@@ -49,6 +49,34 @@ func TestOpen(t *testing.T) {
 		}
 	})
 
+	t.Run("3章/DB/synchronous は FULL", func(t *testing.T) {
+		s, _ := openTemp(t)
+		ctx := context.Background()
+
+		// 新しい接続にも効くことを確かめるため、1 本目を握ったまま 2 本目を開く
+		first, err := s.db.Conn(ctx)
+		if err != nil {
+			t.Fatalf("Conn: %v", err)
+		}
+		defer func() { _ = first.Close() }()
+		second, err := s.db.Conn(ctx)
+		if err != nil {
+			t.Fatalf("Conn: %v", err)
+		}
+		defer func() { _ = second.Close() }()
+
+		for _, c := range []*sql.Conn{first, second} {
+			var got int
+			if err := c.QueryRowContext(ctx, `PRAGMA synchronous`).Scan(&got); err != nil {
+				t.Fatalf("PRAGMA synchronous: %v", err)
+			}
+			// 2 が FULL。WAL では NORMAL（1）だとコミットがディスクへ届く前に戻りうる
+			if got != 2 {
+				t.Errorf("synchronous = %d, want 2 (FULL)", got)
+			}
+		}
+	})
+
 	t.Run("store/同じ DB をもう一度開いても失敗しない", func(t *testing.T) {
 		s, path := openTemp(t)
 		if err := s.Close(); err != nil {

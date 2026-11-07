@@ -247,6 +247,7 @@ func localConfig(s *store.Store, dataDir string) syncore.Config {
 		Logger:     slog.New(slog.NewTextHandler(os.Stderr, nil)),
 		BackupsDir: filepath.Join(dataDir, "backups"),
 		Locker:     platform.NewFileLock(filepath.Join(dataDir, "sync.lock")),
+		Rename:     platform.Rename,
 	}
 }
 
