@@ -48,14 +48,6 @@ func pushAfterOld(t *testing.T, e env, core *syncore.Core, ctx context.Context, 
 	}
 }
 
-func manifestKeys(generations ...string) []string {
-	keys := make([]string, len(generations))
-	for i, g := range generations {
-		keys[i] = manifestKey(g)
-	}
-	return keys
-}
-
 func oldManifestKeys(from, to int) []string {
 	keys := []string{}
 	for i := from; i <= to; i++ {
@@ -131,7 +123,7 @@ func TestPushGC(t *testing.T) {
 
 		pushAfterOld(t, e, core, t.Context(), 11)
 
-		want := append(manifestKeys(skewed), oldManifestKeys(2, 11)...)
+		want := append([]string{manifestKey(skewed)}, oldManifestKeys(2, 11)...)
 		if diff := cmp.Diff(want, e.keys(t, manifestsPrefix)); diff != "" {
 			t.Errorf("manifests (-want +got):\n%s", diff)
 		}
@@ -199,6 +191,94 @@ func TestPushGC(t *testing.T) {
 		assertPushed(t, e)
 		if !e.hasObject(t, "orphan") || !e.hasObject(t, genContent(1)) {
 			t.Error("参照を確かめられないのに object を削除した")
+		}
+	})
+
+	t.Run("2章/世代の保持と GC/GC を始めたときに HEAD が指している世代は、Push した世代でなくても残す", func(t *testing.T) {
+		e := newEnv(t)
+		putOldGenerations(t, e, 11, nil)
+		// Push が HEAD を書いた後、GC が世代を一覧する前に、時計の遅れた別の PC が HEAD を書き換えたものとする
+		e.remote.Before = func(op memstore.Op, key string) error {
+			if op == memstore.OpList && strings.HasSuffix(key, "/manifests/") {
+				e.remote.Before = nil
+				e.putObject(t, headKey(), oldGeneration(1))
+			}
+			return nil
+		}
+
+		pushAfterOld(t, e, e.core, t.Context(), 11)
+
+		want := append([]string{manifestKey(oldGeneration(1))}, oldManifestKeys(3, 11)...)
+		want = append(want, manifestKey(pushGeneration))
+		if diff := cmp.Diff(want, e.keys(t, manifestsPrefix)); diff != "" {
+			t.Errorf("manifests (-want +got):\n%s", diff)
+		}
+		if !e.hasObject(t, genContent(1)) {
+			t.Error("HEAD が指す世代の object を削除した")
+		}
+	})
+
+	t.Run("2章/GC と同時 Push/GC が object を一覧するときに書かれた世代の object は削除しない", func(t *testing.T) {
+		e := newEnv(t)
+		putOldGenerations(t, e, 11, nil)
+		// GC が object を一覧する直前に、別の PC が object をアップロードし、それを参照する世代を書いたものとする。
+		// 世代を先に一覧すると、その世代を見落として object を消す。object の一覧は、Push の 5-P3 と GC で 2 回呼ばれる
+		lists := 0
+		e.remote.Before = func(op memstore.Op, key string) error {
+			if op != memstore.OpList || !strings.HasSuffix(key, "/objects/") {
+				return nil
+			}
+			lists++
+			if lists == 2 {
+				e.remote.Before = nil
+				e.putObject(t, objectKey("concurrent"), "concurrent")
+				e.putManifest(t, otherGeneration, entriesOf(map[string]string{"slot.sav": "concurrent"}))
+			}
+			return nil
+		}
+
+		pushAfterOld(t, e, e.core, t.Context(), 11)
+
+		if !e.hasObject(t, "concurrent") {
+			t.Error("別の PC の世代が参照する object を削除した")
+		}
+	})
+
+	t.Run("2章/世代の保持と GC/残す世代の manifest を取得できなければ、object を削除しない", func(t *testing.T) {
+		e := newEnv(t)
+		putOldGenerations(t, e, 11, nil)
+		e.putObject(t, objectKey("orphan"), "orphan")
+		failOn(e, memstore.OpGet, manifestKey(oldGeneration(5)), errors.New("injected"))
+
+		pushAfterOld(t, e, e.core, t.Context(), 11)
+
+		assertPushed(t, e)
+		if !e.hasObject(t, "orphan") {
+			t.Error("参照を確かめられないのに object を削除した")
+		}
+	})
+
+	t.Run("5-P8 object の一覧に失敗しても、Push は成功し、object を削除しない", func(t *testing.T) {
+		e := newEnv(t)
+		putOldGenerations(t, e, 11, nil)
+		e.putObject(t, objectKey("orphan"), "orphan")
+		// 1 回目は Push の 5-P3、2 回目が GC の一覧
+		lists := 0
+		e.remote.Before = func(op memstore.Op, key string) error {
+			if op == memstore.OpList && strings.HasSuffix(key, "/objects/") {
+				lists++
+				if lists == 2 {
+					return errors.New("injected")
+				}
+			}
+			return nil
+		}
+
+		pushAfterOld(t, e, e.core, t.Context(), 11)
+
+		assertPushed(t, e)
+		if !e.hasObject(t, "orphan") {
+			t.Error("object を削除した")
 		}
 	})
 
@@ -297,7 +377,7 @@ func TestPushGC(t *testing.T) {
 		}
 	})
 
-	t.Run("7章/上書き/local と remote が同じで転送しなかったときは GC を行わない", func(t *testing.T) {
+	t.Run("7-O5 上書きで local と remote が同じなら、転送しないので GC も行わない", func(t *testing.T) {
 		e := newEnv(t)
 		putOldGenerations(t, e, 11, nil)
 		e.putObject(t, objectKey("orphan"), "orphan")
