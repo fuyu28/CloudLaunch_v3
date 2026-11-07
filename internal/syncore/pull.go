@@ -1,4 +1,4 @@
-// Pull 手順（仕様書 6 章）と、不正な manifest の検証。
+// Pull 手順（仕様書 6 章）。不正な manifest の検証は validate.go にある。
 package syncore
 
 import (

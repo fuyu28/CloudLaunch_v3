@@ -5,11 +5,8 @@ package syncore
 import (
 	"errors"
 	"fmt"
-	"regexp"
 	"strings"
 )
-
-var drivePattern = regexp.MustCompile(`[A-Za-z]:`)
 
 var reservedNames = map[string]bool{
 	"CON": true, "PRN": true, "AUX": true, "NUL": true, "CONIN$": true, "CONOUT$": true,
@@ -65,8 +62,7 @@ func validatePath(p string) error {
 		return errors.New("absolute")
 	case strings.Contains(p, `\`):
 		return errors.New(`contains \`)
-	case drivePattern.MatchString(p):
-		return errors.New("contains a drive letter")
+	// 6-M2 のドライブレターも、6-M12 の : で拒否する
 	case strings.ContainsAny(p, `<>:"|?*`):
 		return errors.New("contains a character not allowed on Windows")
 	case strings.ContainsFunc(p, func(r rune) bool { return r < 0x20 }):
