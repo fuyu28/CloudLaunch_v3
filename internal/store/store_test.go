@@ -3,10 +3,13 @@ package store
 import (
 	"context"
 	"database/sql"
+	"io/fs"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
+	"github.com/pressly/goose/v3"
 )
 
 func openTemp(t *testing.T) (*Store, string) {
@@ -43,9 +46,56 @@ func TestOpen(t *testing.T) {
 			t.Fatalf("rows: %v", err)
 		}
 
-		want := []string{"game_locals", "games", "hash_cache", "legacy_sessions", "play_sessions", "pull_operations", "settings"}
+		want := []string{"game_locals", "games", "legacy_sessions", "play_sessions", "pull_operations", "settings"}
 		if d := cmp.Diff(want, got); d != "" {
 			t.Errorf("tables (-want +got):\n%s", d)
+		}
+	})
+
+	t.Run("store/hash_cache に行がある version 1 の DB を開くと、表を消してゲームは残す", func(t *testing.T) {
+		ctx := context.Background()
+		path := filepath.Join(t.TempDir(), "cloudlaunch.db")
+		db, err := sql.Open("sqlite", path+dsnParams)
+		if err != nil {
+			t.Fatalf("open db: %v", err)
+		}
+		dir, err := fs.Sub(migrations, "migrations")
+		if err != nil {
+			t.Fatalf("migrations dir: %v", err)
+		}
+		p, err := goose.NewProvider(goose.DialectSQLite3, db, dir)
+		if err != nil {
+			t.Fatalf("migration provider: %v", err)
+		}
+		if _, err := p.UpTo(ctx, 1); err != nil {
+			t.Fatalf("migrate to 1: %v", err)
+		}
+		for _, q := range []string{
+			`INSERT INTO games (id, title, created_at, updated_at) VALUES ('g1', 'Game', '2026-11-07T00:00:00.000Z', '2026-11-07T00:00:00.000Z')`,
+			`INSERT INTO hash_cache (game_id, path, size, mtime_ns, sha256) VALUES ('g1', 'a.sav', 1, 1, '` + strings.Repeat("a", 64) + `')`,
+		} {
+			if _, err := db.ExecContext(ctx, q); err != nil {
+				t.Fatalf("exec %q: %v", q, err)
+			}
+		}
+		if err := db.Close(); err != nil {
+			t.Fatalf("close db: %v", err)
+		}
+
+		s, err := Open(ctx, path)
+		if err != nil {
+			t.Fatalf("Open: %v", err)
+		}
+		t.Cleanup(func() { _ = s.Close() })
+		var tables, games int
+		if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'hash_cache'`).Scan(&tables); err != nil {
+			t.Fatalf("query tables: %v", err)
+		}
+		if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM games`).Scan(&games); err != nil {
+			t.Fatalf("count games: %v", err)
+		}
+		if tables != 0 || games != 1 {
+			t.Errorf("(hash_cache の表, games の行) = (%d, %d), want (0, 1)", tables, games)
 		}
 	})
 
