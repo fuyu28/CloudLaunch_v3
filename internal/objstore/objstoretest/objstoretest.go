@@ -114,8 +114,13 @@ func Run(t *testing.T, store Store) {
 			t.Fatalf("DeleteMany: %v", err)
 		}
 
-		if d := cmp.Diff([]string{p + "b"}, list(t, store, p)); d != "" {
-			t.Errorf("keys (-want +got):\n%s", d)
+		for _, k := range []string{"a", "c"} {
+			if _, err := store.Get(ctx, p+k); !errors.Is(err, fs.ErrNotExist) {
+				t.Errorf("Get %s: err = %v, want fs.ErrNotExist", k, err)
+			}
+		}
+		if got := string(get(t, store, p+"b")); got != "b" {
+			t.Errorf("body = %q, want %q", got, "b")
 		}
 	})
 

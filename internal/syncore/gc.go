@@ -133,9 +133,5 @@ func (c *Core) deleteAll(ctx context.Context, keys []string) error {
 	if len(keys) == 0 {
 		return nil
 	}
-	// キャンセルされた後は、削除を始めない
-	if err := ctx.Err(); err != nil {
-		return err
-	}
 	return c.remote.DeleteMany(ctx, keys)
 }
