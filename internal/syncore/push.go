@@ -125,7 +125,13 @@ func (c *Core) uploadMissing(ctx context.Context, gameID, root string, entries [
 		have[key] = true
 		g.Go(func() error { return c.uploadObject(ctx, key, root, e) })
 	}
-	return g.Wait()
+	err = g.Wait()
+	// 中身が plan の sha256 と違ったのは、承認した後に書き換わったか、キャッシュが古い（size と mtime を保ったまま
+	// 中身が変わった）ためである。後者なら、キャッシュを残すとやり直しても同じ plan になり、毎回ここで止まる
+	if errors.Is(err, ErrPlanStale) {
+		c.dropHashCache(ctx, gameID)
+	}
+	return err
 }
 
 // uploadObject は、ファイルを全部メモリに読んで manifest と一致することを確かめてから PUT する。

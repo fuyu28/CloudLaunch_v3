@@ -11,12 +11,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"runtime"
-	"slices"
 	"strconv"
-	"strings"
-
-	"golang.org/x/sync/errgroup"
 )
 
 type Entry struct {
@@ -89,38 +84,6 @@ func appendJSONString(b []byte, s string) []byte {
 // ModeDir|ModeIrregular を付けるため。IsDir は ModeIrregular を見落とし、中まで読んでしまう（仕様書 2 章）
 func isPlainDir(t fs.FileMode) bool {
 	return t == fs.ModeDir
-}
-
-// localEntries は root 以下の通常のファイルを、キャッシュを使わずにハッシュして path の昇順で返す。root がなければ空を返す。
-func localEntries(ctx context.Context, root string) ([]Entry, error) {
-	rels, err := listFiles(root)
-	if err != nil {
-		return nil, err
-	}
-	entries := make([]Entry, len(rels))
-	g, ctx := errgroup.WithContext(ctx)
-	g.SetLimit(runtime.NumCPU())
-	for i, rel := range rels {
-		g.Go(func() error {
-			sum, size, err := hashFile(ctx, filepath.Join(root, rel))
-			if err != nil {
-				return err
-			}
-			entries[i] = Entry{Path: filepath.ToSlash(rel), SHA256: sum, Size: size}
-			return nil
-		})
-	}
-	if err := g.Wait(); err != nil {
-		return nil, err
-	}
-	sortEntries(entries)
-	return entries, nil
-}
-
-// sortEntries は、区切りを / にした path のバイト列の順に並べる。WalkDir はディレクトリごとに名前で並べるので、
-// "a/b" が "a.sav" より先に来る。
-func sortEntries(entries []Entry) {
-	slices.SortFunc(entries, func(a, b Entry) int { return strings.Compare(a.Path, b.Path) })
 }
 
 // listFiles は root 以下の通常のファイルの相対パスを返す。root がなければ空を返す。

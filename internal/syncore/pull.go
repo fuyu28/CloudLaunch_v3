@@ -99,6 +99,9 @@ func (c *Core) Pull(ctx context.Context, plan Plan, opts PullOptions) error {
 	if err := c.local.SetBase(ctx, plan.GameID, plan.Remote.Hash); err != nil {
 		return fmt.Errorf("set base: %w", err)
 	}
+	// キャッシュには入れ替える前のファイルの行が残る。mtime の粗いファイルシステムでは、取得したファイルの size と
+	// mtime がそれに一致し、前のファイルの sha256 を使ってしまいうる
+	c.dropHashCache(ctx, plan.GameID)
 	if hadLive {
 		if err := c.backupOld(ctx, plan.GameID, old, startedAt, opID); err != nil {
 			return err
