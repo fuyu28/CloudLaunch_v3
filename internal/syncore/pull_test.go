@@ -70,8 +70,8 @@ func assertAborted(t *testing.T, e env, wantFiles map[string]string) {
 	}
 }
 
-// assertPullRejected は、リモートの世代を不正な manifest として、object を取得せず、何も変えずに Pull が止まることを確かめる。
-func assertPullRejected(t *testing.T, e env) {
+// pullPlan は Status を呼び、判定が Pull の plan を返す。
+func pullPlan(t *testing.T, e env) syncore.Plan {
 	t.Helper()
 	plan, err := e.status(t)
 	if err != nil {
@@ -80,6 +80,13 @@ func assertPullRejected(t *testing.T, e env) {
 	if plan.Decision != syncore.DecisionPull {
 		t.Fatalf("Decision = %v, want DecisionPull", plan.Decision)
 	}
+	return plan
+}
+
+// assertPullRejected は、リモートの世代を不正な manifest として、object を取得せず、何も変えずに Pull が止まることを確かめる。
+func assertPullRejected(t *testing.T, e env) {
+	t.Helper()
+	plan := pullPlan(t, e)
 	var gets atomic.Int32
 	e.remote.Before = func(op memstore.Op, key string) error {
 		if op == memstore.OpGet && strings.Contains(key, "/objects/") {
@@ -88,7 +95,7 @@ func assertPullRejected(t *testing.T, e env) {
 		return nil
 	}
 
-	err = e.core.Pull(t.Context(), plan, syncore.PullOptions{})
+	err := e.core.Pull(t.Context(), plan, syncore.PullOptions{})
 	if err == nil || errors.Is(err, syncore.ErrPlanStale) {
 		t.Fatalf("Pull error = %v, want an error other than ErrPlanStale", err)
 	}
