@@ -75,7 +75,7 @@ func TestPullバックアップ(t *testing.T) {
 		e := newEnv(t)
 		plan := pullOverLocal(t, e, local, remote)
 
-		if err := e.core.Pull(t.Context(), plan); err != nil {
+		if err := e.core.Pull(t.Context(), plan, syncore.PullOptions{}); err != nil {
 			t.Fatalf("Pull: %v", err)
 		}
 		assertBackedUp(t, e, local, remote)
@@ -86,7 +86,7 @@ func TestPullバックアップ(t *testing.T) {
 		plan := pullOverLocal(t, e, local, remote)
 		failRenameOldToBackups(e)
 
-		if err := e.core.Pull(t.Context(), plan); err != nil {
+		if err := e.core.Pull(t.Context(), plan, syncore.PullOptions{}); err != nil {
 			t.Fatalf("Pull: %v", err)
 		}
 		assertBackedUp(t, e, local, remote)
@@ -101,7 +101,7 @@ func TestPullバックアップ(t *testing.T) {
 			t.Fatalf("write: %v", err)
 		}
 
-		if err := e.core.Pull(t.Context(), plan); err == nil {
+		if err := e.core.Pull(t.Context(), plan, syncore.PullOptions{}); err == nil {
 			t.Fatal("Pull error = nil, want an error")
 		}
 		if diff := cmp.Diff(remote, readFiles(t, e.saveDir)); diff != "" {
@@ -131,7 +131,7 @@ func TestPullバックアップ(t *testing.T) {
 		)
 		plan := pullOverLocal(t, e, local, remote)
 
-		if err := e.core.Pull(t.Context(), plan); err != nil {
+		if err := e.core.Pull(t.Context(), plan, syncore.PullOptions{}); err != nil {
 			t.Fatalf("Pull: %v", err)
 		}
 		names := e.gameBackups(t)
@@ -155,7 +155,7 @@ func TestPullバックアップ(t *testing.T) {
 		removeSaveDir(t, e)
 		plan := approvedPull(t, e, remote)
 
-		if err := e.core.Pull(t.Context(), plan); err != nil {
+		if err := e.core.Pull(t.Context(), plan, syncore.PullOptions{}); err != nil {
 			t.Fatalf("Pull: %v", err)
 		}
 		if names := e.gameBackups(t); len(names) != 0 {
@@ -177,7 +177,7 @@ func TestPullバックアップ(t *testing.T) {
 			return nil
 		}
 
-		if err := e.core.Pull(ctx, plan); err != nil {
+		if err := e.core.Pull(ctx, plan, syncore.PullOptions{}); err != nil {
 			t.Fatalf("Pull: %v", err)
 		}
 		assertBackedUp(t, e, local, remote)
@@ -198,7 +198,7 @@ func TestPullバックアップ(t *testing.T) {
 			return nil
 		}
 
-		if err := e.core.Pull(t.Context(), plan); err == nil {
+		if err := e.core.Pull(t.Context(), plan, syncore.PullOptions{}); err == nil {
 			t.Fatal("Pull error = nil, want an error")
 		}
 		if names := e.gameBackups(t); len(names) != 0 {
@@ -221,7 +221,7 @@ func TestPullバックアップ(t *testing.T) {
 		e.core = e.coreWithout(func(cfg *syncore.Config) { cfg.BackupsDir = "" })
 		plan := pullOverLocal(t, e, local, remote)
 
-		if err := e.core.Pull(t.Context(), plan); err == nil {
+		if err := e.core.Pull(t.Context(), plan, syncore.PullOptions{}); err == nil {
 			t.Fatal("Pull error = nil, want an error")
 		}
 		if diff := cmp.Diff(local, readFiles(t, e.saveDir)); diff != "" {
@@ -246,7 +246,7 @@ func TestPullバックアップ(t *testing.T) {
 		mkdirBackups(t, e, future...)
 		plan := pullOverLocal(t, e, local, remote)
 
-		if err := e.core.Pull(t.Context(), plan); err != nil {
+		if err := e.core.Pull(t.Context(), plan, syncore.PullOptions{}); err != nil {
 			t.Fatalf("Pull: %v", err)
 		}
 		names := e.gameBackups(t)
@@ -266,7 +266,7 @@ func TestPullバックアップ(t *testing.T) {
 		plan := pullOverLocal(t, e, local, remote)
 		failRenameOldToBackups(e)
 
-		if err := e.core.Pull(t.Context(), plan); err != nil {
+		if err := e.core.Pull(t.Context(), plan, syncore.PullOptions{}); err != nil {
 			t.Fatalf("Pull: %v", err)
 		}
 		names := e.gameBackups(t)
@@ -283,7 +283,7 @@ func TestPullバックアップ(t *testing.T) {
 		e := newEnv(t)
 		plan := pullOverLocal(t, e, local, remote)
 
-		if err := e.core.Pull(t.Context(), plan); err != nil {
+		if err := e.core.Pull(t.Context(), plan, syncore.PullOptions{}); err != nil {
 			t.Fatalf("Pull: %v", err)
 		}
 		names := e.gameBackups(t)
@@ -307,7 +307,7 @@ func TestPullバックアップ(t *testing.T) {
 		writeFiles(t, filepath.Join(e.backupsDir, testGameID), map[string]string{"memo.txt": "memo"})
 		plan := pullOverLocal(t, e, local, remote)
 
-		if err := e.core.Pull(t.Context(), plan); err != nil {
+		if err := e.core.Pull(t.Context(), plan, syncore.PullOptions{}); err != nil {
 			t.Fatalf("Pull: %v", err)
 		}
 		names := e.gameBackups(t)

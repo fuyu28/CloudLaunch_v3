@@ -24,8 +24,8 @@ import (
 const usage = `usage:
   cloudlaunch-cli game add --title <タイトル> --save-dir <パス> --exe <パス> [--brand <ブランド>] [--id <gameId>] [--data-dir <dir>]
   cloudlaunch-cli status --game <gameId> [--data-dir <dir>]
-  cloudlaunch-cli push --game <gameId> [--data-dir <dir>]
-  cloudlaunch-cli pull --game <gameId> [--data-dir <dir>]
+  cloudlaunch-cli push --game <gameId> [--overwrite] [--data-dir <dir>]
+  cloudlaunch-cli pull --game <gameId> [--overwrite] [--data-dir <dir>]
   cloudlaunch-cli recover [--data-dir <dir>]
 
 status・push・pull はリモートの接続先と鍵を環境変数から読む:
@@ -87,7 +87,7 @@ func recoverPulls(ctx context.Context, args []string, stdout io.Writer) error {
 }
 
 func status(ctx context.Context, args []string, stdout io.Writer) error {
-	core, gameID, closeStore, err := openCore(ctx, "status", args)
+	core, gameID, closeStore, err := openCore(ctx, "status", args, nil)
 	if err != nil {
 		return err
 	}
@@ -115,9 +115,11 @@ func recordBaseIfNeeded(ctx context.Context, core *syncore.Core, plan syncore.Pl
 	return err
 }
 
-// push は、コマンドの実行を承認とみなして確認を出さない（仕様書 7 章の確認は GUI が出す）。
+// push は、コマンドの実行を承認とみなして確認を出さない（仕様書 7 章の確認は GUI が出す）。--overwrite を付けると、
+// 判定によらずアップロードで上書きする。
 func push(ctx context.Context, args []string, stdout io.Writer) error {
-	core, gameID, closeStore, err := openCore(ctx, "push", args)
+	var overwrite bool
+	core, gameID, closeStore, err := openCore(ctx, "push", args, &overwrite)
 	if err != nil {
 		return err
 	}
@@ -130,22 +132,23 @@ func push(ctx context.Context, args []string, stdout io.Writer) error {
 	if err := printPlan(stdout, plan); err != nil {
 		return err
 	}
-	if plan.Decision != syncore.DecisionPush {
-		if _, err := fmt.Fprintln(stdout, "判定が Push でないので、アップロードしません"); err != nil {
+	if plan.Decision != syncore.DecisionPush && !overwrite {
+		if _, err := fmt.Fprintln(stdout, "判定が Push でないので、アップロードしません（上書きするときは --overwrite を付ける）"); err != nil {
 			return err
 		}
 		return recordBaseIfNeeded(ctx, core, plan, stdout)
 	}
-	if err := core.Push(ctx, plan); err != nil {
+	if err := core.Push(ctx, plan, syncore.PushOptions{Overwrite: overwrite}); err != nil {
 		return explainSyncError(err)
 	}
-	_, err = fmt.Fprintln(stdout, "アップロードしました")
-	return err
+	return printTransferred(stdout, plan, overwrite, "アップロードしました")
 }
 
-// pull は、push と同じくコマンドの実行を承認とみなして確認を出さない。
+// pull は、push と同じくコマンドの実行を承認とみなして確認を出さない。--overwrite を付けると、判定によらず
+// ダウンロードで上書きする。
 func pull(ctx context.Context, args []string, stdout io.Writer) error {
-	core, gameID, closeStore, err := openCore(ctx, "pull", args)
+	var overwrite bool
+	core, gameID, closeStore, err := openCore(ctx, "pull", args, &overwrite)
 	if err != nil {
 		return err
 	}
@@ -158,24 +161,42 @@ func pull(ctx context.Context, args []string, stdout io.Writer) error {
 	if err := printPlan(stdout, plan); err != nil {
 		return err
 	}
-	if plan.Decision != syncore.DecisionPull {
-		if _, err := fmt.Fprintln(stdout, "判定が Pull でないので、ダウンロードしません"); err != nil {
+	if plan.Decision != syncore.DecisionPull && !overwrite {
+		if _, err := fmt.Fprintln(stdout, "判定が Pull でないので、ダウンロードしません（上書きするときは --overwrite を付ける）"); err != nil {
 			return err
 		}
 		return recordBaseIfNeeded(ctx, core, plan, stdout)
 	}
-	if err := core.Pull(ctx, plan); err != nil {
+	if err := core.Pull(ctx, plan, syncore.PullOptions{Overwrite: overwrite}); err != nil {
 		return explainSyncError(err)
 	}
-	_, err = fmt.Fprintln(stdout, "ダウンロードしました")
+	return printTransferred(stdout, plan, overwrite, "ダウンロードしました")
+}
+
+// printTransferred は、上書きで local と remote が同じだったときは、コアが転送せずに base だけを記録している
+// （仕様書 7-O5）ので、転送したとは出さない。
+func printTransferred(w io.Writer, plan syncore.Plan, overwrite bool, done string) error {
+	if !overwrite || !plan.SameContent() {
+		_, err := fmt.Fprintln(w, done)
+		return err
+	}
+	msg := "local と remote が同じなので、転送しませんでした"
+	if plan.RecordBase {
+		msg += "（" + recordBaseLabel(plan) + "しました）"
+	}
+	_, err := fmt.Fprintln(w, msg)
 	return err
 }
 
-// openCore は --game と --data-dir を読み、リモートと DB につないだコアを返す。closeStore は呼び出し側が必ず呼ぶ。
-func openCore(ctx context.Context, name string, args []string) (core *syncore.Core, gameID string, closeStore func(), err error) {
+// openCore は --game と --data-dir を読み、リモートと DB につないだコアを返す。overwrite が nil でなければ、
+// --overwrite も読む。closeStore は呼び出し側が必ず呼ぶ。
+func openCore(ctx context.Context, name string, args []string, overwrite *bool) (core *syncore.Core, gameID string, closeStore func(), err error) {
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
 	game := fs.String("game", "", "ゲーム ID")
 	dataDir := fs.String("data-dir", "", "DB などを置くディレクトリ")
+	if overwrite != nil {
+		fs.BoolVar(overwrite, "overwrite", false, "判定によらず上書きする")
+	}
 	if err := fs.Parse(args); err != nil {
 		return nil, "", nil, err
 	}
@@ -236,6 +257,10 @@ func explainSyncError(err error) error {
 		return fmt.Errorf("ゲームが実行中です。終了してからもう一度実行してください: %w", err)
 	case errors.Is(err, syncore.ErrGameExeNotFound):
 		return fmt.Errorf("登録した実行ファイルが見つかりません。ゲームの実行ファイルのパスを直してください: %w", err)
+	case errors.Is(err, syncore.ErrLocalMissing):
+		return fmt.Errorf("ローカルにセーブがないので、アップロードで上書きできません。セーブフォルダの設定を確かめてください: %w", err)
+	case errors.Is(err, syncore.ErrRemoteMissing):
+		return fmt.Errorf("リモートにセーブがないので、ダウンロードで上書きできません: %w", err)
 	}
 	return err
 }

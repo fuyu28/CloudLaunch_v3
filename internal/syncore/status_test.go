@@ -161,14 +161,14 @@ func TestStatus複数PC(t *testing.T) {
 		a := newEnv(t)
 		b := newEnvWithRemote(t, a.remote)
 		removeSaveDir(t, b)
-		if err := a.core.Push(t.Context(), approvedPush(t, a, map[string]string{"slot1.sav": "one"})); err != nil {
+		if err := a.core.Push(t.Context(), approvedPush(t, a, map[string]string{"slot1.sav": "one"}), syncore.PushOptions{}); err != nil {
 			t.Fatalf("A の Push: %v", err)
 		}
 		pull, err := b.status(t)
 		if err != nil {
 			t.Fatalf("B の Status: %v", err)
 		}
-		if err := b.core.Pull(t.Context(), pull); err != nil {
+		if err := b.core.Pull(t.Context(), pull, syncore.PullOptions{}); err != nil {
 			t.Fatalf("B の Pull: %v", err)
 		}
 
@@ -177,7 +177,7 @@ func TestStatus複数PC(t *testing.T) {
 		if err != nil {
 			t.Fatalf("A の 2 回目の Status: %v", err)
 		}
-		if err := a.core.Push(t.Context(), push); err != nil {
+		if err := a.core.Push(t.Context(), push, syncore.PushOptions{}); err != nil {
 			t.Fatalf("A の 2 回目の Push: %v", err)
 		}
 

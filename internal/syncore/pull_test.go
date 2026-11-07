@@ -78,7 +78,7 @@ func TestPull(t *testing.T) {
 		removeSaveDir(t, e)
 		plan := approvedPull(t, e, files)
 
-		if err := e.core.Pull(t.Context(), plan); err != nil {
+		if err := e.core.Pull(t.Context(), plan, syncore.PullOptions{}); err != nil {
 			t.Fatalf("Pull: %v", err)
 		}
 		if diff := cmp.Diff(files, readFiles(t, e.saveDir)); diff != "" {
@@ -92,7 +92,7 @@ func TestPull(t *testing.T) {
 		same := map[string]string{"a.sav": "same", "b.sav": "same"}
 		plan := approvedPull(t, e, same)
 
-		if err := e.core.Pull(t.Context(), plan); err != nil {
+		if err := e.core.Pull(t.Context(), plan, syncore.PullOptions{}); err != nil {
 			t.Fatalf("Pull: %v", err)
 		}
 		if diff := cmp.Diff(same, readFiles(t, e.saveDir)); diff != "" {
@@ -105,7 +105,7 @@ func TestPull(t *testing.T) {
 		removeSaveDir(t, e)
 		plan := approvedPull(t, e, map[string]string{})
 
-		if err := e.core.Pull(t.Context(), plan); err != nil {
+		if err := e.core.Pull(t.Context(), plan, syncore.PullOptions{}); err != nil {
 			t.Fatalf("Pull: %v", err)
 		}
 		info, err := os.Stat(e.saveDir)
@@ -125,7 +125,7 @@ func TestPull(t *testing.T) {
 		e.saveDir = filepath.Join(parent, "save")
 		e.execDB(t, `UPDATE game_locals SET save_folder_path = ? WHERE game_id = ?`, e.saveDir, testGameID)
 
-		if err := e.core.Pull(t.Context(), plan); err != nil {
+		if err := e.core.Pull(t.Context(), plan, syncore.PullOptions{}); err != nil {
 			t.Fatalf("Pull: %v", err)
 		}
 		if diff := cmp.Diff(files, readFiles(t, e.saveDir)); diff != "" {
@@ -138,7 +138,7 @@ func TestPull(t *testing.T) {
 		removeSaveDir(t, e)
 		plan := approvedPull(t, e, files)
 
-		if err := e.core.Pull(t.Context(), plan); err != nil {
+		if err := e.core.Pull(t.Context(), plan, syncore.PullOptions{}); err != nil {
 			t.Fatalf("Pull: %v", err)
 		}
 		if got, want := e.base(t), syncore.ManifestHash(entriesOf(files)); got != want {
@@ -151,7 +151,7 @@ func TestPull(t *testing.T) {
 		removeSaveDir(t, e)
 		plan := approvedPull(t, e, files)
 
-		if err := e.core.Pull(t.Context(), plan); err != nil {
+		if err := e.core.Pull(t.Context(), plan, syncore.PullOptions{}); err != nil {
 			t.Fatalf("Pull: %v", err)
 		}
 		if dirs := e.workDirs(t, "stage"); len(dirs) != 0 {
@@ -175,7 +175,7 @@ func TestPull(t *testing.T) {
 			t.Fatalf("Decision = %v, want 変更なし", plan.Decision)
 		}
 
-		err = e.core.Pull(t.Context(), plan)
+		err = e.core.Pull(t.Context(), plan, syncore.PullOptions{})
 		if err == nil || errors.Is(err, syncore.ErrPlanStale) {
 			t.Fatalf("Pull error = %v, want an error other than ErrPlanStale", err)
 		}
@@ -194,7 +194,7 @@ func TestPull中止(t *testing.T) {
 			t.Fatalf("delete: %v", err)
 		}
 
-		err := e.core.Pull(t.Context(), plan)
+		err := e.core.Pull(t.Context(), plan, syncore.PullOptions{})
 		if err == nil || errors.Is(err, syncore.ErrPlanStale) {
 			t.Fatalf("Pull error = %v, want an error other than ErrPlanStale", err)
 		}
@@ -206,7 +206,7 @@ func TestPull中止(t *testing.T) {
 		plan := approvedPull(t, e, files)
 		failGet(e, "/objects/", injected)
 
-		if err := e.core.Pull(t.Context(), plan); !errors.Is(err, injected) {
+		if err := e.core.Pull(t.Context(), plan, syncore.PullOptions{}); !errors.Is(err, injected) {
 			t.Fatalf("Pull error = %v, want %v", err, injected)
 		}
 		assertAborted(t, e, map[string]string{})
@@ -225,7 +225,7 @@ func TestPull中止(t *testing.T) {
 			return nil
 		}
 
-		if err := e.core.Pull(ctx, plan); !errors.Is(err, context.Canceled) {
+		if err := e.core.Pull(ctx, plan, syncore.PullOptions{}); !errors.Is(err, context.Canceled) {
 			t.Fatalf("Pull error = %v, want context.Canceled", err)
 		}
 		assertAborted(t, e, map[string]string{})
@@ -236,7 +236,7 @@ func TestPull中止(t *testing.T) {
 		plan := approvedPull(t, e, files)
 		e.putObject(t, objectKey("two"), "broken")
 
-		err := e.core.Pull(t.Context(), plan)
+		err := e.core.Pull(t.Context(), plan, syncore.PullOptions{})
 		if err == nil || errors.Is(err, syncore.ErrPlanStale) {
 			t.Fatalf("Pull error = %v, want an error other than ErrPlanStale", err)
 		}
@@ -249,7 +249,7 @@ func TestPull中止(t *testing.T) {
 		changed := map[string]string{"slot1.sav": "local"}
 		writeFiles(t, e.saveDir, changed)
 
-		if err := e.core.Pull(t.Context(), plan); !errors.Is(err, syncore.ErrPlanStale) {
+		if err := e.core.Pull(t.Context(), plan, syncore.PullOptions{}); !errors.Is(err, syncore.ErrPlanStale) {
 			t.Fatalf("Pull error = %v, want ErrPlanStale", err)
 		}
 		assertAborted(t, e, changed)
@@ -261,7 +261,7 @@ func TestPull中止(t *testing.T) {
 		e.putManifest(t, otherGeneration, entriesOf(map[string]string{"slot1.sav": "one"}))
 		e.putObject(t, headKey(), otherGeneration)
 
-		if err := e.core.Pull(t.Context(), plan); !errors.Is(err, syncore.ErrPlanStale) {
+		if err := e.core.Pull(t.Context(), plan, syncore.PullOptions{}); !errors.Is(err, syncore.ErrPlanStale) {
 			t.Fatalf("Pull error = %v, want ErrPlanStale", err)
 		}
 		assertAborted(t, e, map[string]string{})
@@ -274,7 +274,7 @@ func TestPull中止(t *testing.T) {
 			t.Fatalf("delete: %v", err)
 		}
 
-		if err := e.core.Pull(t.Context(), plan); !errors.Is(err, syncore.ErrPlanStale) {
+		if err := e.core.Pull(t.Context(), plan, syncore.PullOptions{}); !errors.Is(err, syncore.ErrPlanStale) {
 			t.Fatalf("Pull error = %v, want ErrPlanStale", err)
 		}
 		assertAborted(t, e, map[string]string{})
@@ -290,7 +290,7 @@ func TestPull空manifestのbase(t *testing.T) {
 		e.setBase(t, emptyHash)
 		plan := approvedPull(t, e, files)
 
-		if err := e.core.Pull(t.Context(), plan); err != nil {
+		if err := e.core.Pull(t.Context(), plan, syncore.PullOptions{}); err != nil {
 			t.Fatalf("Pull: %v", err)
 		}
 		if diff := cmp.Diff(files, readFiles(t, e.saveDir)); diff != "" {
@@ -304,7 +304,7 @@ func TestPull空manifestのbase(t *testing.T) {
 		e.setBase(t, emptyHash)
 		plan := approvedPull(t, e, files)
 
-		if err := e.core.Pull(t.Context(), plan); err != nil {
+		if err := e.core.Pull(t.Context(), plan, syncore.PullOptions{}); err != nil {
 			t.Fatalf("Pull: %v", err)
 		}
 		if diff := cmp.Diff(files, readFiles(t, e.saveDir)); diff != "" {
@@ -319,7 +319,7 @@ func TestPull空manifestのbase(t *testing.T) {
 		changed := map[string]string{"slot1.sav": "local"}
 		writeFiles(t, e.saveDir, changed)
 
-		if err := e.core.Pull(t.Context(), plan); !errors.Is(err, syncore.ErrPlanStale) {
+		if err := e.core.Pull(t.Context(), plan, syncore.PullOptions{}); !errors.Is(err, syncore.ErrPlanStale) {
 			t.Fatalf("Pull error = %v, want ErrPlanStale", err)
 		}
 		if diff := cmp.Diff(changed, readFiles(t, e.saveDir)); diff != "" {
@@ -374,7 +374,7 @@ func TestPull不正なmanifest(t *testing.T) {
 				return nil
 			}
 
-			err = e.core.Pull(t.Context(), plan)
+			err = e.core.Pull(t.Context(), plan, syncore.PullOptions{})
 			if err == nil || errors.Is(err, syncore.ErrPlanStale) {
 				t.Fatalf("Pull error = %v, want an error other than ErrPlanStale", err)
 			}
@@ -391,7 +391,7 @@ func TestPull不正なmanifest(t *testing.T) {
 		files := map[string]string{"a..b.sav": "one", "dir/..c": "two"}
 		plan := approvedPull(t, e, files)
 
-		if err := e.core.Pull(t.Context(), plan); err != nil {
+		if err := e.core.Pull(t.Context(), plan, syncore.PullOptions{}); err != nil {
 			t.Fatalf("Pull: %v", err)
 		}
 		if diff := cmp.Diff(files, readFiles(t, e.saveDir)); diff != "" {
@@ -406,7 +406,7 @@ func TestPull複数PC(t *testing.T) {
 		a := newEnv(t)
 		b := newEnvWithRemote(t, a.remote)
 		removeSaveDir(t, b)
-		if err := a.core.Push(t.Context(), approvedPush(t, a, files)); err != nil {
+		if err := a.core.Push(t.Context(), approvedPush(t, a, files), syncore.PushOptions{}); err != nil {
 			t.Fatalf("Push: %v", err)
 		}
 
@@ -417,7 +417,7 @@ func TestPull複数PC(t *testing.T) {
 		if plan.Decision != syncore.DecisionPull {
 			t.Fatalf("Decision = %v, want Pull", plan.Decision)
 		}
-		if err := b.core.Pull(t.Context(), plan); err != nil {
+		if err := b.core.Pull(t.Context(), plan, syncore.PullOptions{}); err != nil {
 			t.Fatalf("Pull: %v", err)
 		}
 		if diff := cmp.Diff(files, readFiles(t, b.saveDir)); diff != "" {

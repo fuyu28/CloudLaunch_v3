@@ -25,10 +25,13 @@ const (
 	timeLayout    = "2006-01-02T15:04:05.000Z"
 )
 
-// Push は判定が Push の plan だけを受け付ける。手順 8（古い世代の削除と GC）は行わない。
-func (c *Core) Push(ctx context.Context, plan Plan) error {
-	if plan.Decision != DecisionPush {
-		return fmt.Errorf("push %s: decision is %v, not Push", plan.GameID, plan.Decision)
+// Push は、上書き（opts.Overwrite）でなければ、判定が Push の plan だけを受け付ける。手順 8（古い世代の削除と GC）は行わない。
+func (c *Core) Push(ctx context.Context, plan Plan, opts PushOptions) error {
+	if err := checkDecision(plan, opts.Overwrite, DecisionPush); err != nil {
+		return fmt.Errorf("push %s: %w", plan.GameID, err)
+	}
+	if opts.Overwrite && plan.Local.Hash == "" {
+		return fmt.Errorf("push %s: %w", plan.GameID, ErrLocalMissing)
 	}
 	release, err := c.acquire(ctx)
 	if err != nil {
@@ -42,6 +45,9 @@ func (c *Core) Push(ctx context.Context, plan Plan) error {
 	saveFolder := game.SaveFolderPath
 	if err := c.ensureGameNotRunning(game.ExePath); err != nil {
 		return fmt.Errorf("push %s: %w", plan.GameID, err)
+	}
+	if opts.Overwrite && plan.SameContent() {
+		return c.finishSameContent(ctx, plan, saveFolder)
 	}
 
 	if err := c.uploadMissing(ctx, plan.GameID, saveFolder, plan.Local.Entries); err != nil {
