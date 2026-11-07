@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 
@@ -130,14 +129,7 @@ func (c *Core) prepareStage(ctx context.Context, plan Plan, game GameLocal, stag
 	if err := ensureLocalUnchanged(ctx, game.SaveFolderPath, plan); err != nil {
 		return err
 	}
-	head, err := c.readHead(ctx, plan.GameID)
-	if err != nil {
-		return err
-	}
-	if head != plan.Remote.Generation {
-		return fmt.Errorf("HEAD changed from %q to %q after approval: %w", plan.Remote.Generation, head, ErrPlanStale)
-	}
-	return nil
+	return c.ensureHeadUnchanged(ctx, plan)
 }
 
 // abortPull は stage を削除してからジャーナルを削除する。stage を削除できなければ、ジャーナルを残して Recover に任せる。
@@ -174,18 +166,7 @@ func (c *Core) downloadObject(ctx context.Context, key, dst string) error {
 		return fmt.Errorf("download object: %w", err)
 	}
 	defer func() { _ = r.Close() }()
-	f, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
-	if err != nil {
-		return fmt.Errorf("create file in stage: %w", err)
-	}
-	_, err = io.Copy(f, r)
-	if err == nil {
-		err = c.syncFile(f)
-	}
-	if closeErr := f.Close(); err == nil {
-		err = closeErr
-	}
-	if err != nil {
+	if err := c.writeFileSynced(dst, r); err != nil {
 		return fmt.Errorf("write %s: %w", dst, err)
 	}
 	return nil

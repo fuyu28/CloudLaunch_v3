@@ -110,6 +110,20 @@ const (
 	DecisionConflict
 )
 
+func (d Decision) String() string {
+	switch d {
+	case DecisionNoChange:
+		return "NoChange"
+	case DecisionPush:
+		return "Push"
+	case DecisionPull:
+		return "Pull"
+	case DecisionConflict:
+		return "Conflict"
+	}
+	return fmt.Sprintf("Decision(%d)", int(d))
+}
+
 type Plan struct {
 	GameID   string
 	Decision Decision
@@ -136,6 +150,18 @@ func ensureLocalUnchanged(ctx context.Context, folder string, plan Plan) error {
 	}
 	if localHash(entries, plan.Base) != plan.Local.Hash {
 		return fmt.Errorf("save folder changed after approval: %w", ErrPlanStale)
+	}
+	return nil
+}
+
+// ensureHeadUnchanged は、Push（5-P5）・Pull（6-L6）・上書きで同じとき（7-O5）が、承認の後に HEAD が変わっていないかを確かめる。
+func (c *Core) ensureHeadUnchanged(ctx context.Context, plan Plan) error {
+	head, err := c.readHead(ctx, plan.GameID)
+	if err != nil {
+		return err
+	}
+	if head != plan.Remote.Generation {
+		return fmt.Errorf("HEAD changed from %q to %q after approval: %w", plan.Remote.Generation, head, ErrPlanStale)
 	}
 	return nil
 }

@@ -33,21 +33,7 @@ func checkDecision(plan Plan, overwrite bool, want Decision) error {
 	if overwrite || plan.Decision == want {
 		return nil
 	}
-	return fmt.Errorf("decision is %s, not %s", decisionName(plan.Decision), decisionName(want))
-}
-
-func decisionName(d Decision) string {
-	switch d {
-	case DecisionNoChange:
-		return "NoChange"
-	case DecisionPush:
-		return "Push"
-	case DecisionPull:
-		return "Pull"
-	case DecisionConflict:
-		return "Conflict"
-	}
-	return fmt.Sprintf("Decision(%d)", int(d))
+	return fmt.Errorf("decision is %s, not %s", plan.Decision, want)
 }
 
 // finishSameContent は、上書きで local と remote が同じときに、転送せずに base を記録する（仕様書 7-O5）。
@@ -57,12 +43,8 @@ func (c *Core) finishSameContent(ctx context.Context, plan Plan, saveFolder stri
 	if err := ensureLocalUnchanged(ctx, saveFolder, plan); err != nil {
 		return err
 	}
-	head, err := c.readHead(ctx, plan.GameID)
-	if err != nil {
+	if err := c.ensureHeadUnchanged(ctx, plan); err != nil {
 		return err
-	}
-	if head != plan.Remote.Generation {
-		return fmt.Errorf("HEAD changed from %q to %q after approval: %w", plan.Remote.Generation, head, ErrPlanStale)
 	}
 	if !plan.RecordBase {
 		return nil
