@@ -124,7 +124,7 @@ type transferCommand struct {
 	// skipped は、判定が want でなく、上書きでもないときに出す
 	skipped string
 	done    string
-	run     func(ctx context.Context, core *syncore.Core, plan syncore.Plan, overwrite bool) error
+	exec    func(ctx context.Context, core *syncore.Core, plan syncore.Plan, overwrite bool) error
 }
 
 var (
@@ -133,7 +133,7 @@ var (
 		want:    syncore.DecisionPush,
 		skipped: "判定が Push でないので、アップロードしません（上書きするときは --overwrite を付ける）",
 		done:    "アップロードしました",
-		run: func(ctx context.Context, core *syncore.Core, plan syncore.Plan, overwrite bool) error {
+		exec: func(ctx context.Context, core *syncore.Core, plan syncore.Plan, overwrite bool) error {
 			return core.Push(ctx, plan, syncore.PushOptions{Overwrite: overwrite})
 		},
 	}
@@ -142,7 +142,7 @@ var (
 		want:    syncore.DecisionPull,
 		skipped: "判定が Pull でないので、ダウンロードしません（上書きするときは --overwrite を付ける）",
 		done:    "ダウンロードしました",
-		run: func(ctx context.Context, core *syncore.Core, plan syncore.Plan, overwrite bool) error {
+		exec: func(ctx context.Context, core *syncore.Core, plan syncore.Plan, overwrite bool) error {
 			return core.Pull(ctx, plan, syncore.PullOptions{Overwrite: overwrite})
 		},
 	}
@@ -171,7 +171,7 @@ func transfer(ctx context.Context, args []string, stdout io.Writer, cmd transfer
 		}
 		return recordBaseIfNeeded(ctx, core, plan, stdout)
 	}
-	if err := cmd.run(ctx, core, plan, overwrite); err != nil {
+	if err := cmd.exec(ctx, core, plan, overwrite); err != nil {
 		return explainSyncError(err)
 	}
 	return printTransferred(stdout, plan, overwrite, cmd.done)
