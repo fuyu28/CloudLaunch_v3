@@ -78,6 +78,7 @@ func TestManifest(t *testing.T) {
 		{"予約されたデバイス名のファイルがあればエラー", []string{"dir/aux.sav"}},
 		{"末尾が . のファイルがあればエラー", []string{"a.sav."}},
 		{"使えない文字を含むファイルがあればエラー", []string{"a:b.sav"}},
+		{"ディレクトリの部分が大文字小文字の違いだけで重複すればエラー", []string{"dir/a.sav", "DIR/b.sav"}},
 	}
 	for _, tt := range invalidNames {
 		t.Run("2章/manifest の計算/"+tt.name, func(t *testing.T) {

@@ -395,6 +395,13 @@ func TestPull不正なmanifest(t *testing.T) {
 		{"6-M12 使えない文字を含む（?）", []string{"a?b.sav"}},
 		{"6-M12 使えない文字を含む（*）", []string{"a*b.sav"}},
 		{"6-M12 制御文字を含む", []string{"a\x01b.sav"}},
+		// 6-M9 を通るよう、path の昇順に並べる
+		{"6-M5 ディレクトリの部分が大文字小文字の違いだけで重複する", []string{"DIR/b.sav", "dir/a.sav"}},
+		{"6-M5 深いディレクトリの部分が大文字小文字の違いだけで重複する", []string{"a/B/d.sav", "a/b/c.sav"}},
+		{"6-M10 予約されたデバイス名の後ろに空白がある", []string{"aux .sav"}},
+		{"6-M13 同じ名前をファイルとディレクトリに使う", []string{"a", "a/b.sav"}},
+		{"6-M13 大文字小文字だけが違う名前をファイルとディレクトリに使う", []string{"A", "a/b.sav"}},
+		{"6-M13 ディレクトリとして使う path が、同じ名前のファイルより先に並ぶ", []string{"A/b.sav", "a"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -452,6 +459,20 @@ func TestPull不正なmanifest(t *testing.T) {
 			t.Fatalf("Pull: %v", err)
 		}
 		if diff := cmp.Diff(map[string]string{}, readFiles(t, e.saveDir)); diff != "" {
+			t.Errorf("セーブフォルダ (-want +got):\n%s", diff)
+		}
+	})
+
+	t.Run("6-M5 同じ綴りのディレクトリを共有するのは正当", func(t *testing.T) {
+		e := newEnv(t)
+		removeSaveDir(t, e)
+		files := map[string]string{"dir/a.sav": "one", "dir/b.sav": "two", "dir/sub/c.sav": "three"}
+		plan := approvedPull(t, e, files)
+
+		if err := e.core.Pull(t.Context(), plan, syncore.PullOptions{}); err != nil {
+			t.Fatalf("Pull: %v", err)
+		}
+		if diff := cmp.Diff(files, readFiles(t, e.saveDir)); diff != "" {
 			t.Errorf("セーブフォルダ (-want +got):\n%s", diff)
 		}
 	})
