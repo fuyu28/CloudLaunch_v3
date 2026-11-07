@@ -6,8 +6,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/google/go-cmp/cmp"
 
@@ -81,6 +83,17 @@ func pullPlan(t *testing.T, e env) syncore.Plan {
 		t.Fatalf("Decision = %v, want DecisionPull", plan.Decision)
 	}
 	return plan
+}
+
+// countingLocal は、ジャーナルを書いた回数を数える。
+type countingLocal struct {
+	syncore.LocalStore
+	inserts atomic.Int32
+}
+
+func (l *countingLocal) InsertPullOperation(ctx context.Context, opID, gameID, livePath, stagePath, oldPath string, createdAt time.Time) error {
+	l.inserts.Add(1)
+	return l.LocalStore.InsertPullOperation(ctx, opID, gameID, livePath, stagePath, oldPath, createdAt)
 }
 
 // assertPullRejected は、リモートの世代を不正な manifest として、object を取得せず、何も変えずに Pull が止まることを確かめる。
@@ -178,6 +191,43 @@ func TestPull(t *testing.T) {
 		}
 		if got, want := e.base(t), syncore.ManifestHash(entriesOf(files)); got != want {
 			t.Errorf("base = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("6-L3 object を取得する前に、ジャーナルに live・stage・old のパスを書く", func(t *testing.T) {
+		e := newEnv(t)
+		plan := approvedPull(t, e, files)
+		var once sync.Once
+		var journal []syncore.PullOperation
+		var listErr error
+		e.remote.Before = func(op memstore.Op, key string) error {
+			if op == memstore.OpGet && strings.Contains(key, "/objects/") {
+				once.Do(func() { journal, listErr = e.store.ListPullOperations(context.Background()) })
+			}
+			return nil
+		}
+
+		if err := e.core.Pull(t.Context(), plan, syncore.PullOptions{}); err != nil {
+			t.Fatalf("Pull: %v", err)
+		}
+		if listErr != nil {
+			t.Fatalf("ListPullOperations: %v", listErr)
+		}
+		if len(journal) != 1 || journal[0].OpID == "" {
+			t.Fatalf("object を取得する時点のジャーナル = %+v, want opId のある 1 行", journal)
+		}
+		opID := journal[0].OpID
+		parent := filepath.Dir(e.saveDir)
+		want := []syncore.PullOperation{{
+			OpID:      opID,
+			GameID:    testGameID,
+			LivePath:  e.saveDir,
+			StagePath: filepath.Join(parent, ".cloudlaunch-stage-"+opID),
+			OldPath:   filepath.Join(parent, ".cloudlaunch-old-"+opID),
+			CreatedAt: testNow,
+		}}
+		if diff := cmp.Diff(want, journal); diff != "" {
+			t.Errorf("ジャーナル (-want +got):\n%s", diff)
 		}
 	})
 
@@ -448,6 +498,22 @@ func TestPull不正なmanifest(t *testing.T) {
 			assertPullRejected(t, e)
 		})
 	}
+
+	// 6-M 系は終わった後に何も残らないことを見るが、ジャーナルを書いてから 6-A1 で消しても同じ状態になる
+	t.Run("6-L2 不正な manifest → ジャーナルを書く前に中止する", func(t *testing.T) {
+		e := newEnv(t)
+		e.putGeneration(t, []syncore.Entry{{Path: "../a.sav", SHA256: sha256Hex("x"), Size: 1}})
+		plan := pullPlan(t, e)
+		local := &countingLocal{LocalStore: e.store}
+		core := e.coreWithout(func(cfg *syncore.Config) { cfg.Local = local })
+
+		if err := core.Pull(t.Context(), plan, syncore.PullOptions{}); err == nil {
+			t.Fatal("Pull error = nil, want an error")
+		}
+		if n := local.inserts.Load(); n != 0 {
+			t.Errorf("ジャーナルを %d 回書いた", n)
+		}
+	})
 
 	t.Run("6-M6 entries がない", func(t *testing.T) {
 		e := newEnv(t)
