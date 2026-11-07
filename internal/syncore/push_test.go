@@ -262,12 +262,7 @@ func TestPush中止(t *testing.T) {
 		if err := e.core.Push(t.Context(), plan, syncore.PushOptions{}); !errors.Is(err, injected) {
 			t.Fatalf("Push error = %v, want %v", err, injected)
 		}
-		if _, ok := e.getObject(t, headKey()); ok {
-			t.Error("HEAD を書いた")
-		}
-		if base := e.base(t); base != "" {
-			t.Errorf("base = %q, want 空", base)
-		}
+		assertNothingPublished(t, e)
 	})
 
 	t.Run("5-P6 HEAD の PUT が失敗したら base を書かない", func(t *testing.T) {

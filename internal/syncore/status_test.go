@@ -195,12 +195,7 @@ func TestStatusリモートの失敗(t *testing.T) {
 	t.Run("リモートの Get が失敗したらエラー", func(t *testing.T) {
 		e := newEnv(t)
 		injected := errors.New("injected")
-		e.remote.Before = func(op memstore.Op, key string) error {
-			if op == memstore.OpGet {
-				return injected
-			}
-			return nil
-		}
+		failOn(e, memstore.OpGet, "", injected)
 
 		if _, err := e.status(t); !errors.Is(err, injected) {
 			t.Fatalf("Status error = %v, want %v", err, injected)

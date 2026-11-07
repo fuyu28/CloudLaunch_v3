@@ -570,13 +570,7 @@ func TestPull複数PC(t *testing.T) {
 			t.Fatalf("Push: %v", err)
 		}
 
-		plan, err := b.status(t)
-		if err != nil {
-			t.Fatalf("Status: %v", err)
-		}
-		if plan.Decision != syncore.DecisionPull {
-			t.Fatalf("Decision = %v, want Pull", plan.Decision)
-		}
+		plan := b.planWant(t, syncore.DecisionPull)
 		if err := b.core.Pull(t.Context(), plan, syncore.PullOptions{}); err != nil {
 			t.Fatalf("Pull: %v", err)
 		}

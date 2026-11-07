@@ -30,9 +30,7 @@ func putOldGenerations(t *testing.T, e env, n int, extra map[int]map[string]stri
 		for path, content := range extra[i] {
 			files[path] = content
 		}
-		for _, content := range files {
-			e.putObject(t, objectKey(content), content)
-		}
+		e.putObjects(t, files)
 		e.putManifest(t, oldGeneration(i), entriesOf(files))
 	}
 	e.putObject(t, headKey(), oldGeneration(n))

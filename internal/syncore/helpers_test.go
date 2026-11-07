@@ -397,12 +397,17 @@ func (e env) putGeneration(t *testing.T, entries []syncore.Entry) {
 	e.putObject(t, headKey(), testGeneration)
 }
 
-// putRemoteFiles は、files の object を置き、files を持つ世代に HEAD を向ける。
-func (e env) putRemoteFiles(t *testing.T, files map[string]string) {
+func (e env) putObjects(t *testing.T, files map[string]string) {
 	t.Helper()
 	for _, content := range files {
 		e.putObject(t, objectKey(content), content)
 	}
+}
+
+// putRemoteFiles は、files の object を置き、files を持つ世代に HEAD を向ける。
+func (e env) putRemoteFiles(t *testing.T, files map[string]string) {
+	t.Helper()
+	e.putObjects(t, files)
 	e.putGeneration(t, entriesOf(files))
 }
 
