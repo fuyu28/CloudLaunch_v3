@@ -8,14 +8,10 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"regexp"
-	"strings"
 
 	"github.com/google/uuid"
 	"golang.org/x/sync/errgroup"
 )
-
-var drivePattern = regexp.MustCompile(`[A-Za-z]:`)
 
 // Pull は、上書き（opts.Overwrite）でなければ、判定が Pull の plan だけを受け付ける。入れ替えを始めた後に失敗した
 // ときは、ジャーナルを残してエラーを返す。残った状態は仕様書 6 章の復旧表の行に当たり、Recover が片付ける。
@@ -26,7 +22,7 @@ func (c *Core) Pull(ctx context.Context, plan Plan, opts PullOptions) error {
 	if opts.Overwrite && plan.Remote.Hash == "" {
 		return fmt.Errorf("pull %s: %w", plan.GameID, ErrRemoteMissing)
 	}
-	if err := validateEntries(plan.Remote.Manifest.Entries); err != nil {
+	if err := validateManifest(plan.Remote.Manifest.Entries); err != nil {
 		return fmt.Errorf("pull %s: invalid manifest %s: %w", plan.GameID, plan.Remote.Generation, err)
 	}
 	// 手順 9 で見つけると、live を入れ替えた後なので old とジャーナルが残る。何も変える前に止める
@@ -191,42 +187,6 @@ func (c *Core) downloadObject(ctx context.Context, key, dst string) error {
 	}
 	if err != nil {
 		return fmt.Errorf("write %s: %w", dst, err)
-	}
-	return nil
-}
-
-// validateEntries は、仕様書 6 章「不正な manifest」の規則に当たる path があればエラーを返す。
-func validateEntries(entries []Entry) error {
-	seen := make(map[string]string, len(entries))
-	for _, e := range entries {
-		if err := validatePath(e.Path); err != nil {
-			return fmt.Errorf("path %q: %w", e.Path, err)
-		}
-		// Windows はファイル名を大文字に揃えて比べるので、ToLower ではなく ToUpper で揃える
-		folded := strings.ToUpper(e.Path)
-		if other, ok := seen[folded]; ok {
-			return fmt.Errorf("paths %q and %q differ only in case", other, e.Path)
-		}
-		seen[folded] = e.Path
-	}
-	return nil
-}
-
-func validatePath(p string) error {
-	switch {
-	case p == "":
-		return errors.New("empty")
-	case strings.HasPrefix(p, "/"):
-		return errors.New("absolute")
-	case strings.Contains(p, `\`):
-		return errors.New(`contains \`)
-	case drivePattern.MatchString(p):
-		return errors.New("contains a drive letter")
-	}
-	for _, elem := range strings.Split(p, "/") {
-		if elem == "" || elem == "." || elem == ".." {
-			return fmt.Errorf("has element %q", elem)
-		}
 	}
 	return nil
 }

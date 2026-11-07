@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"golang.org/x/sync/errgroup"
 )
@@ -130,6 +131,19 @@ func localEntries(ctx context.Context, root string) ([]Entry, error) {
 		return nil, fmt.Errorf("walk save folder: %w", err)
 	}
 
+	paths := make([]string, len(rels))
+	for i, rel := range rels {
+		paths[i] = filepath.ToSlash(rel)
+		// JSON に書くと U+FFFD に置き換わり、local と remote の manifest ハッシュが一致しなくなる（仕様書 2 章）
+		if !utf8.ValidString(paths[i]) {
+			return nil, fmt.Errorf("path %q is not valid UTF-8", paths[i])
+		}
+	}
+	// 当たる manifest を HEAD に書くと、どの PC も Pull できなくなる（仕様書 2 章）。ハッシュの計算を無駄にしないよう先に確かめる
+	if err := validatePaths(paths); err != nil {
+		return nil, fmt.Errorf("save folder %s: %w", root, err)
+	}
+
 	entries := make([]Entry, len(rels))
 	g, ctx := errgroup.WithContext(ctx)
 	g.SetLimit(runtime.NumCPU())
@@ -139,7 +153,7 @@ func localEntries(ctx context.Context, root string) ([]Entry, error) {
 			if err != nil {
 				return err
 			}
-			entries[i] = Entry{Path: filepath.ToSlash(rel), SHA256: sum, Size: size}
+			entries[i] = Entry{Path: paths[i], SHA256: sum, Size: size}
 			return nil
 		})
 	}
