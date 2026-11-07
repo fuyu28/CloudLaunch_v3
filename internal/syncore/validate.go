@@ -15,7 +15,7 @@ var reservedNames = map[string]bool{
 	"COM¹": true, "COM²": true, "COM³": true, "LPT¹": true, "LPT²": true, "LPT³": true,
 }
 
-// validateManifest は、entries が 6-M1〜6-M12 のどれかに当たればエラーを返す。
+// validateManifest は、entries が 6-M1〜6-M13 のどれかに当たればエラーを返す。
 // entries が nil なのは、JSON の entries がないか null のとき（6-M6）で、[] なら長さ 0 の nil でないスライスになる。
 func validateManifest(entries []Entry) error {
 	if entries == nil {
@@ -37,19 +37,51 @@ func validateManifest(entries []Entry) error {
 	return validatePaths(paths)
 }
 
-// validatePaths は、paths のどれかが path の規則（6-M1〜6-M5・6-M10〜6-M12）に当たればエラーを返す。
+type pathNode struct {
+	spelling string
+	isDir    bool
+	// from は、この名前を登録した path。エラーで、どのファイルを直せばよいかを示すために持つ
+	from string
+}
+
+// validatePaths は、paths のどれかが path の規則（6-M1〜6-M5・6-M10〜6-M13）に当たればエラーを返す。
+// local にかけても仕様書 2 章の検証と同じになる。local で 6-M13 に当たる組み合わせは、大文字小文字を区別する
+// フォルダの `a` と `A/b.sav` のように綴りが違うものだけで、それは 6-M5 にも当たるため。
+//
+// 6-M5 と 6-M13 は、各 path のディレクトリの部分（短い順）と path 全体を、大文字に揃えた名前で 1 つの map に
+// 登録しながら調べる。ファイルとディレクトリを同じ map に置くので、並び順によらず衝突を見つけられる。
 func validatePaths(paths []string) error {
-	seen := make(map[string]string, len(paths))
+	seen := make(map[string]pathNode, len(paths))
 	for _, p := range paths {
 		if err := validatePath(p); err != nil {
 			return fmt.Errorf("path %q: %w", p, err)
 		}
-		// Windows はファイル名を大文字に揃えて比べるので、ToLower ではなく ToUpper で揃える
-		folded := strings.ToUpper(p)
-		if other, ok := seen[folded]; ok {
-			return fmt.Errorf("paths %q and %q differ only in case", other, p)
+		elems := strings.Split(p, "/")
+		// 接頭辞ごとに揃え直すと path の深さ×長さの手間になるので、要素ごとに揃えて継ぎ足す。
+		// Builder が返した文字列は、後で書き足しても変わらない
+		var folded strings.Builder
+		end := 0
+		for i, elem := range elems {
+			if i > 0 {
+				folded.WriteByte('/')
+				end++
+			}
+			end += len(elem)
+			spelling := p[:end]
+			// Windows はファイル名を大文字に揃えて比べるので、ToLower ではなく ToUpper で揃える
+			folded.WriteString(strings.ToUpper(elem))
+			key := folded.String()
+			node := pathNode{spelling: spelling, isDir: i < len(elems)-1, from: p}
+			other, ok := seen[key]
+			switch {
+			case !ok:
+				seen[key] = node
+			case other.isDir != node.isDir:
+				return fmt.Errorf("paths %q and %q use %q as both a file and a directory", other.from, p, spelling)
+			case !node.isDir || other.spelling != node.spelling:
+				return fmt.Errorf("paths %q and %q differ only in case (%q and %q)", other.from, p, other.spelling, spelling)
+			}
 		}
-		seen[folded] = p
 	}
 	return nil
 }
@@ -76,7 +108,8 @@ func validatePath(p string) error {
 			return fmt.Errorf("element %q ends with a dot or space", elem)
 		}
 		stem, _, _ := strings.Cut(elem, ".")
-		if reservedNames[strings.ToUpper(stem)] {
+		// Windows は末尾の空白を取り除いてからデバイス名と比べる。先頭の空白は取り除かない
+		if reservedNames[strings.ToUpper(strings.TrimRight(stem, " "))] {
 			return fmt.Errorf("element %q is a reserved device name on Windows", elem)
 		}
 	}
