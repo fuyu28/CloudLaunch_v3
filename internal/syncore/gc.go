@@ -130,16 +130,12 @@ func (c *Core) referencedObjects(ctx context.Context, gameID string, generations
 }
 
 func (c *Core) deleteAll(ctx context.Context, keys []string) error {
-	g, ctx := errgroup.WithContext(ctx)
-	g.SetLimit(transferLimit)
-	for _, key := range keys {
-		g.Go(func() error {
-			// キャンセルされた後は、待っていた削除を始めない
-			if err := ctx.Err(); err != nil {
-				return err
-			}
-			return c.remote.Delete(ctx, key)
-		})
+	if len(keys) == 0 {
+		return nil
 	}
-	return g.Wait()
+	// キャンセルされた後は、削除を始めない
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return c.remote.DeleteMany(ctx, keys)
 }

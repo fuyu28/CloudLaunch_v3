@@ -16,7 +16,8 @@ type ObjectStore interface {
 	Get(ctx context.Context, key string) (io.ReadCloser, error)
 	Put(ctx context.Context, key string, body io.ReadSeeker, size int64) error
 	List(ctx context.Context, prefix string) ([]string, error)
-	Delete(ctx context.Context, key string) error
+	// DeleteMany は、キーがなくてもエラーにしない
+	DeleteMany(ctx context.Context, keys []string) error
 }
 
 // GameLocal は、ゲームのローカル情報（同期しない）のうち、同期コアが使うもの。BaseManifestHash は未設定なら空。
