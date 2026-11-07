@@ -67,7 +67,7 @@ func TestPush(t *testing.T) {
 		plan := approvedPush(t, e, files)
 		puts := recordObjectPuts(e)
 
-		if err := e.core.Push(t.Context(), plan); err != nil {
+		if err := e.core.Push(t.Context(), plan, syncore.PushOptions{}); err != nil {
 			t.Fatalf("Push: %v", err)
 		}
 		if diff := cmp.Diff([]string{objectKey("two")}, puts()); diff != "" {
@@ -83,7 +83,7 @@ func TestPush(t *testing.T) {
 		plan := approvedPush(t, e, map[string]string{"a.sav": "same", "b.sav": "same"})
 		puts := recordObjectPuts(e)
 
-		if err := e.core.Push(t.Context(), plan); err != nil {
+		if err := e.core.Push(t.Context(), plan, syncore.PushOptions{}); err != nil {
 			t.Fatalf("Push: %v", err)
 		}
 		if diff := cmp.Diff([]string{objectKey("same")}, puts()); diff != "" {
@@ -95,7 +95,7 @@ func TestPush(t *testing.T) {
 		e := newEnv(t)
 		plan := approvedPush(t, e, files)
 
-		if err := e.core.Push(t.Context(), plan); err != nil {
+		if err := e.core.Push(t.Context(), plan, syncore.PushOptions{}); err != nil {
 			t.Fatalf("Push: %v", err)
 		}
 		if head, _ := e.getObject(t, headKey()); head != pushGeneration {
@@ -121,7 +121,7 @@ func TestPush(t *testing.T) {
 		e := newEnv(t)
 		plan := approvedPush(t, e, files)
 
-		if err := e.core.Push(t.Context(), plan); err != nil {
+		if err := e.core.Push(t.Context(), plan, syncore.PushOptions{}); err != nil {
 			t.Fatalf("Push: %v", err)
 		}
 		body, _ := e.getObject(t, manifestKey(pushGeneration))
@@ -138,7 +138,7 @@ func TestPush(t *testing.T) {
 		e := newEnv(t)
 		plan := approvedPush(t, e, files)
 
-		if err := e.core.Push(t.Context(), plan); err != nil {
+		if err := e.core.Push(t.Context(), plan, syncore.PushOptions{}); err != nil {
 			t.Fatalf("Push: %v", err)
 		}
 		if got, want := e.base(t), syncore.ManifestHash(entriesOf(files)); got != want {
@@ -156,7 +156,7 @@ func TestPush(t *testing.T) {
 			t.Fatalf("Decision = %v, want 変更なし", plan.Decision)
 		}
 
-		err = e.core.Push(t.Context(), plan)
+		err = e.core.Push(t.Context(), plan, syncore.PushOptions{})
 		if err == nil || errors.Is(err, syncore.ErrPlanStale) {
 			t.Fatalf("Push error = %v, want an error other than ErrPlanStale", err)
 		}
@@ -179,7 +179,7 @@ func TestPush(t *testing.T) {
 			return nil
 		}
 
-		if err := e.core.Push(ctx, plan); err != nil {
+		if err := e.core.Push(ctx, plan, syncore.PushOptions{}); err != nil {
 			t.Fatalf("Push: %v", err)
 		}
 		if head, _ := e.getObject(t, headKey()); head != pushGeneration {
@@ -215,7 +215,7 @@ func TestPush中止(t *testing.T) {
 		plan := approvedPush(t, e, files)
 		writeFiles(t, e.saveDir, map[string]string{"slot2.sav": "changed"})
 
-		if err := e.core.Push(t.Context(), plan); !errors.Is(err, syncore.ErrPlanStale) {
+		if err := e.core.Push(t.Context(), plan, syncore.PushOptions{}); !errors.Is(err, syncore.ErrPlanStale) {
 			t.Fatalf("Push error = %v, want ErrPlanStale", err)
 		}
 		// アップロード中の検証がなければ、objects/{sha256("two")} に "changed" を書いてしまう。
@@ -234,7 +234,7 @@ func TestPush中止(t *testing.T) {
 			t.Fatalf("remove: %v", err)
 		}
 
-		if err := e.core.Push(t.Context(), plan); !errors.Is(err, syncore.ErrPlanStale) {
+		if err := e.core.Push(t.Context(), plan, syncore.PushOptions{}); !errors.Is(err, syncore.ErrPlanStale) {
 			t.Fatalf("Push error = %v, want ErrPlanStale", err)
 		}
 		assertNothingPublished(t, e)
@@ -247,7 +247,7 @@ func TestPush中止(t *testing.T) {
 		plan := approvedPush(t, e, files)
 		writeFiles(t, e.saveDir, map[string]string{"slot1.sav": "changed"})
 
-		if err := e.core.Push(t.Context(), plan); !errors.Is(err, syncore.ErrPlanStale) {
+		if err := e.core.Push(t.Context(), plan, syncore.PushOptions{}); !errors.Is(err, syncore.ErrPlanStale) {
 			t.Fatalf("Push error = %v, want ErrPlanStale", err)
 		}
 		assertNothingPublished(t, e)
@@ -258,7 +258,7 @@ func TestPush中止(t *testing.T) {
 		plan := approvedPush(t, e, files)
 		writeFiles(t, e.saveDir, map[string]string{"new.sav": "new"})
 
-		if err := e.core.Push(t.Context(), plan); !errors.Is(err, syncore.ErrPlanStale) {
+		if err := e.core.Push(t.Context(), plan, syncore.PushOptions{}); !errors.Is(err, syncore.ErrPlanStale) {
 			t.Fatalf("Push error = %v, want ErrPlanStale", err)
 		}
 		assertNothingPublished(t, e)
@@ -269,7 +269,7 @@ func TestPush中止(t *testing.T) {
 		plan := approvedPush(t, e, files)
 		e.putGeneration(t, entriesOf(map[string]string{"slot1.sav": "other"}))
 
-		if err := e.core.Push(t.Context(), plan); !errors.Is(err, syncore.ErrPlanStale) {
+		if err := e.core.Push(t.Context(), plan, syncore.PushOptions{}); !errors.Is(err, syncore.ErrPlanStale) {
 			t.Fatalf("Push error = %v, want ErrPlanStale", err)
 		}
 		if head, _ := e.getObject(t, headKey()); head != testGeneration {
@@ -285,7 +285,7 @@ func TestPush中止(t *testing.T) {
 		plan := approvedPush(t, e, files)
 		failPut(e, "/objects/", injected)
 
-		if err := e.core.Push(t.Context(), plan); !errors.Is(err, injected) {
+		if err := e.core.Push(t.Context(), plan, syncore.PushOptions{}); !errors.Is(err, injected) {
 			t.Fatalf("Push error = %v, want %v", err, injected)
 		}
 		if keys := e.keys(t, "games/"+testGameID+"/manifests/"); len(keys) != 0 {
@@ -301,7 +301,7 @@ func TestPush中止(t *testing.T) {
 		plan := approvedPush(t, e, files)
 		failPut(e, "/manifests/", injected)
 
-		if err := e.core.Push(t.Context(), plan); !errors.Is(err, injected) {
+		if err := e.core.Push(t.Context(), plan, syncore.PushOptions{}); !errors.Is(err, injected) {
 			t.Fatalf("Push error = %v, want %v", err, injected)
 		}
 		if _, ok := e.getObject(t, headKey()); ok {
@@ -317,7 +317,7 @@ func TestPush中止(t *testing.T) {
 		plan := approvedPush(t, e, files)
 		failPut(e, "/HEAD", injected)
 
-		if err := e.core.Push(t.Context(), plan); !errors.Is(err, injected) {
+		if err := e.core.Push(t.Context(), plan, syncore.PushOptions{}); !errors.Is(err, injected) {
 			t.Fatalf("Push error = %v, want %v", err, injected)
 		}
 		if base := e.base(t); base != "" {
@@ -367,7 +367,7 @@ func TestPush複数PC(t *testing.T) {
 		a := newEnv(t)
 		b := newEnvWithRemote(t, a.remote)
 		plan := approvedPush(t, a, files)
-		if err := a.core.Push(t.Context(), plan); err != nil {
+		if err := a.core.Push(t.Context(), plan, syncore.PushOptions{}); err != nil {
 			t.Fatalf("Push: %v", err)
 		}
 

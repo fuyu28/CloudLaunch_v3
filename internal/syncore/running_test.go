@@ -18,7 +18,7 @@ func TestGameRunning(t *testing.T) {
 		plan := approvedPush(t, e, files)
 		e.procs.runningFrom = 1
 
-		if err := e.core.Push(t.Context(), plan); !errors.Is(err, syncore.ErrGameRunning) {
+		if err := e.core.Push(t.Context(), plan, syncore.PushOptions{}); !errors.Is(err, syncore.ErrGameRunning) {
 			t.Fatalf("Push error = %v, want ErrGameRunning", err)
 		}
 		if diff := cmp.Diff([]string{e.exePath}, e.procs.asked()); diff != "" {
@@ -37,7 +37,7 @@ func TestGameRunning(t *testing.T) {
 		plan := approvedPull(t, e, files)
 		e.procs.runningFrom = 1
 
-		if err := e.core.Pull(t.Context(), plan); !errors.Is(err, syncore.ErrGameRunning) {
+		if err := e.core.Pull(t.Context(), plan, syncore.PullOptions{}); !errors.Is(err, syncore.ErrGameRunning) {
 			t.Fatalf("Pull error = %v, want ErrGameRunning", err)
 		}
 		if diff := cmp.Diff([]string{e.exePath}, e.procs.asked()); diff != "" {
@@ -51,7 +51,7 @@ func TestGameRunning(t *testing.T) {
 		plan := approvedPush(t, e, files)
 		e.procs.runningFrom = 2
 
-		if err := e.core.Push(t.Context(), plan); !errors.Is(err, syncore.ErrGameRunning) {
+		if err := e.core.Push(t.Context(), plan, syncore.PushOptions{}); !errors.Is(err, syncore.ErrGameRunning) {
 			t.Fatalf("Push error = %v, want ErrGameRunning", err)
 		}
 		if keys := e.keys(t, "games/"+testGameID+"/manifests/"); len(keys) != 0 {
@@ -70,7 +70,7 @@ func TestGameRunning(t *testing.T) {
 		plan := approvedPull(t, e, files)
 		e.procs.runningFrom = 2
 
-		if err := e.core.Pull(t.Context(), plan); !errors.Is(err, syncore.ErrGameRunning) {
+		if err := e.core.Pull(t.Context(), plan, syncore.PullOptions{}); !errors.Is(err, syncore.ErrGameRunning) {
 			t.Fatalf("Pull error = %v, want ErrGameRunning", err)
 		}
 		assertAborted(t, e, map[string]string{})
@@ -83,7 +83,7 @@ func TestGameRunning(t *testing.T) {
 			t.Fatalf("remove exe: %v", err)
 		}
 
-		if err := e.core.Push(t.Context(), plan); !errors.Is(err, syncore.ErrGameExeNotFound) {
+		if err := e.core.Push(t.Context(), plan, syncore.PushOptions{}); !errors.Is(err, syncore.ErrGameExeNotFound) {
 			t.Fatalf("Push error = %v, want ErrGameExeNotFound", err)
 		}
 		if keys := e.keys(t, "games/"); len(keys) != 0 {
@@ -98,7 +98,7 @@ func TestGameRunning(t *testing.T) {
 			t.Fatalf("remove exe: %v", err)
 		}
 
-		if err := e.core.Pull(t.Context(), plan); !errors.Is(err, syncore.ErrGameExeNotFound) {
+		if err := e.core.Pull(t.Context(), plan, syncore.PullOptions{}); !errors.Is(err, syncore.ErrGameExeNotFound) {
 			t.Fatalf("Pull error = %v, want ErrGameExeNotFound", err)
 		}
 		assertAborted(t, e, map[string]string{})
@@ -112,7 +112,7 @@ func TestGameRunning(t *testing.T) {
 		t.Run("Push", func(t *testing.T) {
 			e := newEnv(t)
 			plan := approvedPush(t, e, files)
-			if err := withoutProcesses(e).Push(t.Context(), plan); err == nil {
+			if err := withoutProcesses(e).Push(t.Context(), plan, syncore.PushOptions{}); err == nil {
 				t.Fatal("Push error = nil, want an error")
 			}
 			if keys := e.keys(t, "games/"); len(keys) != 0 {
@@ -123,7 +123,7 @@ func TestGameRunning(t *testing.T) {
 		t.Run("Pull", func(t *testing.T) {
 			e := newEnv(t)
 			plan := approvedPull(t, e, files)
-			if err := withoutProcesses(e).Pull(t.Context(), plan); err == nil {
+			if err := withoutProcesses(e).Pull(t.Context(), plan, syncore.PullOptions{}); err == nil {
 				t.Fatal("Pull error = nil, want an error")
 			}
 			assertAborted(t, e, map[string]string{})

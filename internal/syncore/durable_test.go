@@ -31,7 +31,7 @@ func TestPullの書き出し(t *testing.T) {
 		e := newEnv(t)
 		plan := pullOverLocal(t, e, local, remote)
 
-		if err := e.core.Pull(t.Context(), plan); err != nil {
+		if err := e.core.Pull(t.Context(), plan, syncore.PullOptions{}); err != nil {
 			t.Fatalf("Pull: %v", err)
 		}
 		want := []string{"dir/slot2.sav", "dir/sub/slot3.sav", "slot1.sav"}
@@ -50,7 +50,7 @@ func TestPullの書き出し(t *testing.T) {
 			return nil
 		}
 
-		if err := e.core.Pull(t.Context(), plan); !errors.Is(err, injected) {
+		if err := e.core.Pull(t.Context(), plan, syncore.PullOptions{}); !errors.Is(err, injected) {
 			t.Fatalf("Pull error = %v, want %v", err, injected)
 		}
 		assertAborted(t, e, map[string]string{})
@@ -66,7 +66,7 @@ func TestPullの書き出し(t *testing.T) {
 			return nil
 		}
 
-		if err := e.core.Pull(t.Context(), plan); !errors.Is(err, injected) {
+		if err := e.core.Pull(t.Context(), plan, syncore.PullOptions{}); !errors.Is(err, injected) {
 			t.Fatalf("Pull error = %v, want %v", err, injected)
 		}
 		assertAborted(t, e, map[string]string{})
@@ -86,7 +86,7 @@ func TestPullの書き出し(t *testing.T) {
 			return nil
 		}
 
-		if err := e.core.Pull(t.Context(), plan); !errors.Is(err, injected) {
+		if err := e.core.Pull(t.Context(), plan, syncore.PullOptions{}); !errors.Is(err, injected) {
 			t.Fatalf("Pull error = %v, want %v", err, injected)
 		}
 		if n := e.journalCount(t); n != 1 {
@@ -120,7 +120,7 @@ func TestPullの書き出し(t *testing.T) {
 			return nil
 		}
 
-		if err := e.core.Pull(t.Context(), plan); !errors.Is(err, injected) {
+		if err := e.core.Pull(t.Context(), plan, syncore.PullOptions{}); !errors.Is(err, injected) {
 			t.Fatalf("Pull error = %v, want %v", err, injected)
 		}
 		if n := e.journalCount(t); n != 1 {
@@ -142,7 +142,7 @@ func TestPullの書き出し(t *testing.T) {
 		plan := pullOverLocal(t, e, local, remote)
 		failRenameOldToBackups(e)
 
-		if err := e.core.Pull(t.Context(), plan); err != nil {
+		if err := e.core.Pull(t.Context(), plan, syncore.PullOptions{}); err != nil {
 			t.Fatalf("Pull: %v", err)
 		}
 		want := []string{"dir/slot2.sav", "slot1.sav"}
@@ -162,7 +162,7 @@ func TestPullの書き出し(t *testing.T) {
 			return nil
 		}
 
-		if err := e.core.Pull(t.Context(), plan); !errors.Is(err, injected) {
+		if err := e.core.Pull(t.Context(), plan, syncore.PullOptions{}); !errors.Is(err, injected) {
 			t.Fatalf("Pull error = %v, want %v", err, injected)
 		}
 		if names := e.gameBackups(t); len(names) != 0 {
@@ -193,7 +193,7 @@ func TestPullの書き出し(t *testing.T) {
 			return nil
 		}
 
-		if err := e.core.Pull(t.Context(), plan); !errors.Is(err, injected) {
+		if err := e.core.Pull(t.Context(), plan, syncore.PullOptions{}); !errors.Is(err, injected) {
 			t.Fatalf("Pull error = %v, want %v", err, injected)
 		}
 		names := e.gameBackups(t)
@@ -213,7 +213,7 @@ func TestPullの書き出し(t *testing.T) {
 		plan := approvedPull(t, e, remote)
 		core := e.coreWithout(func(cfg *syncore.Config) { cfg.Rename = nil })
 
-		if err := core.Pull(t.Context(), plan); err == nil {
+		if err := core.Pull(t.Context(), plan, syncore.PullOptions{}); err == nil {
 			t.Fatal("Pull error = nil, want an error")
 		}
 		assertAborted(t, e, map[string]string{})

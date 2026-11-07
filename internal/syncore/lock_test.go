@@ -26,7 +26,7 @@ func TestLock(t *testing.T) {
 		plan := approvedPush(t, e, files)
 		e.lock.deny = true
 
-		if err := e.core.Push(t.Context(), plan); !errors.Is(err, syncore.ErrSyncInProgress) {
+		if err := e.core.Push(t.Context(), plan, syncore.PushOptions{}); !errors.Is(err, syncore.ErrSyncInProgress) {
 			t.Fatalf("Push error = %v, want ErrSyncInProgress", err)
 		}
 		if keys := e.keys(t, "games/"); len(keys) != 0 {
@@ -42,7 +42,7 @@ func TestLock(t *testing.T) {
 		plan := approvedPull(t, e, files)
 		e.lock.deny = true
 
-		if err := e.core.Pull(t.Context(), plan); !errors.Is(err, syncore.ErrSyncInProgress) {
+		if err := e.core.Pull(t.Context(), plan, syncore.PullOptions{}); !errors.Is(err, syncore.ErrSyncInProgress) {
 			t.Fatalf("Pull error = %v, want ErrSyncInProgress", err)
 		}
 		assertAborted(t, e, map[string]string{})
@@ -74,8 +74,12 @@ func TestLock(t *testing.T) {
 			name string
 			run  func(t *testing.T, e env) error
 		}{
-			{"Push の後", func(t *testing.T, e env) error { return e.core.Push(t.Context(), approvedPush(t, e, files)) }},
-			{"Pull の後", func(t *testing.T, e env) error { return e.core.Pull(t.Context(), approvedPull(t, e, files)) }},
+			{"Push の後", func(t *testing.T, e env) error {
+				return e.core.Push(t.Context(), approvedPush(t, e, files), syncore.PushOptions{})
+			}},
+			{"Pull の後", func(t *testing.T, e env) error {
+				return e.core.Pull(t.Context(), approvedPull(t, e, files), syncore.PullOptions{})
+			}},
 			{"Recover の後", func(t *testing.T, e env) error {
 				interruptedPull(t, e)
 				_, err := e.core.Recover(t.Context())
@@ -104,7 +108,7 @@ func TestLock(t *testing.T) {
 			return nil
 		}
 
-		if err := e.core.Push(t.Context(), plan); !errors.Is(err, injected) {
+		if err := e.core.Push(t.Context(), plan, syncore.PushOptions{}); !errors.Is(err, injected) {
 			t.Fatalf("Push error = %v, want %v", err, injected)
 		}
 		assertReleasedOnce(t, e)
@@ -118,7 +122,7 @@ func TestLock(t *testing.T) {
 		t.Run("Push", func(t *testing.T) {
 			e := newEnv(t)
 			plan := approvedPush(t, e, files)
-			if err := withoutLocker(e).Push(t.Context(), plan); err == nil {
+			if err := withoutLocker(e).Push(t.Context(), plan, syncore.PushOptions{}); err == nil {
 				t.Fatal("Push error = nil, want an error")
 			}
 			if keys := e.keys(t, "games/"); len(keys) != 0 {
@@ -129,7 +133,7 @@ func TestLock(t *testing.T) {
 		t.Run("Pull", func(t *testing.T) {
 			e := newEnv(t)
 			plan := approvedPull(t, e, files)
-			if err := withoutLocker(e).Pull(t.Context(), plan); err == nil {
+			if err := withoutLocker(e).Pull(t.Context(), plan, syncore.PullOptions{}); err == nil {
 				t.Fatal("Pull error = nil, want an error")
 			}
 			assertAborted(t, e, map[string]string{})
