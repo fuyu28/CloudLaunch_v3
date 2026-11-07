@@ -225,6 +225,8 @@ Push と Pull の実行中は、`%LOCALAPPDATA%\CloudLaunch\sync.lock` を OS �
 2. PC-A の GC が、どの保持世代からも参照されなくなった X を削除する
 3. PC-B が、X を参照する世代を HEAD に書く
 
+PC-B が X をアップロードした場合も、manifest を書く前（5-P3 と 5-P4 の間）に PC-A の GC が走れば、X はまだどの世代からも参照されていないので削除される。そのあと PC-B が X を参照する世代を HEAD に書くと、同じ状態になる。
+
 同時 Push は保証の外とする。この状態でも、Pull は検証で X の欠損を検出して中止する。
 
 ---
