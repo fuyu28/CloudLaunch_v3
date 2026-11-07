@@ -81,12 +81,8 @@ func (c *Core) Push(ctx context.Context, plan Plan, opts PushOptions) error {
 	}
 
 	// 排他ではなく、他の PC の Push と重なりうる時間を短くするだけである（仕様書 5 章）
-	head, err := c.readHead(ctx, plan.GameID)
-	if err != nil {
+	if err := c.ensureHeadUnchanged(ctx, plan); err != nil {
 		return err
-	}
-	if head != plan.Remote.Generation {
-		return fmt.Errorf("HEAD changed from %q to %q after approval: %w", plan.Remote.Generation, head, ErrPlanStale)
 	}
 
 	// HEAD の PUT を始めた後は、キャンセルされても最後まで進める。リモートに HEAD が書けた後で止めると

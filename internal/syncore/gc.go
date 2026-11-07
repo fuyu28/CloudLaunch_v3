@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -14,8 +13,6 @@ import (
 )
 
 const keepGenerations = 10
-
-var objectNamePattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
 // collectGarbage は、失敗しても Push を失敗にしないので、エラーを返さずにログに出す（仕様書 5-P8）。
 func (c *Core) collectGarbage(ctx context.Context, gameID, pushed string) {
@@ -61,7 +58,7 @@ func (c *Core) gc(ctx context.Context, gameID, pushed string) error {
 			keep = append(keep, generation)
 		}
 	}
-	if err := c.deleteAll(ctx, drop); err != nil {
+	if err := c.remote.DeleteMany(ctx, drop); err != nil {
 		return fmt.Errorf("delete old generations: %w", err)
 	}
 
@@ -72,11 +69,11 @@ func (c *Core) gc(ctx context.Context, gameID, pushed string) error {
 	var unused []string
 	for _, key := range objects {
 		name := strings.TrimPrefix(key, objectsPrefix(gameID))
-		if objectNamePattern.MatchString(name) && !referenced[name] {
+		if isSHA256Hex(name) && !referenced[name] {
 			unused = append(unused, key)
 		}
 	}
-	if err := c.deleteAll(ctx, unused); err != nil {
+	if err := c.remote.DeleteMany(ctx, unused); err != nil {
 		return fmt.Errorf("delete unused objects: %w", err)
 	}
 	if len(drop) > 0 || len(unused) > 0 {
@@ -127,11 +124,4 @@ func (c *Core) referencedObjects(ctx context.Context, gameID string, generations
 		return nil, err
 	}
 	return referenced, nil
-}
-
-func (c *Core) deleteAll(ctx context.Context, keys []string) error {
-	if len(keys) == 0 {
-		return nil
-	}
-	return c.remote.DeleteMany(ctx, keys)
 }

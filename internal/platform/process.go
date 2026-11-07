@@ -59,7 +59,7 @@ func matchesExe(exeName string, p processEntry, sameFile func(path string) (same
 }
 
 // exeNameKey は、パスのファイル名を、名前だけで比べるための形にする。大文字にそろえるのは Windows のファイル名の
-// 比べ方に合わせるため（validateEntries と同じ）、NFC にするのは濁点の表し方の違いを吸収するため。
+// 比べ方に合わせるため（syncore の manifest の path の検証と同じ）、NFC にするのは濁点の表し方の違いを吸収するため。
 func exeNameKey(path string) string {
 	name := path[strings.LastIndexAny(path, `/\`)+1:]
 	return norm.NFC.String(strings.ToUpper(name))
