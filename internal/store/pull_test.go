@@ -41,6 +41,33 @@ func TestPullOperation(t *testing.T) {
 		}
 	})
 
+	// syncore も同じ書式の定数を持つ（#47）。片方だけ変えると DB とリモートの JSON で日時の形がずれるので、ここで固定する
+	t.Run("3章/日時/UTC・ミリ秒の固定長で書き、読み戻せる", func(t *testing.T) {
+		s, _ := openTemp(t)
+		createTestGame(t, s)
+		ctx := context.Background()
+		jst := time.FixedZone("JST", 9*60*60)
+		at := time.Date(2026, 10, 22, 21, 0, 0, 0, jst)
+
+		if err := s.InsertPullOperation(ctx, "op1", testGameID, "/save", "/stage", "/old", at); err != nil {
+			t.Fatalf("InsertPullOperation: %v", err)
+		}
+		var raw string
+		if err := s.db.QueryRow(`SELECT created_at FROM pull_operations`).Scan(&raw); err != nil {
+			t.Fatalf("select created_at: %v", err)
+		}
+		if raw != "2026-10-22T12:00:00.000Z" {
+			t.Errorf("created_at = %q, want %q", raw, "2026-10-22T12:00:00.000Z")
+		}
+		ops, err := s.ListPullOperations(ctx)
+		if err != nil {
+			t.Fatalf("ListPullOperations: %v", err)
+		}
+		if len(ops) != 1 || !ops[0].CreatedAt.Equal(at) {
+			t.Errorf("ListPullOperations = %+v, want CreatedAt %v", ops, at)
+		}
+	})
+
 	t.Run("store/同じゲームのジャーナルが残っていれば InsertPullOperation は失敗する", func(t *testing.T) {
 		s, _ := openTemp(t)
 		createTestGame(t, s)

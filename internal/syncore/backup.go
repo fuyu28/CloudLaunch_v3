@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -55,10 +54,12 @@ func (c *Core) moveToBackup(ctx context.Context, gameID, old, name string) error
 		return fmt.Errorf("create backups directory: %w", err)
 	}
 	dst := filepath.Join(dir, name)
-	if _, err := os.Lstat(dst); err == nil {
+	done, err := exists(dst)
+	if err != nil {
+		return err
+	}
+	if done {
 		return removeOld(old)
-	} else if !errors.Is(err, fs.ErrNotExist) {
-		return fmt.Errorf("stat backup: %w", err)
 	}
 
 	// リネームの失敗の理由は見分けない。ボリュームの違いは OS ごとに別のエラーになり、
@@ -136,18 +137,7 @@ func (c *Core) copyFile(src, dst string) error {
 	if err != nil {
 		return err
 	}
-	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
-	if err != nil {
-		return err
-	}
-	_, err = io.Copy(out, in)
-	if err == nil {
-		err = c.syncFile(out)
-	}
-	if closeErr := out.Close(); err == nil {
-		err = closeErr
-	}
-	if err != nil {
+	if err := c.writeFileSynced(dst, in); err != nil {
 		return fmt.Errorf("copy %s: %w", src, err)
 	}
 	return os.Chtimes(dst, info.ModTime(), info.ModTime())
