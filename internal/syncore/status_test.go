@@ -254,13 +254,7 @@ func TestRecordBase(t *testing.T) {
 	t.Run("4章/base を記録/判定が「base を記録」でない plan はエラー", func(t *testing.T) {
 		e := newEnv(t)
 		writeFiles(t, e.saveDir, files)
-		plan, err := e.status(t)
-		if err != nil {
-			t.Fatalf("Status: %v", err)
-		}
-		if plan.Decision != syncore.DecisionPush {
-			t.Fatalf("Decision = %v, want Push", plan.Decision)
-		}
+		plan := e.planWant(t, syncore.DecisionPush)
 
 		if err := e.core.RecordBase(t.Context(), plan); err == nil {
 			t.Fatal("RecordBase succeeded, want an error")

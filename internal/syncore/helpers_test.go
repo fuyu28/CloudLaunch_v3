@@ -268,6 +268,29 @@ func (e env) status(t *testing.T) (syncore.Plan, error) {
 	return e.core.Status(t.Context(), testGameID)
 }
 
+// planWant は Status を呼び、判定が want の plan を返す。判定が違えばテストを止める。
+func (e env) planWant(t *testing.T, want syncore.Decision) syncore.Plan {
+	t.Helper()
+	plan, err := e.status(t)
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if plan.Decision != want {
+		t.Fatalf("Decision = %v, want %v", plan.Decision, want)
+	}
+	return plan
+}
+
+// failOn は、リモートの op のうち、キーに keyPart を含むものを err で失敗させる。
+func failOn(e env, op memstore.Op, keyPart string, err error) {
+	e.remote.Before = func(o memstore.Op, key string) error {
+		if o == op && strings.Contains(key, keyPart) {
+			return err
+		}
+		return nil
+	}
+}
+
 func writeFiles(t *testing.T, root string, files map[string]string) {
 	t.Helper()
 	for rel, content := range files {
@@ -297,8 +320,11 @@ func entriesOf(files map[string]string) []syncore.Entry {
 }
 
 func headKey() string { return "games/" + testGameID + "/HEAD" }
+
+const manifestsPrefix = "games/" + testGameID + "/manifests/"
+
 func manifestKey(generation string) string {
-	return "games/" + testGameID + "/manifests/" + generation + ".json"
+	return manifestsPrefix + generation + ".json"
 }
 func objectKey(content string) string {
 	return "games/" + testGameID + "/objects/" + sha256Hex(content)
@@ -369,6 +395,30 @@ func (e env) putGeneration(t *testing.T, entries []syncore.Entry) {
 	t.Helper()
 	e.putManifest(t, testGeneration, entries)
 	e.putObject(t, headKey(), testGeneration)
+}
+
+// putRemoteFiles は、files の object を置き、files を持つ世代に HEAD を向ける。
+func (e env) putRemoteFiles(t *testing.T, files map[string]string) {
+	t.Helper()
+	for _, content := range files {
+		e.putObject(t, objectKey(content), content)
+	}
+	e.putGeneration(t, entriesOf(files))
+}
+
+// assertNothingPublished は、Push がリモートに manifest も HEAD も書かず、base も書かなかったことを確かめる。
+// 中止の前にアップロードした object は残ってよい（仕様書 5-I1 と同じく、GC で消える）
+func assertNothingPublished(t *testing.T, e env) {
+	t.Helper()
+	if keys := e.keys(t, manifestsPrefix); len(keys) != 0 {
+		t.Errorf("manifest を書いた: %v", keys)
+	}
+	if _, ok := e.getObject(t, headKey()); ok {
+		t.Error("HEAD を書いた")
+	}
+	if base := e.base(t); base != "" {
+		t.Errorf("base = %q, want 空", base)
+	}
 }
 
 func (e env) setBase(t *testing.T, hash string) {
