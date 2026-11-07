@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 
+	"github.com/fuyu28/CloudLaunch_v3/internal/store"
 	"github.com/fuyu28/CloudLaunch_v3/internal/syncore"
 )
 
@@ -207,4 +208,105 @@ func TestHashCache(t *testing.T) {
 			t.Errorf("sha256 = %q, want %q", got, sha256Hex("one"))
 		}
 	})
+
+	t.Run("3章/ハッシュキャッシュ/アップロードでキャッシュと中身の違いを見つけたら、キャッシュを消す", func(t *testing.T) {
+		e := newEnv(t)
+		writeOld(t, e.saveDir, map[string]string{"slot.sav": "one"})
+		// size と mtime を保ったまま中身が変わり、キャッシュが古い sha256 を持っている
+		e.replaceCache(t, cacheRow(t, e.saveDir, "slot.sav", fakeSHA, hashedAt))
+		plan, err := e.status(t)
+		if err != nil {
+			t.Fatalf("Status: %v", err)
+		}
+
+		if err := e.core.Push(t.Context(), plan, syncore.PushOptions{}); !errors.Is(err, syncore.ErrPlanStale) {
+			t.Fatalf("Push error = %v, want ErrPlanStale", err)
+		}
+		// 消さないと、やり直しても同じキャッシュで同じ plan になり、毎回 ErrPlanStale で止まる
+		if got := statusSHA(t, e, "slot.sav"); got != sha256Hex("one") {
+			t.Errorf("sha256 = %q, want %q", got, sha256Hex("one"))
+		}
+	})
+
+	t.Run("3章/ハッシュキャッシュ/Pull で入れ替えたら、キャッシュを消す", func(t *testing.T) {
+		e := newEnv(t)
+		e.setBase(t, syncore.ManifestHash(entriesOf(map[string]string{"slot.sav": "one"})))
+		writeOld(t, e.saveDir, map[string]string{"slot.sav": "one"})
+		plan := approvedPull(t, e, map[string]string{"slot.sav": "two"})
+
+		if err := e.core.Pull(t.Context(), plan, syncore.PullOptions{}); err != nil {
+			t.Fatalf("Pull: %v", err)
+		}
+		if rows := e.cache(t); len(rows) != 0 {
+			t.Errorf("入れ替える前のファイルの行が残っている: %v", rows)
+		}
+	})
+
+	t.Run("3章/ハッシュキャッシュ/キャッシュを読めなくても、すべて計算して判定する", func(t *testing.T) {
+		e := newEnv(t)
+		writeOld(t, e.saveDir, map[string]string{"slot.sav": "one"})
+		local := &cacheStore{Store: e.store, failRead: errors.New("injected")}
+		core := e.coreWithout(func(cfg *syncore.Config) { cfg.Local = local })
+
+		plan, err := core.Status(t.Context(), testGameID)
+		if err != nil {
+			t.Fatalf("Status: %v", err)
+		}
+		if d := cmp.Diff(entriesOf(map[string]string{"slot.sav": "one"}), plan.Local.Entries); d != "" {
+			t.Errorf("entries (-want +got):\n%s", d)
+		}
+	})
+
+	t.Run("3章/ハッシュキャッシュ/キャッシュを書けなくても、判定する", func(t *testing.T) {
+		e := newEnv(t)
+		writeOld(t, e.saveDir, map[string]string{"slot.sav": "one"})
+		local := &cacheStore{Store: e.store, failWrite: errors.New("injected")}
+		core := e.coreWithout(func(cfg *syncore.Config) { cfg.Local = local })
+
+		plan, err := core.Status(t.Context(), testGameID)
+		if err != nil {
+			t.Fatalf("Status: %v", err)
+		}
+		if d := cmp.Diff(entriesOf(map[string]string{"slot.sav": "one"}), plan.Local.Entries); d != "" {
+			t.Errorf("entries (-want +got):\n%s", d)
+		}
+	})
+
+	t.Run("3章/ハッシュキャッシュ/行が変わらなければ書き直さない", func(t *testing.T) {
+		e := newEnv(t)
+		writeOld(t, e.saveDir, map[string]string{"slot.sav": "one"})
+		e.replaceCache(t, cacheRow(t, e.saveDir, "slot.sav", sha256Hex("one"), hashedAt))
+		local := &cacheStore{Store: e.store}
+		core := e.coreWithout(func(cfg *syncore.Config) { cfg.Local = local })
+
+		if _, err := core.Status(t.Context(), testGameID); err != nil {
+			t.Fatalf("Status: %v", err)
+		}
+		if local.writes != 0 {
+			t.Errorf("ReplaceHashCache を %d 回呼んだ, want 0", local.writes)
+		}
+	})
+}
+
+// cacheStore は、ハッシュキャッシュの読み書きに失敗を仕込み、書いた回数を数える。ほかの操作は Store に任せる。
+type cacheStore struct {
+	*store.Store
+	failRead  error
+	failWrite error
+	writes    int
+}
+
+func (s *cacheStore) HashCache(ctx context.Context, gameID string) ([]syncore.HashCacheEntry, error) {
+	if s.failRead != nil {
+		return nil, s.failRead
+	}
+	return s.Store.HashCache(ctx, gameID)
+}
+
+func (s *cacheStore) ReplaceHashCache(ctx context.Context, gameID string, entries []syncore.HashCacheEntry) error {
+	s.writes++
+	if s.failWrite != nil {
+		return s.failWrite
+	}
+	return s.Store.ReplaceHashCache(ctx, gameID, entries)
 }
