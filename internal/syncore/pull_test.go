@@ -70,8 +70,8 @@ func assertAborted(t *testing.T, e env, wantFiles map[string]string) {
 	}
 }
 
-// assertPullRejected は、リモートの世代を不正な manifest として、object を取得せず、何も変えずに Pull が止まることを確かめる。
-func assertPullRejected(t *testing.T, e env) {
+// pullPlan は Status を呼び、判定が Pull の plan を返す。
+func pullPlan(t *testing.T, e env) syncore.Plan {
 	t.Helper()
 	plan, err := e.status(t)
 	if err != nil {
@@ -80,6 +80,13 @@ func assertPullRejected(t *testing.T, e env) {
 	if plan.Decision != syncore.DecisionPull {
 		t.Fatalf("Decision = %v, want DecisionPull", plan.Decision)
 	}
+	return plan
+}
+
+// assertPullRejected は、リモートの世代を不正な manifest として、object を取得せず、何も変えずに Pull が止まることを確かめる。
+func assertPullRejected(t *testing.T, e env) {
+	t.Helper()
+	plan := pullPlan(t, e)
 	var gets atomic.Int32
 	e.remote.Before = func(op memstore.Op, key string) error {
 		if op == memstore.OpGet && strings.Contains(key, "/objects/") {
@@ -88,7 +95,7 @@ func assertPullRejected(t *testing.T, e env) {
 		return nil
 	}
 
-	err = e.core.Pull(t.Context(), plan, syncore.PullOptions{})
+	err := e.core.Pull(t.Context(), plan, syncore.PullOptions{})
 	if err == nil || errors.Is(err, syncore.ErrPlanStale) {
 		t.Fatalf("Pull error = %v, want an error other than ErrPlanStale", err)
 	}
@@ -362,50 +369,52 @@ func TestPull空manifestのbase(t *testing.T) {
 	})
 }
 
+// invalidPathCases は path の規則に当たる path の組で、FuzzPull不正なmanifest のシードにも使う。
+var invalidPathCases = []struct {
+	name  string
+	paths []string
+}{
+	{"6-M1 path が空", []string{""}},
+	{"6-M2 「/」で始まる", []string{"/etc/passwd"}},
+	{"6-M2 「\\」で始まる", []string{`\Windows\win.ini`}},
+	{"6-M2 ドライブレターを含む", []string{"C:/Windows/win.ini"}},
+	{"6-M2 要素の途中にドライブレターを含む", []string{"a/C:b.sav"}},
+	{"6-M2 UNC パス", []string{`\\server\share\a.sav`}},
+	{"6-M3 .. の要素がある", []string{"../a.sav"}},
+	{"6-M3 途中に .. の要素がある", []string{"dir/../../a.sav"}},
+	{"6-M3 . の要素がある", []string{"./a.sav"}},
+	{"6-M3 空の要素がある", []string{"dir//a.sav"}},
+	{"6-M3 末尾が「/」で空の要素がある", []string{"dir/"}},
+	{"6-M4 「\\」を含む", []string{`dir\a.sav`}},
+	{"6-M5 大文字小文字の違いだけで重複する", []string{"Slot1.sav", "slot1.sav"}},
+	{"6-M10 予約されたデバイス名", []string{"CON"}},
+	{"6-M10 予約されたデバイス名（小文字）", []string{"nul"}},
+	{"6-M10 拡張子の付いた予約されたデバイス名", []string{"aux.sav"}},
+	{"6-M10 途中の要素が予約されたデバイス名", []string{"dir/COM1/a.sav"}},
+	{"6-M10 上付き数字の予約されたデバイス名", []string{"COM¹.sav"}},
+	{"6-M10 CONIN$", []string{"CONIN$"}},
+	{"6-M11 要素の末尾が .", []string{"dir./a.sav"}},
+	{"6-M11 要素の末尾が空白", []string{"a.sav "}},
+	{"6-M12 使えない文字を含む（<）", []string{"a<b.sav"}},
+	{"6-M12 使えない文字を含む（>）", []string{"a>b.sav"}},
+	{"6-M12 使えない文字を含む（\"）", []string{`a"b.sav`}},
+	{"6-M12 使えない文字を含む（|）", []string{"a|b.sav"}},
+	{"6-M12 使えない文字を含む（?）", []string{"a?b.sav"}},
+	{"6-M12 使えない文字を含む（*）", []string{"a*b.sav"}},
+	{"6-M12 制御文字を含む", []string{"a\x01b.sav"}},
+	// 6-M9 を通るよう、path の昇順に並べる
+	{"6-M5 ディレクトリの部分が大文字小文字の違いだけで重複する", []string{"DIR/b.sav", "dir/a.sav"}},
+	{"6-M5 深いディレクトリの部分が大文字小文字の違いだけで重複する", []string{"a/B/d.sav", "a/b/c.sav"}},
+	{"6-M10 予約されたデバイス名の後ろに空白がある", []string{"aux .sav"}},
+	{"6-M10 予約されたデバイス名の後ろに空白が複数ある", []string{"aux   .sav"}},
+	{"6-M13 深い階層で同じ名前をファイルとディレクトリに使う", []string{"a/B/c.sav", "a/b"}},
+	{"6-M13 同じ名前をファイルとディレクトリに使う", []string{"a", "a/b.sav"}},
+	{"6-M13 大文字小文字だけが違う名前をファイルとディレクトリに使う", []string{"A", "a/b.sav"}},
+	{"6-M13 ディレクトリとして使う path が、同じ名前のファイルより先に並ぶ", []string{"A/b.sav", "a"}},
+}
+
 func TestPull不正なmanifest(t *testing.T) {
-	tests := []struct {
-		name  string
-		paths []string
-	}{
-		{"6-M1 path が空", []string{""}},
-		{"6-M2 「/」で始まる", []string{"/etc/passwd"}},
-		{"6-M2 「\\」で始まる", []string{`\Windows\win.ini`}},
-		{"6-M2 ドライブレターを含む", []string{"C:/Windows/win.ini"}},
-		{"6-M2 要素の途中にドライブレターを含む", []string{"a/C:b.sav"}},
-		{"6-M2 UNC パス", []string{`\\server\share\a.sav`}},
-		{"6-M3 .. の要素がある", []string{"../a.sav"}},
-		{"6-M3 途中に .. の要素がある", []string{"dir/../../a.sav"}},
-		{"6-M3 . の要素がある", []string{"./a.sav"}},
-		{"6-M3 空の要素がある", []string{"dir//a.sav"}},
-		{"6-M3 末尾が「/」で空の要素がある", []string{"dir/"}},
-		{"6-M4 「\\」を含む", []string{`dir\a.sav`}},
-		{"6-M5 大文字小文字の違いだけで重複する", []string{"Slot1.sav", "slot1.sav"}},
-		{"6-M10 予約されたデバイス名", []string{"CON"}},
-		{"6-M10 予約されたデバイス名（小文字）", []string{"nul"}},
-		{"6-M10 拡張子の付いた予約されたデバイス名", []string{"aux.sav"}},
-		{"6-M10 途中の要素が予約されたデバイス名", []string{"dir/COM1/a.sav"}},
-		{"6-M10 上付き数字の予約されたデバイス名", []string{"COM¹.sav"}},
-		{"6-M10 CONIN$", []string{"CONIN$"}},
-		{"6-M11 要素の末尾が .", []string{"dir./a.sav"}},
-		{"6-M11 要素の末尾が空白", []string{"a.sav "}},
-		{"6-M12 使えない文字を含む（<）", []string{"a<b.sav"}},
-		{"6-M12 使えない文字を含む（>）", []string{"a>b.sav"}},
-		{"6-M12 使えない文字を含む（\"）", []string{`a"b.sav`}},
-		{"6-M12 使えない文字を含む（|）", []string{"a|b.sav"}},
-		{"6-M12 使えない文字を含む（?）", []string{"a?b.sav"}},
-		{"6-M12 使えない文字を含む（*）", []string{"a*b.sav"}},
-		{"6-M12 制御文字を含む", []string{"a\x01b.sav"}},
-		// 6-M9 を通るよう、path の昇順に並べる
-		{"6-M5 ディレクトリの部分が大文字小文字の違いだけで重複する", []string{"DIR/b.sav", "dir/a.sav"}},
-		{"6-M5 深いディレクトリの部分が大文字小文字の違いだけで重複する", []string{"a/B/d.sav", "a/b/c.sav"}},
-		{"6-M10 予約されたデバイス名の後ろに空白がある", []string{"aux .sav"}},
-		{"6-M10 予約されたデバイス名の後ろに空白が複数ある", []string{"aux   .sav"}},
-		{"6-M13 深い階層で同じ名前をファイルとディレクトリに使う", []string{"a/B/c.sav", "a/b"}},
-		{"6-M13 同じ名前をファイルとディレクトリに使う", []string{"a", "a/b.sav"}},
-		{"6-M13 大文字小文字だけが違う名前をファイルとディレクトリに使う", []string{"A", "a/b.sav"}},
-		{"6-M13 ディレクトリとして使う path が、同じ名前のファイルより先に並ぶ", []string{"A/b.sav", "a"}},
-	}
-	for _, tt := range tests {
+	for _, tt := range invalidPathCases {
 		t.Run(tt.name, func(t *testing.T) {
 			e := newEnv(t)
 			entries := make([]syncore.Entry, len(tt.paths))
