@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"slices"
 	"sort"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -98,6 +99,34 @@ func (s *S3) List(ctx context.Context, prefix string) ([]string, error) {
 func (s *S3) Delete(ctx context.Context, key string) error {
 	if _, err := s.client.DeleteObject(ctx, &s3.DeleteObjectInput{Bucket: &s.bucket, Key: &key}); err != nil {
 		return fmt.Errorf("delete %q: %w", key, err)
+	}
+	return nil
+}
+
+// deleteBatch は、S3 の DeleteObjects が 1 回に受け付けるキーの上限。
+const deleteBatch = 1000
+
+// DeleteMany は、キーがなくてもエラーにしない。途中で失敗したときは、それまでに消したキーは消えたままになる。
+// DeleteObjects は、一部のキーを消せなくても HTTP では成功を返し、消せなかったキーをレスポンスの Errors に入れるので、
+// それもエラーにする。
+func (s *S3) DeleteMany(ctx context.Context, keys []string) error {
+	for chunk := range slices.Chunk(keys, deleteBatch) {
+		objects := make([]types.ObjectIdentifier, len(chunk))
+		for i, key := range chunk {
+			objects[i] = types.ObjectIdentifier{Key: aws.String(key)}
+		}
+		out, err := s.client.DeleteObjects(ctx, &s3.DeleteObjectsInput{
+			Bucket: &s.bucket,
+			Delete: &types.Delete{Objects: objects, Quiet: aws.Bool(true)},
+		})
+		if err != nil {
+			return fmt.Errorf("delete %d keys: %w", len(chunk), err)
+		}
+		if len(out.Errors) > 0 {
+			e := out.Errors[0]
+			return fmt.Errorf("delete %q: %s: %s (%d of %d keys failed)",
+				aws.ToString(e.Key), aws.ToString(e.Code), aws.ToString(e.Message), len(out.Errors), len(chunk))
+		}
 	}
 	return nil
 }

@@ -96,3 +96,18 @@ func (s *Store) Delete(ctx context.Context, key string) error {
 	delete(s.objects, key)
 	return nil
 }
+
+// DeleteMany は、キーごとに ctx と Before（OpDelete）を確かめ、失敗したキーで止める。それより前のキーは消したままにする。
+// objstore は 1000 キーずつのリクエストの単位で失敗し、同じリクエストの中では失敗したキーの後ろも消えうるので、
+// 消え残るキーの範囲は objstore と同じではない。
+func (s *Store) DeleteMany(ctx context.Context, keys []string) error {
+	for _, key := range keys {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := s.Delete(ctx, key); err != nil {
+			return err
+		}
+	}
+	return nil
+}

@@ -23,6 +23,7 @@ type Store interface {
 	Put(ctx context.Context, key string, body io.ReadSeeker, size int64) error
 	List(ctx context.Context, prefix string) ([]string, error)
 	Delete(ctx context.Context, key string) error
+	DeleteMany(ctx context.Context, keys []string) error
 }
 
 // Run は store に契約テストを走らせる。本物のサーバーでは他の実行とキーがぶつからないよう、ケースごとにランダムな接頭辞の下で操作する。
@@ -104,6 +105,75 @@ func Run(t *testing.T, store Store) {
 		}
 	})
 
+	t.Run("objstore/DeleteMany で消したキーの Get は fs.ErrNotExist、渡さなかったキーは残る", func(t *testing.T) {
+		ctx, p := context.Background(), prefix(t, store)
+		for _, k := range []string{"a", "b", "c"} {
+			put(t, store, p+k, []byte(k))
+		}
+		if err := store.DeleteMany(ctx, []string{p + "a", p + "c"}); err != nil {
+			t.Fatalf("DeleteMany: %v", err)
+		}
+
+		for _, k := range []string{"a", "c"} {
+			if _, err := store.Get(ctx, p+k); !errors.Is(err, fs.ErrNotExist) {
+				t.Errorf("Get %s: err = %v, want fs.ErrNotExist", k, err)
+			}
+		}
+		if got := string(get(t, store, p+"b")); got != "b" {
+			t.Errorf("body = %q, want %q", got, "b")
+		}
+	})
+
+	t.Run("objstore/DeleteMany は存在しないキーを含んでもエラーにならない", func(t *testing.T) {
+		ctx, p := context.Background(), prefix(t, store)
+		put(t, store, p+"a", []byte("x"))
+		if err := store.DeleteMany(ctx, []string{p + "missing", p + "a"}); err != nil {
+			t.Fatalf("DeleteMany: %v", err)
+		}
+
+		if keys := list(t, store, p); len(keys) != 0 {
+			t.Errorf("keys = %v, want none", keys)
+		}
+	})
+
+	t.Run("objstore/DeleteMany は空なら何もしない", func(t *testing.T) {
+		if err := store.DeleteMany(context.Background(), nil); err != nil {
+			t.Errorf("DeleteMany: %v", err)
+		}
+	})
+
+	// S3 の DeleteObjects は 1 回に 1000 キーまでなので、超える数を渡しても消しきることを確かめる
+	t.Run("objstore/DeleteMany は 1000 個を超えるキーを消せる", func(t *testing.T) {
+		ctx, p := context.Background(), prefix(t, store)
+		const n = 1001
+		keys := make([]string, n)
+		var wg sync.WaitGroup
+		errs := make(chan error, n)
+		sem := make(chan struct{}, 16)
+		for i := range n {
+			keys[i] = fmt.Sprintf("%s%04d", p, i)
+			wg.Go(func() {
+				sem <- struct{}{}
+				defer func() { <-sem }()
+				if err := store.Put(ctx, keys[i], bytes.NewReader(nil), 0); err != nil {
+					errs <- err
+				}
+			})
+		}
+		wg.Wait()
+		close(errs)
+		for err := range errs {
+			t.Fatalf("Put: %v", err)
+		}
+		if err := store.DeleteMany(ctx, keys); err != nil {
+			t.Fatalf("DeleteMany: %v", err)
+		}
+
+		if got := list(t, store, p); len(got) != 0 {
+			t.Errorf("len(keys) = %d, want 0", len(got))
+		}
+	})
+
 	t.Run("objstore/複数の goroutine から同時に Put と Get をしても壊れない", func(t *testing.T) {
 		p := prefix(t, store)
 		const workers, perWorker = 8, 10
@@ -159,10 +229,8 @@ func prefix(t *testing.T, store Store) string {
 			t.Logf("cleanup list: %v", err)
 			return
 		}
-		for _, k := range keys {
-			if err := store.Delete(ctx, k); err != nil {
-				t.Logf("cleanup delete %s: %v", k, err)
-			}
+		if err := store.DeleteMany(ctx, keys); err != nil {
+			t.Logf("cleanup delete: %v", err)
 		}
 	})
 	return p
