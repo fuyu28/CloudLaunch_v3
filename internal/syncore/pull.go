@@ -131,7 +131,7 @@ func (c *Core) prepareStage(ctx context.Context, plan Plan, game GameLocal, stag
 	if err := c.ensureGameNotRunning(game.ExePath); err != nil {
 		return fmt.Errorf("pull %s: %w", plan.GameID, err)
 	}
-	if err := ensureLocalUnchanged(ctx, game.SaveFolderPath, plan); err != nil {
+	if err := c.ensureLocalUnchanged(ctx, game.SaveFolderPath, plan); err != nil {
 		return err
 	}
 	head, err := c.readHead(ctx, plan.GameID)

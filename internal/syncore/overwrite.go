@@ -54,7 +54,7 @@ func decisionName(d Decision) string {
 // 転送しなくても、承認した後に local か HEAD が変わっていれば ErrPlanStale を返す。利用者が見た「同じ」が
 // もう正しくなく、頼んだ上書きが行われないまま成功と伝わるのを防ぐため。同期ロックを取った後に呼ぶ。
 func (c *Core) finishSameContent(ctx context.Context, plan Plan, saveFolder string) error {
-	if err := ensureLocalUnchanged(ctx, saveFolder, plan); err != nil {
+	if err := c.ensureLocalUnchanged(ctx, saveFolder, plan); err != nil {
 		return err
 	}
 	head, err := c.readHead(ctx, plan.GameID)

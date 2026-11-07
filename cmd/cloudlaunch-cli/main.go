@@ -23,9 +23,9 @@ import (
 
 const usage = `usage:
   cloudlaunch-cli game add --title <タイトル> --save-dir <パス> --exe <パス> [--brand <ブランド>] [--id <gameId>] [--data-dir <dir>]
-  cloudlaunch-cli status --game <gameId> [--data-dir <dir>]
-  cloudlaunch-cli push --game <gameId> [--overwrite] [--data-dir <dir>]
-  cloudlaunch-cli pull --game <gameId> [--overwrite] [--data-dir <dir>]
+  cloudlaunch-cli status --game <gameId> [--rehash] [--data-dir <dir>]
+  cloudlaunch-cli push --game <gameId> [--overwrite] [--rehash] [--data-dir <dir>]
+  cloudlaunch-cli pull --game <gameId> [--overwrite] [--rehash] [--data-dir <dir>]
   cloudlaunch-cli recover [--data-dir <dir>]
 
 status・push・pull はリモートの接続先と鍵を環境変数から読む:
@@ -188,12 +188,13 @@ func printTransferred(w io.Writer, plan syncore.Plan, overwrite bool, done strin
 	return err
 }
 
-// openCore は --game と --data-dir を読み、リモートと DB につないだコアを返す。overwrite が nil でなければ、
-// --overwrite も読む。closeStore は呼び出し側が必ず呼ぶ。
+// openCore は --game・--data-dir・--rehash を読み、リモートと DB につないだコアを返す。--rehash があれば、
+// 返す前にゲームのハッシュキャッシュを消す。overwrite が nil でなければ、--overwrite も読む。closeStore は呼び出し側が必ず呼ぶ。
 func openCore(ctx context.Context, name string, args []string, overwrite *bool) (core *syncore.Core, gameID string, closeStore func(), err error) {
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
 	game := fs.String("game", "", "ゲーム ID")
 	dataDir := fs.String("data-dir", "", "DB などを置くディレクトリ")
+	rehash := fs.Bool("rehash", false, "ハッシュキャッシュを使わずに、すべてのファイルを計算し直す")
 	if overwrite != nil {
 		fs.BoolVar(overwrite, "overwrite", false, "判定によらず上書きする")
 	}
@@ -228,7 +229,14 @@ func openCore(ctx context.Context, name string, args []string, overwrite *bool) 
 	cfg.Remote = remote
 	cfg.DeviceName = host
 	cfg.Processes = platform.Processes{}
-	return syncore.New(cfg), *game, func() { _ = s.Close() }, nil
+	core = syncore.New(cfg)
+	if *rehash {
+		if err := core.ForgetHashes(ctx, *game); err != nil {
+			_ = s.Close()
+			return nil, "", nil, err
+		}
+	}
+	return core, *game, func() { _ = s.Close() }, nil
 }
 
 // recoveryLabel は、R2 で確かめるときに仕様書の復旧表と突き合わせられるよう、行の ID を添える。

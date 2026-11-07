@@ -33,6 +33,9 @@ type LocalStore interface {
 	InsertPullOperation(ctx context.Context, opID, gameID, livePath, stagePath, oldPath string, createdAt time.Time) error
 	DeletePullOperation(ctx context.Context, opID string) error
 	ListPullOperations(ctx context.Context) ([]PullOperation, error)
+	HashCache(ctx context.Context, gameID string) ([]HashCacheEntry, error)
+	ReplaceHashCache(ctx context.Context, gameID string, entries []HashCacheEntry) error
+	DeleteHashCache(ctx context.Context, gameID string) error
 }
 
 type Config struct {
@@ -128,9 +131,11 @@ type LocalState struct {
 }
 
 // ensureLocalUnchanged は、Push（5-P3）と Pull（6-L6）が、承認の後にセーブフォルダが変わっていないかを確かめる（仕様書 7 章）。
-// DB の base ではなく plan.Base を使う。plan.Local.Hash は plan.Base から計算したもので、同じ base で計算し直さないと比べられない
-func ensureLocalUnchanged(ctx context.Context, folder string, plan Plan) error {
-	entries, err := localEntries(ctx, folder)
+// DB の base ではなく plan.Base を使う。plan.Local.Hash は plan.Base から計算したもので、同じ base で計算し直さないと比べられない。
+// Status と同じくキャッシュを使う。計算の仕方が違うと、Status は変わっていない、ここでは変わったと食い違い、
+// 何度やり直しても ErrPlanStale になりうるため（仕様書 3 章）
+func (c *Core) ensureLocalUnchanged(ctx context.Context, folder string, plan Plan) error {
+	entries, err := c.saveFolderEntries(ctx, plan.GameID, folder)
 	if err != nil {
 		return err
 	}
@@ -155,7 +160,8 @@ type RemoteState struct {
 	Hash       string // HEAD がなければ空。空 manifest の世代なら空にならない
 }
 
-// Status はローカルにもリモートにも書き込まない。
+// Status は同期の状態（base・リモート・セーブフォルダ・Pull ジャーナル）を変えない。ハッシュキャッシュは書く。
+// キャッシュは消えても判定の結果が変わらないので、同期の状態に含めない（仕様書 3 章）。
 func (c *Core) Status(ctx context.Context, gameID string) (Plan, error) {
 	game, err := c.local.GameLocal(ctx, gameID)
 	if err != nil {
@@ -163,7 +169,7 @@ func (c *Core) Status(ctx context.Context, gameID string) (Plan, error) {
 	}
 	saveFolder, base := game.SaveFolderPath, game.BaseManifestHash
 
-	entries, err := localEntries(ctx, saveFolder)
+	entries, err := c.saveFolderEntries(ctx, gameID, saveFolder)
 	if err != nil {
 		return Plan{}, err
 	}
