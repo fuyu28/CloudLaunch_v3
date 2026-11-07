@@ -38,7 +38,7 @@ type Recovery struct {
 // Recover は Pull ジャーナルの全行を復旧し、復旧できた行を返す。ある行で失敗しても残りの行を続け、
 // 失敗した行はジャーナルに残して、エラーをまとめて返す。行どうしは別のゲームで、互いに影響しないため。
 func (c *Core) Recover(ctx context.Context) ([]Recovery, error) {
-	if c.rename == nil {
+	if c.cfg.Rename == nil {
 		return nil, fmt.Errorf("recover: %w", errRenameNotSet)
 	}
 	release, err := c.acquire(ctx)
@@ -46,7 +46,7 @@ func (c *Core) Recover(ctx context.Context) ([]Recovery, error) {
 		return nil, fmt.Errorf("recover: %w", err)
 	}
 	defer release()
-	ops, err := c.local.ListPullOperations(ctx)
+	ops, err := c.cfg.Local.ListPullOperations(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list pull journal: %w", err)
 	}
@@ -56,13 +56,13 @@ func (c *Core) Recover(ctx context.Context) ([]Recovery, error) {
 		rc, err := c.recoverOne(ctx, op)
 		if err == nil {
 			// ファイルはもう直したので、キャンセルで行が残って失敗と伝わらないようにする
-			err = c.local.DeletePullOperation(context.WithoutCancel(ctx), op.OpID)
+			err = c.cfg.Local.DeletePullOperation(context.WithoutCancel(ctx), op.OpID)
 		}
 		if err != nil {
 			errs = append(errs, fmt.Errorf("recover pull %s of game %s: %w", op.OpID, op.GameID, err))
 			continue
 		}
-		c.logger.InfoContext(ctx, "recovered pull", "game", op.GameID, "op", op.OpID, "case", rc)
+		c.cfg.Logger.InfoContext(ctx, "recovered pull", "game", op.GameID, "op", op.OpID, "case", rc)
 		recovered = append(recovered, Recovery{OpID: op.OpID, GameID: op.GameID, Case: rc})
 	}
 	return recovered, errors.Join(errs...)
@@ -98,7 +98,7 @@ func (c *Core) recoverOne(ctx context.Context, op PullOperation) (RecoveryCase, 
 		if err := os.RemoveAll(op.StagePath); err != nil {
 			return 0, fmt.Errorf("remove stage: %w", err)
 		}
-		if err := c.rename(op.OldPath, op.LivePath); err != nil {
+		if err := c.cfg.Rename(op.OldPath, op.LivePath); err != nil {
 			return 0, fmt.Errorf("move old back to save folder: %w", err)
 		}
 		return RecoveryRestoreOld, nil

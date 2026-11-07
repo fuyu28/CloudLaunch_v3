@@ -17,10 +17,10 @@ type Locker interface {
 // acquire は、Push・Pull・Recover が何かを変える前に呼ぶ。返した release は、成功しても失敗しても呼ぶ。
 // Locker がなければエラーにし、ロックなしで黙って動く道を作らない。
 func (c *Core) acquire(ctx context.Context) (release func(), err error) {
-	if c.locker == nil {
+	if c.cfg.Locker == nil {
 		return nil, errors.New("sync lock is not configured")
 	}
-	unlock, ok, err := c.locker.TryLock()
+	unlock, ok, err := c.cfg.Locker.TryLock()
 	if err != nil {
 		return nil, fmt.Errorf("take sync lock: %w", err)
 	}
@@ -30,7 +30,7 @@ func (c *Core) acquire(ctx context.Context) (release func(), err error) {
 	return func() {
 		// 同期はもう終わっていて、プロセスが終われば OS がロックを外すので、結果は変えない（仕様書 3 章）
 		if err := unlock(); err != nil {
-			c.logger.WarnContext(ctx, "could not release sync lock", "error", err)
+			c.cfg.Logger.WarnContext(ctx, "could not release sync lock", "error", err)
 		}
 	}, nil
 }

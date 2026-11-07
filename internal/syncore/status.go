@@ -4,102 +4,7 @@ package syncore
 import (
 	"context"
 	"fmt"
-	"io"
-	"log/slog"
-	"os"
-	"time"
-
-	"github.com/google/uuid"
 )
-
-type ObjectStore interface {
-	Get(ctx context.Context, key string) (io.ReadCloser, error)
-	Put(ctx context.Context, key string, body io.ReadSeeker, size int64) error
-	List(ctx context.Context, prefix string) ([]string, error)
-	// DeleteMany は、キーがなくてもエラーにしない
-	DeleteMany(ctx context.Context, keys []string) error
-}
-
-// GameLocal は、ゲームのローカル情報（同期しない）のうち、同期コアが使うもの。BaseManifestHash は未設定なら空。
-type GameLocal struct {
-	SaveFolderPath   string
-	ExePath          string
-	BaseManifestHash string
-}
-
-type LocalStore interface {
-	GameLocal(ctx context.Context, gameID string) (GameLocal, error)
-	SetBase(ctx context.Context, gameID, manifestHash string) error
-	InsertPullOperation(ctx context.Context, opID, gameID, livePath, stagePath, oldPath string, createdAt time.Time) error
-	DeletePullOperation(ctx context.Context, opID string) error
-	ListPullOperations(ctx context.Context) ([]PullOperation, error)
-}
-
-type Config struct {
-	Remote     ObjectStore
-	Local      LocalStore
-	Logger     *slog.Logger
-	DeviceName string
-	// BackupsDir は、Pull で退避したセーブを置くディレクトリ。その下の {gameId}/ に置く
-	BackupsDir string
-	// Locker は、Push・Pull・Recover が実行中に握る PC 全体の同期ロック（仕様書 3 章）
-	Locker Locker
-	// Processes は、Push・Pull がゲームの実行中を拒否するために使う（仕様書 7 章）
-	Processes ProcessChecker
-	// Rename は、リネームをディスクへ書き出してから戻り、移す先があれば失敗する（仕様書 3 章「ディスクへの書き出し」）。
-	// os.Rename はどちらも満たさないので既定にせず、nil なら Pull と Recover は何も変える前にエラーにする
-	Rename func(oldpath, newpath string) error
-	// Now・NewGeneration・SyncFile は、nil なら実際の時刻・UUIDv7 の採番・(*os.File).Sync を使う
-	Now           func() time.Time
-	NewGeneration func() (string, error)
-	SyncFile      func(f *os.File) error
-}
-
-type Core struct {
-	remote        ObjectStore
-	local         LocalStore
-	logger        *slog.Logger
-	deviceName    string
-	backupsDir    string
-	locker        Locker
-	processes     ProcessChecker
-	now           func() time.Time
-	newGeneration func() (string, error)
-	rename        func(oldpath, newpath string) error
-	syncFile      func(f *os.File) error
-}
-
-func New(cfg Config) *Core {
-	c := &Core{
-		remote:        cfg.Remote,
-		local:         cfg.Local,
-		logger:        cfg.Logger,
-		deviceName:    cfg.DeviceName,
-		backupsDir:    cfg.BackupsDir,
-		locker:        cfg.Locker,
-		processes:     cfg.Processes,
-		now:           cfg.Now,
-		newGeneration: cfg.NewGeneration,
-		rename:        cfg.Rename,
-		syncFile:      cfg.SyncFile,
-	}
-	if c.now == nil {
-		c.now = time.Now
-	}
-	if c.syncFile == nil {
-		c.syncFile = (*os.File).Sync
-	}
-	if c.newGeneration == nil {
-		c.newGeneration = func() (string, error) {
-			u, err := uuid.NewV7()
-			if err != nil {
-				return "", fmt.Errorf("generate generation id: %w", err)
-			}
-			return u.String(), nil
-		}
-	}
-	return c
-}
 
 type Decision int
 
@@ -141,31 +46,6 @@ type LocalState struct {
 	Hash    string // ファイルが 1 つもなく、base が空 manifest のハッシュでなければ空
 }
 
-// ensureLocalUnchanged は、Push（5-P3）と Pull（6-L6）が、承認の後にセーブフォルダが変わっていないかを確かめる（仕様書 7 章）。
-// DB の base ではなく plan.Base を使う。plan.Local.Hash は plan.Base から計算したもので、同じ base で計算し直さないと比べられない
-func ensureLocalUnchanged(ctx context.Context, folder string, plan Plan) error {
-	entries, err := localEntries(ctx, folder)
-	if err != nil {
-		return err
-	}
-	if localHash(entries, plan.Base) != plan.Local.Hash {
-		return fmt.Errorf("save folder changed after approval: %w", ErrPlanStale)
-	}
-	return nil
-}
-
-// ensureHeadUnchanged は、Push（5-P5）・Pull（6-L6）・上書きで同じとき（7-O5）が、承認の後に HEAD が変わっていないかを確かめる。
-func (c *Core) ensureHeadUnchanged(ctx context.Context, plan Plan) error {
-	head, err := c.readHead(ctx, plan.GameID)
-	if err != nil {
-		return err
-	}
-	if head != plan.Remote.Generation {
-		return fmt.Errorf("HEAD changed from %q to %q after approval: %w", plan.Remote.Generation, head, ErrPlanStale)
-	}
-	return nil
-}
-
 // localHash は、Status の判定と、Push・Pull の承認後の確認（ensureLocalUnchanged）で、同じ local を同じハッシュにするために 1 か所で決める。
 // base が空 manifest なら、ファイルのない local を「なし」にしない。空にして Push した後に、毎回競合と判定しないため（仕様書 4 章）
 func localHash(entries []Entry, base string) string {
@@ -183,7 +63,7 @@ type RemoteState struct {
 
 // Status はローカルにもリモートにも書き込まない。
 func (c *Core) Status(ctx context.Context, gameID string) (Plan, error) {
-	game, err := c.local.GameLocal(ctx, gameID)
+	game, err := c.cfg.Local.GameLocal(ctx, gameID)
 	if err != nil {
 		return Plan{}, fmt.Errorf("read game %s: %w", gameID, err)
 	}
@@ -214,7 +94,7 @@ func (c *Core) RecordBase(ctx context.Context, plan Plan) error {
 	if !plan.RecordBase {
 		return fmt.Errorf("record base %s: plan is not a record-base decision", plan.GameID)
 	}
-	if err := c.local.SetBase(ctx, plan.GameID, plan.Local.Hash); err != nil {
+	if err := c.cfg.Local.SetBase(ctx, plan.GameID, plan.Local.Hash); err != nil {
 		return fmt.Errorf("set base: %w", err)
 	}
 	return nil

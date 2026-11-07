@@ -17,14 +17,6 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-// ErrPlanStale は、承認した後にセーブフォルダかリモートの状態が変わったことを表す。判定からやり直す。
-var ErrPlanStale = errors.New("plan is stale")
-
-const (
-	transferLimit = 8
-	timeLayout    = "2006-01-02T15:04:05.000Z"
-)
-
 // Push は、上書き（opts.Overwrite）でなければ、判定が Push の plan だけを受け付ける。手順 8（古い世代の削除と GC）の
 // 失敗とキャンセルは、ログに出すだけで、Push の結果には含めない。
 func (c *Core) Push(ctx context.Context, plan Plan, opts PushOptions) error {
@@ -39,7 +31,7 @@ func (c *Core) Push(ctx context.Context, plan Plan, opts PushOptions) error {
 		return fmt.Errorf("push %s: %w", plan.GameID, err)
 	}
 	defer release()
-	game, err := c.local.GameLocal(ctx, plan.GameID)
+	game, err := c.cfg.Local.GameLocal(ctx, plan.GameID)
 	if err != nil {
 		return fmt.Errorf("read game %s: %w", plan.GameID, err)
 	}
@@ -63,20 +55,20 @@ func (c *Core) Push(ctx context.Context, plan Plan, opts PushOptions) error {
 		return err
 	}
 
-	generation, err := c.newGeneration()
+	generation, err := c.cfg.NewGeneration()
 	if err != nil {
 		return err
 	}
 	body, err := json.Marshal(Manifest{
 		Version:    1,
-		CreatedAt:  c.now().UTC().Format(timeLayout),
-		DeviceName: c.deviceName,
+		CreatedAt:  c.cfg.Now().UTC().Format(timeLayout),
+		DeviceName: c.cfg.DeviceName,
 		Entries:    plan.Local.Entries,
 	})
 	if err != nil {
 		return fmt.Errorf("marshal manifest: %w", err)
 	}
-	if err := c.remote.Put(ctx, manifestKey(plan.GameID, generation), bytes.NewReader(body), int64(len(body))); err != nil {
+	if err := c.cfg.Remote.Put(ctx, manifestKey(plan.GameID, generation), bytes.NewReader(body), int64(len(body))); err != nil {
 		return err
 	}
 
@@ -88,13 +80,13 @@ func (c *Core) Push(ctx context.Context, plan Plan, opts PushOptions) error {
 	// HEAD の PUT を始めた後は、キャンセルされても最後まで進める。リモートに HEAD が書けた後で止めると
 	// （応答を待つ間のキャンセルも含む）、成功した Push を失敗と伝える
 	committing := context.WithoutCancel(ctx)
-	if err := c.remote.Put(committing, headKey(plan.GameID), strings.NewReader(generation), int64(len(generation))); err != nil {
+	if err := c.cfg.Remote.Put(committing, headKey(plan.GameID), strings.NewReader(generation), int64(len(generation))); err != nil {
 		return err
 	}
-	if err := c.local.SetBase(committing, plan.GameID, plan.Local.Hash); err != nil {
+	if err := c.cfg.Local.SetBase(committing, plan.GameID, plan.Local.Hash); err != nil {
 		return fmt.Errorf("set base: %w", err)
 	}
-	c.logger.InfoContext(committing, "pushed", "game", plan.GameID, "generation", generation)
+	c.cfg.Logger.InfoContext(committing, "pushed", "game", plan.GameID, "generation", generation)
 	// GC は止めても次の Push で片付く（仕様書 5-I3）ので、キャンセルを無視しない
 	c.collectGarbage(ctx, plan.GameID, generation)
 	return nil
@@ -102,7 +94,7 @@ func (c *Core) Push(ctx context.Context, plan Plan, opts PushOptions) error {
 
 // uploadMissing は objects/ の一覧にない object だけを、sha256 の重複を除いて並列にアップロードする。
 func (c *Core) uploadMissing(ctx context.Context, gameID, root string, entries []Entry) error {
-	keys, err := c.remote.List(ctx, objectsPrefix(gameID))
+	keys, err := c.cfg.Remote.List(ctx, objectsPrefix(gameID))
 	if err != nil {
 		return err
 	}
@@ -141,5 +133,5 @@ func (c *Core) uploadObject(ctx context.Context, key, root string, e Entry) erro
 	if int64(len(b)) != e.Size || hex.EncodeToString(sum[:]) != e.SHA256 {
 		return fmt.Errorf("%s changed after approval: %w", e.Path, ErrPlanStale)
 	}
-	return c.remote.Put(ctx, key, bytes.NewReader(b), int64(len(b)))
+	return c.cfg.Remote.Put(ctx, key, bytes.NewReader(b), int64(len(b)))
 }

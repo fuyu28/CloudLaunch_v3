@@ -20,6 +20,9 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+// store にも同じ書式の定数がある。片方だけ変えないよう、両方のテストで書式を固定している（#47）
+const timeLayout = "2006-01-02T15:04:05.000Z"
+
 type Entry struct {
 	Path   string `json:"path"`
 	SHA256 string `json:"sha256"`

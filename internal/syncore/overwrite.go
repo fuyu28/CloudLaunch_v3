@@ -49,7 +49,7 @@ func (c *Core) finishSameContent(ctx context.Context, plan Plan, saveFolder stri
 	if !plan.RecordBase {
 		return nil
 	}
-	if err := c.local.SetBase(ctx, plan.GameID, plan.Local.Hash); err != nil {
+	if err := c.cfg.Local.SetBase(ctx, plan.GameID, plan.Local.Hash); err != nil {
 		return fmt.Errorf("set base: %w", err)
 	}
 	return nil

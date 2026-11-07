@@ -18,11 +18,6 @@ const (
 	backupsKept      = 3
 )
 
-var (
-	errBackupsDirNotSet = errors.New("backups directory is not configured")
-	errRenameNotSet     = errors.New("rename is not configured")
-)
-
 var backupNamePattern = regexp.MustCompile(`^[0-9]{8}T[0-9]{6}\.[0-9]{3}Z-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
 func backupName(startedAt time.Time, opID string) string {
@@ -46,10 +41,10 @@ func (c *Core) backupOld(ctx context.Context, gameID, old string, startedAt time
 // 完全なコピーを途中まで消えた old で上書きしない。
 func (c *Core) moveToBackup(ctx context.Context, gameID, old, name string) error {
 	// 空のまま Join すると、作業ディレクトリの下に移してしまう
-	if c.backupsDir == "" {
+	if c.cfg.BackupsDir == "" {
 		return errBackupsDirNotSet
 	}
-	dir := filepath.Join(c.backupsDir, gameID)
+	dir := filepath.Join(c.cfg.BackupsDir, gameID)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("create backups directory: %w", err)
 	}
@@ -64,7 +59,7 @@ func (c *Core) moveToBackup(ctx context.Context, gameID, old, name string) error
 
 	// リネームの失敗の理由は見分けない。ボリュームの違いは OS ごとに別のエラーになり、
 	// ほかの理由で失敗したのなら、コピーも同じ理由で失敗する
-	renameErr := c.rename(old, dst)
+	renameErr := c.cfg.Rename(old, dst)
 	if renameErr == nil {
 		return nil
 	}
@@ -84,7 +79,7 @@ func (c *Core) moveToBackup(ctx context.Context, gameID, old, name string) error
 		}
 		return errors.Join(renameErr, fmt.Errorf("copy to backup: %w", err))
 	}
-	if err := c.rename(partial, dst); err != nil {
+	if err := c.cfg.Rename(partial, dst); err != nil {
 		return errors.Join(renameErr, fmt.Errorf("rename partial backup: %w", err))
 	}
 	return removeOld(old)
@@ -147,10 +142,10 @@ func (c *Core) copyFile(src, dst string) error {
 // 時計が戻って名前が古くなっていても消さない（仕様書 3 章）。
 // 削除に失敗しても警告を出すだけにする。古いバックアップが残っても、セーブは失われないため（仕様書 6 章の手順 9）。
 func (c *Core) pruneBackups(ctx context.Context, gameID, created string) {
-	dir := filepath.Join(c.backupsDir, gameID)
+	dir := filepath.Join(c.cfg.BackupsDir, gameID)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		c.logger.WarnContext(ctx, "could not list backups", "game", gameID, "error", err)
+		c.cfg.Logger.WarnContext(ctx, "could not list backups", "game", gameID, "error", err)
 		return
 	}
 	var names []string
@@ -165,7 +160,7 @@ func (c *Core) pruneBackups(ctx context.Context, gameID, created string) {
 			continue
 		}
 		if err := os.RemoveAll(filepath.Join(dir, name)); err != nil {
-			c.logger.WarnContext(ctx, "could not remove old backup", "game", gameID, "backup", name, "error", err)
+			c.cfg.Logger.WarnContext(ctx, "could not remove old backup", "game", gameID, "backup", name, "error", err)
 		}
 	}
 }
