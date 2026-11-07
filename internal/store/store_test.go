@@ -43,7 +43,7 @@ func TestOpen(t *testing.T) {
 			t.Fatalf("rows: %v", err)
 		}
 
-		want := []string{"game_locals", "games", "hash_cache", "legacy_sessions", "play_sessions", "pull_operations", "settings"}
+		want := []string{"game_locals", "games", "legacy_sessions", "play_sessions", "pull_operations", "settings"}
 		if d := cmp.Diff(want, got); d != "" {
 			t.Errorf("tables (-want +got):\n%s", d)
 		}
