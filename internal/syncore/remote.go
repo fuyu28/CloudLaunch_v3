@@ -17,8 +17,12 @@ func headKey(gameID string) string {
 	return "games/" + gameID + "/HEAD"
 }
 
+func manifestsPrefix(gameID string) string {
+	return "games/" + gameID + "/manifests/"
+}
+
 func manifestKey(gameID, generation string) string {
-	return "games/" + gameID + "/manifests/" + generation + ".json"
+	return manifestsPrefix(gameID) + generation + ".json"
 }
 
 func objectsPrefix(gameID string) string {
@@ -52,18 +56,26 @@ func (c *Core) readRemote(ctx context.Context, gameID string) (RemoteState, erro
 		return RemoteState{}, err
 	}
 
+	m, err := c.readManifest(ctx, gameID, generation)
+	if err != nil {
+		return RemoteState{}, fmt.Errorf("manifest pointed by HEAD: %w", err)
+	}
+	return RemoteState{Generation: generation, Manifest: m, Hash: ManifestHash(m.Entries)}, nil
+}
+
+func (c *Core) readManifest(ctx context.Context, gameID, generation string) (Manifest, error) {
 	body, err := c.getAll(ctx, manifestKey(gameID, generation))
 	if err != nil {
-		return RemoteState{}, fmt.Errorf("read manifest %s pointed by HEAD: %w", generation, err)
+		return Manifest{}, fmt.Errorf("read manifest %s: %w", generation, err)
 	}
 	var m Manifest
 	if err := json.Unmarshal(body, &m); err != nil {
-		return RemoteState{}, fmt.Errorf("parse manifest %s: %w", generation, err)
+		return Manifest{}, fmt.Errorf("parse manifest %s: %w", generation, err)
 	}
 	if m.Version != 1 {
-		return RemoteState{}, fmt.Errorf("manifest %s has unsupported version %d", generation, m.Version)
+		return Manifest{}, fmt.Errorf("manifest %s has unsupported version %d", generation, m.Version)
 	}
-	return RemoteState{Generation: generation, Manifest: m, Hash: ManifestHash(m.Entries)}, nil
+	return m, nil
 }
 
 func (c *Core) getAll(ctx context.Context, key string) ([]byte, error) {
