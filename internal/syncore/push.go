@@ -25,10 +25,14 @@ const (
 	timeLayout    = "2006-01-02T15:04:05.000Z"
 )
 
-// Push は判定が Push の plan だけを受け付ける。手順 8（古い世代の削除と GC）は行わない。
-func (c *Core) Push(ctx context.Context, plan Plan) error {
-	if plan.Decision != DecisionPush {
-		return fmt.Errorf("push %s: decision is %v, not Push", plan.GameID, plan.Decision)
+// Push は、上書き（opts.Overwrite）でなければ、判定が Push の plan だけを受け付ける。手順 8（古い世代の削除と GC）は行わない。
+func (c *Core) Push(ctx context.Context, plan Plan, opts PushOptions) error {
+	done, err := c.acceptPlan(ctx, plan, opts.Overwrite, DecisionPush, plan.Local.Hash, ErrLocalMissing)
+	if err != nil {
+		return fmt.Errorf("push %s: %w", plan.GameID, err)
+	}
+	if done {
+		return nil
 	}
 	release, err := c.acquire(ctx)
 	if err != nil {

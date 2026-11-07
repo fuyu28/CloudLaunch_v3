@@ -17,11 +17,15 @@ import (
 
 var drivePattern = regexp.MustCompile(`[A-Za-z]:`)
 
-// Pull は判定が Pull の plan だけを受け付ける。入れ替えを始めた後に失敗したときは、ジャーナルを残してエラーを返す。
-// 残った状態は仕様書 6 章の復旧表の行に当たり、Recover が片付ける。
-func (c *Core) Pull(ctx context.Context, plan Plan) error {
-	if plan.Decision != DecisionPull {
-		return fmt.Errorf("pull %s: decision is %v, not Pull", plan.GameID, plan.Decision)
+// Pull は、上書き（opts.Overwrite）でなければ、判定が Pull の plan だけを受け付ける。入れ替えを始めた後に失敗した
+// ときは、ジャーナルを残してエラーを返す。残った状態は仕様書 6 章の復旧表の行に当たり、Recover が片付ける。
+func (c *Core) Pull(ctx context.Context, plan Plan, opts PullOptions) error {
+	done, err := c.acceptPlan(ctx, plan, opts.Overwrite, DecisionPull, plan.Remote.Hash, ErrRemoteMissing)
+	if err != nil {
+		return fmt.Errorf("pull %s: %w", plan.GameID, err)
+	}
+	if done {
+		return nil
 	}
 	if err := validateEntries(plan.Remote.Manifest.Entries); err != nil {
 		return fmt.Errorf("pull %s: invalid manifest %s: %w", plan.GameID, plan.Remote.Generation, err)
