@@ -156,24 +156,42 @@ func TestOverwriteDownload(t *testing.T) {
 }
 
 func TestOverwrite拒否と変更なし(t *testing.T) {
-	t.Run("7-O3 local がなければ、アップロードで上書きを ErrLocalMissing で拒否し、何も書かない", func(t *testing.T) {
-		e := newEnv(t)
-		plan := planFor(t, e, overwriteSetup{base: owBase, remote: owBase}, syncore.DecisionConflict)
-		before := e.keys(t, "games/")
+	for _, tt := range []struct {
+		name     string
+		setup    overwriteSetup
+		decision syncore.Decision
+	}{
+		{
+			name:     "7-O3 local がなければ、アップロードで上書きを ErrLocalMissing で拒否し、何も書かない",
+			setup:    overwriteSetup{base: owBase, remote: owBase},
+			decision: syncore.DecisionConflict,
+		},
+		{
+			name:     "7-O3 base がなく local がなければ、アップロードで上書きを ErrLocalMissing で拒否し、何も書かない",
+			setup:    overwriteSetup{remote: owBase},
+			decision: syncore.DecisionPull,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			e := newEnv(t)
+			plan := planFor(t, e, tt.setup, tt.decision)
+			before := e.keys(t, "games/")
+			baseBefore := e.base(t)
 
-		if err := e.core.Push(t.Context(), plan, syncore.PushOptions{Overwrite: true}); !errors.Is(err, syncore.ErrLocalMissing) {
-			t.Fatalf("Push error = %v, want ErrLocalMissing", err)
-		}
-		if diff := cmp.Diff(before, e.keys(t, "games/")); diff != "" {
-			t.Errorf("リモートのキー (-want +got):\n%s", diff)
-		}
-		if head, _ := e.getObject(t, headKey()); head != testGeneration {
-			t.Errorf("HEAD = %q, want %q", head, testGeneration)
-		}
-		if got, want := e.base(t), syncore.ManifestHash(entriesOf(owBase)); got != want {
-			t.Errorf("base = %q, want %q", got, want)
-		}
-	})
+			if err := e.core.Push(t.Context(), plan, syncore.PushOptions{Overwrite: true}); !errors.Is(err, syncore.ErrLocalMissing) {
+				t.Fatalf("Push error = %v, want ErrLocalMissing", err)
+			}
+			if diff := cmp.Diff(before, e.keys(t, "games/")); diff != "" {
+				t.Errorf("リモートのキー (-want +got):\n%s", diff)
+			}
+			if head, _ := e.getObject(t, headKey()); head != testGeneration {
+				t.Errorf("HEAD = %q, want %q", head, testGeneration)
+			}
+			if got := e.base(t); got != baseBefore {
+				t.Errorf("base = %q, want %q", got, baseBefore)
+			}
+		})
+	}
 
 	t.Run("7-O4 remote がなければ、ダウンロードで上書きを ErrRemoteMissing で拒否し、何も変えない", func(t *testing.T) {
 		e := newEnv(t)
@@ -222,6 +240,84 @@ func TestOverwrite拒否と変更なし(t *testing.T) {
 		}
 		if got, want := e.base(t), syncore.ManifestHash(entriesOf(owLocal)); got != want {
 			t.Errorf("base = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("7-O5 base も同じなら、上書きしても何も書かない", func(t *testing.T) {
+		e := newEnv(t)
+		plan := planFor(t, e, overwriteSetup{base: owLocal, local: owLocal, remote: owLocal}, syncore.DecisionNoChange)
+		before := e.keys(t, "games/")
+
+		if err := e.core.Push(t.Context(), plan, syncore.PushOptions{Overwrite: true}); err != nil {
+			t.Fatalf("Push: %v", err)
+		}
+		if err := e.core.Pull(t.Context(), plan, syncore.PullOptions{Overwrite: true}); err != nil {
+			t.Fatalf("Pull: %v", err)
+		}
+		if diff := cmp.Diff(before, e.keys(t, "games/")); diff != "" {
+			t.Errorf("リモートのキー (-want +got):\n%s", diff)
+		}
+		if backups := e.gameBackups(t); len(backups) != 0 {
+			t.Errorf("バックアップができた: %v", backups)
+		}
+		if got, want := e.base(t), syncore.ManifestHash(entriesOf(owLocal)); got != want {
+			t.Errorf("base = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("7-O5 承認した後にセーブフォルダが変わっていれば、アップロードで上書きは ErrPlanStale で止まり、base を書かない", func(t *testing.T) {
+		e := newEnv(t)
+		plan := planFor(t, e, overwriteSetup{local: owLocal, remote: owLocal}, syncore.DecisionNoChange)
+		writeFiles(t, e.saveDir, map[string]string{"slot.sav": "changed"})
+
+		if err := e.core.Push(t.Context(), plan, syncore.PushOptions{Overwrite: true}); !errors.Is(err, syncore.ErrPlanStale) {
+			t.Fatalf("Push error = %v, want ErrPlanStale", err)
+		}
+		if base := e.base(t); base != "" {
+			t.Errorf("base = %q, want 空", base)
+		}
+	})
+
+	t.Run("7-O5 承認した後に HEAD が変わっていれば、ダウンロードで上書きは ErrPlanStale で止まり、base を書かない", func(t *testing.T) {
+		e := newEnv(t)
+		plan := planFor(t, e, overwriteSetup{local: owLocal, remote: owLocal}, syncore.DecisionNoChange)
+		e.putManifest(t, otherGeneration, entriesOf(owBase))
+		e.putObject(t, headKey(), otherGeneration)
+
+		if err := e.core.Pull(t.Context(), plan, syncore.PullOptions{Overwrite: true}); !errors.Is(err, syncore.ErrPlanStale) {
+			t.Fatalf("Pull error = %v, want ErrPlanStale", err)
+		}
+		if base := e.base(t); base != "" {
+			t.Errorf("base = %q, want 空", base)
+		}
+	})
+
+	t.Run("7-O5 ほかの同期が実行中なら、上書きは ErrSyncInProgress で止まり、base を書かない", func(t *testing.T) {
+		e := newEnv(t)
+		plan := planFor(t, e, overwriteSetup{local: owLocal, remote: owLocal}, syncore.DecisionNoChange)
+		e.lock.deny = true
+
+		if err := e.core.Push(t.Context(), plan, syncore.PushOptions{Overwrite: true}); !errors.Is(err, syncore.ErrSyncInProgress) {
+			t.Fatalf("Push error = %v, want ErrSyncInProgress", err)
+		}
+		if err := e.core.Pull(t.Context(), plan, syncore.PullOptions{Overwrite: true}); !errors.Is(err, syncore.ErrSyncInProgress) {
+			t.Fatalf("Pull error = %v, want ErrSyncInProgress", err)
+		}
+		if base := e.base(t); base != "" {
+			t.Errorf("base = %q, want 空", base)
+		}
+	})
+
+	t.Run("7章/上書き/上書きでも、承認した後にセーブフォルダが変わっていれば Push は ErrPlanStale で止まる", func(t *testing.T) {
+		e := newEnv(t)
+		plan := planFor(t, e, overwriteSetup{base: owBase, local: owLocal, remote: owRemote}, syncore.DecisionConflict)
+		writeFiles(t, e.saveDir, map[string]string{"slot.sav": "changed"})
+
+		if err := e.core.Push(t.Context(), plan, syncore.PushOptions{Overwrite: true}); !errors.Is(err, syncore.ErrPlanStale) {
+			t.Fatalf("Push error = %v, want ErrPlanStale", err)
+		}
+		if head, _ := e.getObject(t, headKey()); head != testGeneration {
+			t.Errorf("HEAD = %q, want %q", head, testGeneration)
 		}
 	})
 
