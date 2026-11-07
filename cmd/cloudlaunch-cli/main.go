@@ -40,19 +40,21 @@ func main() {
 }
 
 func run(ctx context.Context, args []string, stdout io.Writer) error {
-	if len(args) >= 2 && args[0] == "game" && args[1] == "add" {
-		return gameAdd(ctx, args[2:], stdout)
+	if len(args) == 0 {
+		return errors.New(usage)
 	}
-	if len(args) >= 1 && args[0] == "status" {
+	switch args[0] {
+	case "game":
+		if len(args) >= 2 && args[1] == "add" {
+			return gameAdd(ctx, args[2:], stdout)
+		}
+	case "status":
 		return status(ctx, args[1:], stdout)
-	}
-	if len(args) >= 1 && args[0] == "push" {
-		return push(ctx, args[1:], stdout)
-	}
-	if len(args) >= 1 && args[0] == "pull" {
-		return pull(ctx, args[1:], stdout)
-	}
-	if len(args) >= 1 && args[0] == "recover" {
+	case "push":
+		return transfer(ctx, args[1:], stdout, pushCommand)
+	case "pull":
+		return transfer(ctx, args[1:], stdout, pullCommand)
+	case "recover":
 		return recoverPulls(ctx, args[1:], stdout)
 	}
 	return errors.New(usage)
@@ -115,40 +117,42 @@ func recordBaseIfNeeded(ctx context.Context, core *syncore.Core, plan syncore.Pl
 	return err
 }
 
-// push は、コマンドの実行を承認とみなして確認を出さない（仕様書 7 章の確認は GUI が出す）。--overwrite を付けると、
-// 判定によらずアップロードで上書きする。
-func push(ctx context.Context, args []string, stdout io.Writer) error {
-	var overwrite bool
-	core, gameID, closeStore, err := openCore(ctx, "push", args, &overwrite)
-	if err != nil {
-		return err
-	}
-	defer closeStore()
-
-	plan, err := core.Status(ctx, gameID)
-	if err != nil {
-		return err
-	}
-	if err := printPlan(stdout, plan); err != nil {
-		return err
-	}
-	if plan.Decision != syncore.DecisionPush && !overwrite {
-		if _, err := fmt.Fprintln(stdout, "判定が Push でないので、アップロードしません（上書きするときは --overwrite を付ける）"); err != nil {
-			return err
-		}
-		return recordBaseIfNeeded(ctx, core, plan, stdout)
-	}
-	if err := core.Push(ctx, plan, syncore.PushOptions{Overwrite: overwrite}); err != nil {
-		return explainSyncError(err)
-	}
-	return printTransferred(stdout, plan, overwrite, "アップロードしました")
+// transferCommand は、push と pull で違う部分。
+type transferCommand struct {
+	name string
+	want syncore.Decision
+	// skipped は、判定が want でなく、上書きでもないときに出す
+	skipped string
+	done    string
+	exec    func(ctx context.Context, core *syncore.Core, plan syncore.Plan, overwrite bool) error
 }
 
-// pull は、push と同じくコマンドの実行を承認とみなして確認を出さない。--overwrite を付けると、判定によらず
-// ダウンロードで上書きする。
-func pull(ctx context.Context, args []string, stdout io.Writer) error {
+var (
+	pushCommand = transferCommand{
+		name:    "push",
+		want:    syncore.DecisionPush,
+		skipped: "判定が Push でないので、アップロードしません（上書きするときは --overwrite を付ける）",
+		done:    "アップロードしました",
+		exec: func(ctx context.Context, core *syncore.Core, plan syncore.Plan, overwrite bool) error {
+			return core.Push(ctx, plan, syncore.PushOptions{Overwrite: overwrite})
+		},
+	}
+	pullCommand = transferCommand{
+		name:    "pull",
+		want:    syncore.DecisionPull,
+		skipped: "判定が Pull でないので、ダウンロードしません（上書きするときは --overwrite を付ける）",
+		done:    "ダウンロードしました",
+		exec: func(ctx context.Context, core *syncore.Core, plan syncore.Plan, overwrite bool) error {
+			return core.Pull(ctx, plan, syncore.PullOptions{Overwrite: overwrite})
+		},
+	}
+)
+
+// transfer は push と pull を行う。コマンドの実行を承認とみなして確認を出さない（仕様書 7 章の確認は GUI が出す）。
+// --overwrite を付けると、判定によらず上書きする。
+func transfer(ctx context.Context, args []string, stdout io.Writer, cmd transferCommand) error {
 	var overwrite bool
-	core, gameID, closeStore, err := openCore(ctx, "pull", args, &overwrite)
+	core, gameID, closeStore, err := openCore(ctx, cmd.name, args, &overwrite)
 	if err != nil {
 		return err
 	}
@@ -161,16 +165,16 @@ func pull(ctx context.Context, args []string, stdout io.Writer) error {
 	if err := printPlan(stdout, plan); err != nil {
 		return err
 	}
-	if plan.Decision != syncore.DecisionPull && !overwrite {
-		if _, err := fmt.Fprintln(stdout, "判定が Pull でないので、ダウンロードしません（上書きするときは --overwrite を付ける）"); err != nil {
+	if plan.Decision != cmd.want && !overwrite {
+		if _, err := fmt.Fprintln(stdout, cmd.skipped); err != nil {
 			return err
 		}
 		return recordBaseIfNeeded(ctx, core, plan, stdout)
 	}
-	if err := core.Pull(ctx, plan, syncore.PullOptions{Overwrite: overwrite}); err != nil {
+	if err := cmd.exec(ctx, core, plan, overwrite); err != nil {
 		return explainSyncError(err)
 	}
-	return printTransferred(stdout, plan, overwrite, "ダウンロードしました")
+	return printTransferred(stdout, plan, overwrite, cmd.done)
 }
 
 // printTransferred は、上書きで local と remote が同じだったときは、コアが転送せずに base だけを記録している
