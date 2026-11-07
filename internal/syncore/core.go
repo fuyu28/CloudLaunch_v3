@@ -13,7 +13,6 @@ import (
 	"github.com/google/uuid"
 )
 
-// transferLimit は、Push・Pull・GC がリモートと並列にやりとりする数。
 const transferLimit = 8
 
 var (

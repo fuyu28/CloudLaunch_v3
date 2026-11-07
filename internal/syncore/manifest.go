@@ -20,7 +20,7 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-// timeLayout は、manifest の createdAt の書式（仕様書 3 章の日時）。store も同じ書式を持つ（#47）。
+// store にも同じ書式の定数がある。片方だけ変えないよう、両方のテストで書式を固定している（#47）
 const timeLayout = "2006-01-02T15:04:05.000Z"
 
 type Entry struct {
