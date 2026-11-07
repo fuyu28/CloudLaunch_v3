@@ -17,14 +17,6 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-// ErrPlanStale は、承認した後にセーブフォルダかリモートの状態が変わったことを表す。判定からやり直す。
-var ErrPlanStale = errors.New("plan is stale")
-
-const (
-	transferLimit = 8
-	timeLayout    = "2006-01-02T15:04:05.000Z"
-)
-
 // Push は、上書き（opts.Overwrite）でなければ、判定が Push の plan だけを受け付ける。手順 8（古い世代の削除と GC）の
 // 失敗とキャンセルは、ログに出すだけで、Push の結果には含めない。
 func (c *Core) Push(ctx context.Context, plan Plan, opts PushOptions) error {

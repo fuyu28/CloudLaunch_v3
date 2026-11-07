@@ -20,6 +20,9 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+// timeLayout は、manifest の createdAt の書式（仕様書 3 章の日時）。store も同じ書式を持つ（#47）。
+const timeLayout = "2006-01-02T15:04:05.000Z"
+
 type Entry struct {
 	Path   string `json:"path"`
 	SHA256 string `json:"sha256"`

@@ -18,11 +18,6 @@ const (
 	backupsKept      = 3
 )
 
-var (
-	errBackupsDirNotSet = errors.New("backups directory is not configured")
-	errRenameNotSet     = errors.New("rename is not configured")
-)
-
 var backupNamePattern = regexp.MustCompile(`^[0-9]{8}T[0-9]{6}\.[0-9]{3}Z-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
 func backupName(startedAt time.Time, opID string) string {
