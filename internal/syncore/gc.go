@@ -20,9 +20,9 @@ func (c *Core) collectGarbage(ctx context.Context, gameID, pushed string) {
 	switch {
 	case err == nil:
 	case errors.Is(err, context.Canceled):
-		c.logger.InfoContext(context.WithoutCancel(ctx), "garbage collection canceled", "game", gameID)
+		c.cfg.Logger.InfoContext(context.WithoutCancel(ctx), "garbage collection canceled", "game", gameID)
 	default:
-		c.logger.WarnContext(context.WithoutCancel(ctx), "garbage collection failed", "game", gameID, "err", err)
+		c.cfg.Logger.WarnContext(context.WithoutCancel(ctx), "garbage collection failed", "game", gameID, "err", err)
 	}
 }
 
@@ -36,7 +36,7 @@ func (c *Core) collectGarbage(ctx context.Context, gameID, pushed string) {
 // 読めなかった世代が参照する object を消すと、その世代を Pull できなくなるため。自分が書く形でない名前のキーは、
 // 数えも消しもしない。
 func (c *Core) gc(ctx context.Context, gameID, pushed string) error {
-	objects, err := c.remote.List(ctx, objectsPrefix(gameID))
+	objects, err := c.cfg.Remote.List(ctx, objectsPrefix(gameID))
 	if err != nil {
 		return fmt.Errorf("list objects: %w", err)
 	}
@@ -58,7 +58,7 @@ func (c *Core) gc(ctx context.Context, gameID, pushed string) error {
 			keep = append(keep, generation)
 		}
 	}
-	if err := c.remote.DeleteMany(ctx, drop); err != nil {
+	if err := c.cfg.Remote.DeleteMany(ctx, drop); err != nil {
 		return fmt.Errorf("delete old generations: %w", err)
 	}
 
@@ -73,11 +73,11 @@ func (c *Core) gc(ctx context.Context, gameID, pushed string) error {
 			unused = append(unused, key)
 		}
 	}
-	if err := c.remote.DeleteMany(ctx, unused); err != nil {
+	if err := c.cfg.Remote.DeleteMany(ctx, unused); err != nil {
 		return fmt.Errorf("delete unused objects: %w", err)
 	}
 	if len(drop) > 0 || len(unused) > 0 {
-		c.logger.InfoContext(ctx, "collected garbage", "game", gameID, "generations", len(drop), "objects", len(unused))
+		c.cfg.Logger.InfoContext(ctx, "collected garbage", "game", gameID, "generations", len(drop), "objects", len(unused))
 	}
 	return nil
 }
@@ -85,7 +85,7 @@ func (c *Core) gc(ctx context.Context, gameID, pushed string) error {
 // listGenerations は、世代を古い順に返す。UUIDv7 の文字列の順は、作った時刻の順になる。
 func (c *Core) listGenerations(ctx context.Context, gameID string) ([]string, error) {
 	prefix := manifestsPrefix(gameID)
-	keys, err := c.remote.List(ctx, prefix)
+	keys, err := c.cfg.Remote.List(ctx, prefix)
 	if err != nil {
 		return nil, fmt.Errorf("list manifests: %w", err)
 	}

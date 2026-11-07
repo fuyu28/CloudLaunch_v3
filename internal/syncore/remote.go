@@ -79,7 +79,7 @@ func (c *Core) readManifest(ctx context.Context, gameID, generation string) (Man
 }
 
 func (c *Core) getAll(ctx context.Context, key string) ([]byte, error) {
-	r, err := c.remote.Get(ctx, key)
+	r, err := c.cfg.Remote.Get(ctx, key)
 	if err != nil {
 		return nil, err
 	}

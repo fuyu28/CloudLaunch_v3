@@ -14,7 +14,7 @@ func (c *Core) writeFileSynced(dst string, r io.Reader) error {
 	}
 	_, err = io.Copy(f, r)
 	if err == nil {
-		err = c.syncFile(f)
+		err = c.cfg.SyncFile(f)
 	}
 	if closeErr := f.Close(); err == nil {
 		err = closeErr

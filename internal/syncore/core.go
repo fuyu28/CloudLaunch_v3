@@ -65,41 +65,18 @@ type Config struct {
 }
 
 type Core struct {
-	remote        ObjectStore
-	local         LocalStore
-	logger        *slog.Logger
-	deviceName    string
-	backupsDir    string
-	locker        Locker
-	processes     ProcessChecker
-	now           func() time.Time
-	newGeneration func() (string, error)
-	rename        func(oldpath, newpath string) error
-	syncFile      func(f *os.File) error
+	cfg Config
 }
 
 func New(cfg Config) *Core {
-	c := &Core{
-		remote:        cfg.Remote,
-		local:         cfg.Local,
-		logger:        cfg.Logger,
-		deviceName:    cfg.DeviceName,
-		backupsDir:    cfg.BackupsDir,
-		locker:        cfg.Locker,
-		processes:     cfg.Processes,
-		now:           cfg.Now,
-		newGeneration: cfg.NewGeneration,
-		rename:        cfg.Rename,
-		syncFile:      cfg.SyncFile,
+	if cfg.Now == nil {
+		cfg.Now = time.Now
 	}
-	if c.now == nil {
-		c.now = time.Now
+	if cfg.SyncFile == nil {
+		cfg.SyncFile = (*os.File).Sync
 	}
-	if c.syncFile == nil {
-		c.syncFile = (*os.File).Sync
-	}
-	if c.newGeneration == nil {
-		c.newGeneration = func() (string, error) {
+	if cfg.NewGeneration == nil {
+		cfg.NewGeneration = func() (string, error) {
 			u, err := uuid.NewV7()
 			if err != nil {
 				return "", fmt.Errorf("generate generation id: %w", err)
@@ -107,5 +84,5 @@ func New(cfg Config) *Core {
 			return u.String(), nil
 		}
 	}
-	return c
+	return &Core{cfg: cfg}
 }

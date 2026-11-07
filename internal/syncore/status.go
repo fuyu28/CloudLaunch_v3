@@ -63,7 +63,7 @@ type RemoteState struct {
 
 // Status はローカルにもリモートにも書き込まない。
 func (c *Core) Status(ctx context.Context, gameID string) (Plan, error) {
-	game, err := c.local.GameLocal(ctx, gameID)
+	game, err := c.cfg.Local.GameLocal(ctx, gameID)
 	if err != nil {
 		return Plan{}, fmt.Errorf("read game %s: %w", gameID, err)
 	}
@@ -94,7 +94,7 @@ func (c *Core) RecordBase(ctx context.Context, plan Plan) error {
 	if !plan.RecordBase {
 		return fmt.Errorf("record base %s: plan is not a record-base decision", plan.GameID)
 	}
-	if err := c.local.SetBase(ctx, plan.GameID, plan.Local.Hash); err != nil {
+	if err := c.cfg.Local.SetBase(ctx, plan.GameID, plan.Local.Hash); err != nil {
 		return fmt.Errorf("set base: %w", err)
 	}
 	return nil

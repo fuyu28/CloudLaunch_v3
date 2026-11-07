@@ -25,10 +25,10 @@ func (c *Core) Pull(ctx context.Context, plan Plan, opts PullOptions) error {
 		return fmt.Errorf("pull %s: invalid manifest %s: %w", plan.GameID, plan.Remote.Generation, err)
 	}
 	// 手順 9 で見つけると、live を入れ替えた後なので old とジャーナルが残る。何も変える前に止める
-	if c.backupsDir == "" {
+	if c.cfg.BackupsDir == "" {
 		return fmt.Errorf("pull %s: %w", plan.GameID, errBackupsDirNotSet)
 	}
-	if c.rename == nil {
+	if c.cfg.Rename == nil {
 		return fmt.Errorf("pull %s: %w", plan.GameID, errRenameNotSet)
 	}
 	release, err := c.acquire(ctx)
@@ -36,7 +36,7 @@ func (c *Core) Pull(ctx context.Context, plan Plan, opts PullOptions) error {
 		return fmt.Errorf("pull %s: %w", plan.GameID, err)
 	}
 	defer release()
-	game, err := c.local.GameLocal(ctx, plan.GameID)
+	game, err := c.cfg.Local.GameLocal(ctx, plan.GameID)
 	if err != nil {
 		return fmt.Errorf("read game %s: %w", plan.GameID, err)
 	}
@@ -60,8 +60,8 @@ func (c *Core) Pull(ctx context.Context, plan Plan, opts PullOptions) error {
 	opID := u.String()
 	stage := filepath.Join(parent, ".cloudlaunch-stage-"+opID)
 	old := filepath.Join(parent, ".cloudlaunch-old-"+opID)
-	startedAt := c.now()
-	if err := c.local.InsertPullOperation(ctx, opID, plan.GameID, live, stage, old, startedAt); err != nil {
+	startedAt := c.cfg.Now()
+	if err := c.cfg.Local.InsertPullOperation(ctx, opID, plan.GameID, live, stage, old, startedAt); err != nil {
 		return fmt.Errorf("write pull journal: %w", err)
 	}
 
@@ -74,7 +74,7 @@ func (c *Core) Pull(ctx context.Context, plan Plan, opts PullOptions) error {
 		return c.abortPull(ctx, opID, stage, err)
 	}
 	if hadLive {
-		if err := c.rename(live, old); err != nil {
+		if err := c.cfg.Rename(live, old); err != nil {
 			err = fmt.Errorf("move save folder to old: %w", err)
 			// live が残っていれば、リネームしていないので 6-A1 と同じく片付ける。live がなければ、リネームが済んでから
 			// 書き出しに失敗している。ジャーナルを消すとセーブフォルダがないまま復旧されないので、残して 6-R2 に任せる
@@ -85,13 +85,13 @@ func (c *Core) Pull(ctx context.Context, plan Plan, opts PullOptions) error {
 		}
 	}
 	// ここから先で失敗したときは、ジャーナルを残す。残った状態は復旧表の行に当たり、Recover が片付ける
-	if err := c.rename(stage, live); err != nil {
+	if err := c.cfg.Rename(stage, live); err != nil {
 		return fmt.Errorf("move stage to save folder: %w", err)
 	}
 	// live を入れ替えた後は、キャンセルされても最後まで進める。途中で止めると、セーブは新しくなったのに
 	// Pull が失敗と伝わり、old とジャーナルが残る
 	ctx = context.WithoutCancel(ctx)
-	if err := c.local.SetBase(ctx, plan.GameID, plan.Remote.Hash); err != nil {
+	if err := c.cfg.Local.SetBase(ctx, plan.GameID, plan.Remote.Hash); err != nil {
 		return fmt.Errorf("set base: %w", err)
 	}
 	if hadLive {
@@ -99,10 +99,10 @@ func (c *Core) Pull(ctx context.Context, plan Plan, opts PullOptions) error {
 			return err
 		}
 	}
-	if err := c.local.DeletePullOperation(ctx, opID); err != nil {
+	if err := c.cfg.Local.DeletePullOperation(ctx, opID); err != nil {
 		return fmt.Errorf("delete pull journal: %w", err)
 	}
-	c.logger.InfoContext(ctx, "pulled", "game", plan.GameID, "generation", plan.Remote.Generation)
+	c.cfg.Logger.InfoContext(ctx, "pulled", "game", plan.GameID, "generation", plan.Remote.Generation)
 	return nil
 }
 
@@ -138,7 +138,7 @@ func (c *Core) abortPull(ctx context.Context, opID, stage string, cause error) e
 	if err := os.RemoveAll(stage); err != nil {
 		return errors.Join(cause, fmt.Errorf("remove stage: %w", err))
 	}
-	if err := c.local.DeletePullOperation(context.WithoutCancel(ctx), opID); err != nil {
+	if err := c.cfg.Local.DeletePullOperation(context.WithoutCancel(ctx), opID); err != nil {
 		return errors.Join(cause, fmt.Errorf("delete pull journal: %w", err))
 	}
 	return cause
@@ -161,7 +161,7 @@ func (c *Core) downloadObject(ctx context.Context, key, dst string) error {
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return fmt.Errorf("create directory in stage: %w", err)
 	}
-	r, err := c.remote.Get(ctx, key)
+	r, err := c.cfg.Remote.Get(ctx, key)
 	if err != nil {
 		return fmt.Errorf("download object: %w", err)
 	}
