@@ -1,4 +1,4 @@
-// 上書き（仕様書 7 章）。判定によらず Push・Pull を行うときの入口の確かめ。
+// 上書き（仕様書 7 章）。判定によらず Push・Pull を行うときの入口の確かめと、local と remote が同じときの扱い。
 package syncore
 
 import (
@@ -24,27 +24,51 @@ type PullOptions struct {
 	Overwrite bool
 }
 
-// acceptPlan は、Push・Pull が plan を受け付けるかを確かめる。sourceHash は転送元（Push なら local、Pull なら
-// remote）のハッシュで、上書きのときに空なら errSourceMissing を返す。done が真なら、local と remote が同じなので、
-// 転送せずに成功とする（必要なら base を記録した後）。
-func (c *Core) acceptPlan(ctx context.Context, plan Plan, overwrite bool, want Decision, sourceHash string, errSourceMissing error) (done bool, err error) {
-	if !overwrite {
-		if plan.Decision != want {
-			return false, fmt.Errorf("decision is %v, not %v", plan.Decision, want)
-		}
-		return false, nil
+// SameContent は、local と remote が同じことを表す。上書きでも、このときは転送しない（仕様書 7-O5）。
+func (p Plan) SameContent() bool {
+	return p.Local.Hash != "" && p.Local.Hash == p.Remote.Hash
+}
+
+func checkDecision(plan Plan, overwrite bool, want Decision) error {
+	if overwrite || plan.Decision == want {
+		return nil
 	}
-	if sourceHash == "" {
-		return false, errSourceMissing
+	return fmt.Errorf("decision is %s, not %s", decisionName(plan.Decision), decisionName(want))
+}
+
+func decisionName(d Decision) string {
+	switch d {
+	case DecisionNoChange:
+		return "NoChange"
+	case DecisionPush:
+		return "Push"
+	case DecisionPull:
+		return "Pull"
+	case DecisionConflict:
+		return "Conflict"
 	}
-	// 中身が同じなら、転送しても結果が変わらない（仕様書 7-O5）
-	if plan.Local.Hash != plan.Remote.Hash {
-		return false, nil
+	return fmt.Sprintf("Decision(%d)", int(d))
+}
+
+// finishSameContent は、上書きで local と remote が同じときに、転送せずに base を記録する（仕様書 7-O5）。
+// 転送しなくても、承認した後に local か HEAD が変わっていれば ErrPlanStale を返す。利用者が見た「同じ」が
+// もう正しくなく、頼んだ上書きが行われないまま成功と伝わるのを防ぐため。同期ロックを取った後に呼ぶ。
+func (c *Core) finishSameContent(ctx context.Context, plan Plan, saveFolder string) error {
+	if err := ensureLocalUnchanged(ctx, saveFolder, plan); err != nil {
+		return err
 	}
-	if plan.RecordBase {
-		if err := c.RecordBase(ctx, plan); err != nil {
-			return true, err
-		}
+	head, err := c.readHead(ctx, plan.GameID)
+	if err != nil {
+		return err
 	}
-	return true, nil
+	if head != plan.Remote.Generation {
+		return fmt.Errorf("HEAD changed from %q to %q after approval: %w", plan.Remote.Generation, head, ErrPlanStale)
+	}
+	if !plan.RecordBase {
+		return nil
+	}
+	if err := c.local.SetBase(ctx, plan.GameID, plan.Local.Hash); err != nil {
+		return fmt.Errorf("set base: %w", err)
+	}
+	return nil
 }

@@ -27,12 +27,11 @@ const (
 
 // Push は、上書き（opts.Overwrite）でなければ、判定が Push の plan だけを受け付ける。手順 8（古い世代の削除と GC）は行わない。
 func (c *Core) Push(ctx context.Context, plan Plan, opts PushOptions) error {
-	done, err := c.acceptPlan(ctx, plan, opts.Overwrite, DecisionPush, plan.Local.Hash, ErrLocalMissing)
-	if err != nil {
+	if err := checkDecision(plan, opts.Overwrite, DecisionPush); err != nil {
 		return fmt.Errorf("push %s: %w", plan.GameID, err)
 	}
-	if done {
-		return nil
+	if opts.Overwrite && plan.Local.Hash == "" {
+		return fmt.Errorf("push %s: %w", plan.GameID, ErrLocalMissing)
 	}
 	release, err := c.acquire(ctx)
 	if err != nil {
@@ -46,6 +45,9 @@ func (c *Core) Push(ctx context.Context, plan Plan, opts PushOptions) error {
 	saveFolder := game.SaveFolderPath
 	if err := c.ensureGameNotRunning(game.ExePath); err != nil {
 		return fmt.Errorf("push %s: %w", plan.GameID, err)
+	}
+	if opts.Overwrite && plan.SameContent() {
+		return c.finishSameContent(ctx, plan, saveFolder)
 	}
 
 	if err := c.uploadMissing(ctx, plan.GameID, saveFolder, plan.Local.Entries); err != nil {

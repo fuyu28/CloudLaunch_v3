@@ -176,7 +176,7 @@ func pull(ctx context.Context, args []string, stdout io.Writer) error {
 // printTransferred は、上書きで local と remote が同じだったときは、コアが転送せずに base だけを記録している
 // （仕様書 7-O5）ので、転送したとは出さない。
 func printTransferred(w io.Writer, plan syncore.Plan, overwrite bool, done string) error {
-	if !overwrite || plan.Local.Hash != plan.Remote.Hash {
+	if !overwrite || !plan.SameContent() {
 		_, err := fmt.Fprintln(w, done)
 		return err
 	}
