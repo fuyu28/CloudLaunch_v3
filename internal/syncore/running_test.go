@@ -54,15 +54,7 @@ func TestGameRunning(t *testing.T) {
 		if err := e.core.Push(t.Context(), plan, syncore.PushOptions{}); !errors.Is(err, syncore.ErrGameRunning) {
 			t.Fatalf("Push error = %v, want ErrGameRunning", err)
 		}
-		if keys := e.keys(t, "games/"+testGameID+"/manifests/"); len(keys) != 0 {
-			t.Errorf("manifest を書いた: %v", keys)
-		}
-		if _, ok := e.getObject(t, headKey()); ok {
-			t.Error("HEAD を書いた")
-		}
-		if base := e.base(t); base != "" {
-			t.Errorf("base = %q, want 空", base)
-		}
+		assertNothingPublished(t, e)
 	})
 
 	t.Run("7章/実行中の確認/ダウンロードの途中でゲームが起動されたら、Pull は入れ替えずに stage とジャーナルを消す", func(t *testing.T) {

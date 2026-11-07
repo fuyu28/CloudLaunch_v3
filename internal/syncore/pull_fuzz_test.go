@@ -65,7 +65,7 @@ func FuzzPull不正なmanifest(f *testing.F) {
 			{Path: p1, SHA256: sha256Hex("x"), Size: 1},
 			{Path: p2, SHA256: sha256Hex("x"), Size: 1},
 		})
-		plan := pullPlan(t, e)
+		plan := e.planWant(t, syncore.DecisionPull)
 
 		err := e.core.Pull(t.Context(), plan, syncore.PullOptions{})
 		if err != nil {

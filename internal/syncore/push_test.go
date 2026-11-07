@@ -20,14 +20,7 @@ import (
 func approvedPush(t *testing.T, e env, files map[string]string) syncore.Plan {
 	t.Helper()
 	writeFiles(t, e.saveDir, files)
-	plan, err := e.status(t)
-	if err != nil {
-		t.Fatalf("Status: %v", err)
-	}
-	if plan.Decision != syncore.DecisionPush {
-		t.Fatalf("Decision = %v, want Push", plan.Decision)
-	}
-	return plan
+	return e.planWant(t, syncore.DecisionPush)
 }
 
 // recordObjectPuts は、Push が objects/ に PUT したキーを記録する。Push は並列に PUT するので、ロックを取って記録する。
@@ -46,15 +39,6 @@ func recordObjectPuts(e env) func() []string {
 		mu.Lock()
 		defer mu.Unlock()
 		return keys
-	}
-}
-
-func failPut(e env, keyPart string, err error) {
-	e.remote.Before = func(op memstore.Op, key string) error {
-		if op == memstore.OpPut && strings.Contains(key, keyPart) {
-			return err
-		}
-		return nil
 	}
 }
 
@@ -148,15 +132,9 @@ func TestPush(t *testing.T) {
 
 	t.Run("5章/Push/判定が Push でない plan はエラー", func(t *testing.T) {
 		e := newEnv(t)
-		plan, err := e.status(t)
-		if err != nil {
-			t.Fatalf("Status: %v", err)
-		}
-		if plan.Decision != syncore.DecisionNoChange {
-			t.Fatalf("Decision = %v, want 変更なし", plan.Decision)
-		}
+		plan := e.planWant(t, syncore.DecisionNoChange)
 
-		err = e.core.Push(t.Context(), plan, syncore.PushOptions{})
+		err := e.core.Push(t.Context(), plan, syncore.PushOptions{})
 		if err == nil || errors.Is(err, syncore.ErrPlanStale) {
 			t.Fatalf("Push error = %v, want an error other than ErrPlanStale", err)
 		}
@@ -194,21 +172,6 @@ func TestPush(t *testing.T) {
 func TestPush中止(t *testing.T) {
 	files := map[string]string{"slot1.sav": "one", "slot2.sav": "two"}
 	injected := errors.New("injected")
-
-	// assertNothingPublished は、manifest も HEAD も書かず、base も変えていないことを確かめる。
-	// 中止の前にアップロードした object は残ってよい（仕様書 5-I1 と同じく、GC で消える）
-	assertNothingPublished := func(t *testing.T, e env) {
-		t.Helper()
-		if keys := e.keys(t, "games/"+testGameID+"/manifests/"); len(keys) != 0 {
-			t.Errorf("manifest を書いた: %v", keys)
-		}
-		if _, ok := e.getObject(t, headKey()); ok {
-			t.Error("HEAD を書いた")
-		}
-		if base := e.base(t); base != "" {
-			t.Errorf("base = %q, want 空", base)
-		}
-	}
 
 	t.Run("5-P3 承認後にファイルが書き換わっていたら ErrPlanStale、ハッシュと違う中身の object を書かない", func(t *testing.T) {
 		e := newEnv(t)
@@ -283,39 +246,29 @@ func TestPush中止(t *testing.T) {
 	t.Run("5-P3 object の PUT が失敗したら中止、HEAD を変えない", func(t *testing.T) {
 		e := newEnv(t)
 		plan := approvedPush(t, e, files)
-		failPut(e, "/objects/", injected)
+		failOn(e, memstore.OpPut, "/objects/", injected)
 
 		if err := e.core.Push(t.Context(), plan, syncore.PushOptions{}); !errors.Is(err, injected) {
 			t.Fatalf("Push error = %v, want %v", err, injected)
 		}
-		if keys := e.keys(t, "games/"+testGameID+"/manifests/"); len(keys) != 0 {
-			t.Errorf("manifest を書いた: %v", keys)
-		}
-		if _, ok := e.getObject(t, headKey()); ok {
-			t.Error("HEAD を書いた")
-		}
+		assertNothingPublished(t, e)
 	})
 
 	t.Run("5-P4 manifest の PUT が失敗したら中止、HEAD を変えない", func(t *testing.T) {
 		e := newEnv(t)
 		plan := approvedPush(t, e, files)
-		failPut(e, "/manifests/", injected)
+		failOn(e, memstore.OpPut, "/manifests/", injected)
 
 		if err := e.core.Push(t.Context(), plan, syncore.PushOptions{}); !errors.Is(err, injected) {
 			t.Fatalf("Push error = %v, want %v", err, injected)
 		}
-		if _, ok := e.getObject(t, headKey()); ok {
-			t.Error("HEAD を書いた")
-		}
-		if base := e.base(t); base != "" {
-			t.Errorf("base = %q, want 空", base)
-		}
+		assertNothingPublished(t, e)
 	})
 
 	t.Run("5-P6 HEAD の PUT が失敗したら base を書かない", func(t *testing.T) {
 		e := newEnv(t)
 		plan := approvedPush(t, e, files)
-		failPut(e, "/HEAD", injected)
+		failOn(e, memstore.OpPut, "/HEAD", injected)
 
 		if err := e.core.Push(t.Context(), plan, syncore.PushOptions{}); !errors.Is(err, injected) {
 			t.Fatalf("Push error = %v, want %v", err, injected)

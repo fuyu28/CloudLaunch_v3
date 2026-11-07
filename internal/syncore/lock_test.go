@@ -101,12 +101,7 @@ func TestLock(t *testing.T) {
 		e := newEnv(t)
 		plan := approvedPush(t, e, files)
 		injected := errors.New("injected")
-		e.remote.Before = func(op memstore.Op, key string) error {
-			if op == memstore.OpPut {
-				return injected
-			}
-			return nil
-		}
+		failOn(e, memstore.OpPut, "", injected)
 
 		if err := e.core.Push(t.Context(), plan, syncore.PushOptions{}); !errors.Is(err, injected) {
 			t.Fatalf("Push error = %v, want %v", err, injected)

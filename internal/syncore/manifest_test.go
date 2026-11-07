@@ -100,9 +100,9 @@ func TestManifest(t *testing.T) {
 
 	t.Run("2章/manifest/version が 1 でなければエラー", func(t *testing.T) {
 		e := newEnv(t)
-		e.putObject(t, "games/"+testGameID+"/manifests/"+testGeneration+".json",
+		e.putObject(t, manifestKey(testGeneration),
 			`{"version":2,"createdAt":"2026-10-27T00:00:00.000Z","deviceName":"Other","entries":[]}`)
-		e.putObject(t, "games/"+testGameID+"/HEAD", testGeneration)
+		e.putObject(t, headKey(), testGeneration)
 
 		if _, err := e.status(t); err == nil {
 			t.Fatal("Status succeeded, want error for unknown version")
@@ -137,10 +137,10 @@ func TestManifestHash(t *testing.T) {
 		e := newEnv(t)
 		files := map[string]string{"slot1.sav": "local"}
 		writeFiles(t, e.saveDir, files)
-		e.putObject(t, "games/"+testGameID+"/manifests/"+testGeneration+".json",
+		e.putObject(t, manifestKey(testGeneration),
 			`{"version":1,"createdAt":"2000-01-01T00:00:00.000Z","deviceName":"Another",`+
 				`"entries":[{"path":"slot1.sav","sha256":"`+entriesOf(files)[0].SHA256+`","size":5}]}`)
-		e.putObject(t, "games/"+testGameID+"/HEAD", testGeneration)
+		e.putObject(t, headKey(), testGeneration)
 
 		plan, err := e.status(t)
 		if err != nil {
@@ -166,7 +166,7 @@ func TestHEAD(t *testing.T) {
 		t.Run("2章/HEAD/形式が違えばエラー/"+tt.name, func(t *testing.T) {
 			e := newEnv(t)
 			e.putGeneration(t, []syncore.Entry{})
-			e.putObject(t, "games/"+testGameID+"/HEAD", tt.head)
+			e.putObject(t, headKey(), tt.head)
 
 			if _, err := e.status(t); err == nil {
 				t.Fatalf("Status succeeded with HEAD %q, want error", tt.head)
@@ -176,7 +176,7 @@ func TestHEAD(t *testing.T) {
 
 	t.Run("2章/HEAD/指す manifest がなければエラー", func(t *testing.T) {
 		e := newEnv(t)
-		e.putObject(t, "games/"+testGameID+"/HEAD", testGeneration)
+		e.putObject(t, headKey(), testGeneration)
 
 		if _, err := e.status(t); err == nil {
 			t.Fatal("Status succeeded, want error for missing manifest")

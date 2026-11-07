@@ -30,9 +30,7 @@ func putOldGenerations(t *testing.T, e env, n int, extra map[int]map[string]stri
 		for path, content := range extra[i] {
 			files[path] = content
 		}
-		for _, content := range files {
-			e.putObject(t, objectKey(content), content)
-		}
+		e.putObjects(t, files)
 		e.putManifest(t, oldGeneration(i), entriesOf(files))
 	}
 	e.putObject(t, headKey(), oldGeneration(n))
@@ -73,18 +71,7 @@ func (e env) hasObject(t *testing.T, content string) bool {
 	return ok
 }
 
-func failOn(e env, op memstore.Op, keyPart string, err error) {
-	e.remote.Before = func(o memstore.Op, key string) error {
-		if o == op && strings.Contains(key, keyPart) {
-			return err
-		}
-		return nil
-	}
-}
-
 func TestPushGC(t *testing.T) {
-	manifestsPrefix := "games/" + testGameID + "/manifests/"
-
 	t.Run("2章/世代の保持と GC/新しい 10 個の世代を残し、古い世代を削除する", func(t *testing.T) {
 		e := newEnv(t)
 		putOldGenerations(t, e, 11, nil)
@@ -360,13 +347,7 @@ func TestPushGC(t *testing.T) {
 		e := newEnv(t)
 		putOldGenerations(t, e, 11, nil)
 		writeFiles(t, e.saveDir, map[string]string{"slot.sav": "new"})
-		plan, err := e.status(t)
-		if err != nil {
-			t.Fatalf("Status: %v", err)
-		}
-		if plan.Decision != syncore.DecisionConflict {
-			t.Fatalf("Decision = %v, want 競合", plan.Decision)
-		}
+		plan := e.planWant(t, syncore.DecisionConflict)
 
 		if err := e.core.Push(t.Context(), plan, syncore.PushOptions{Overwrite: true}); err != nil {
 			t.Fatalf("Push: %v", err)
@@ -382,13 +363,7 @@ func TestPushGC(t *testing.T) {
 		putOldGenerations(t, e, 11, nil)
 		e.putObject(t, objectKey("orphan"), "orphan")
 		writeFiles(t, e.saveDir, map[string]string{"slot.sav": genContent(11)})
-		plan, err := e.status(t)
-		if err != nil {
-			t.Fatalf("Status: %v", err)
-		}
-		if plan.Decision != syncore.DecisionNoChange {
-			t.Fatalf("Decision = %v, want 変更なし", plan.Decision)
-		}
+		plan := e.planWant(t, syncore.DecisionNoChange)
 
 		if err := e.core.Push(t.Context(), plan, syncore.PushOptions{Overwrite: true}); err != nil {
 			t.Fatalf("Push: %v", err)

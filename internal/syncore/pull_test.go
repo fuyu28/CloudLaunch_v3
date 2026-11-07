@@ -23,33 +23,14 @@ const otherGeneration = "0192d4e8-0000-7000-8000-0000000000cc"
 // approvedPull は、files の object と世代をリモートに置いて Status を呼び、判定が Pull の plan を返す。
 func approvedPull(t *testing.T, e env, files map[string]string) syncore.Plan {
 	t.Helper()
-	for _, content := range files {
-		e.putObject(t, objectKey(content), content)
-	}
-	e.putGeneration(t, entriesOf(files))
-	plan, err := e.status(t)
-	if err != nil {
-		t.Fatalf("Status: %v", err)
-	}
-	if plan.Decision != syncore.DecisionPull {
-		t.Fatalf("Decision = %v, want Pull", plan.Decision)
-	}
-	return plan
+	e.putRemoteFiles(t, files)
+	return e.planWant(t, syncore.DecisionPull)
 }
 
 func removeSaveDir(t *testing.T, e env) {
 	t.Helper()
 	if err := os.Remove(e.saveDir); err != nil {
 		t.Fatalf("remove save dir: %v", err)
-	}
-}
-
-func failGet(e env, keyPart string, err error) {
-	e.remote.Before = func(op memstore.Op, key string) error {
-		if op == memstore.OpGet && strings.Contains(key, keyPart) {
-			return err
-		}
-		return nil
 	}
 }
 
@@ -71,19 +52,6 @@ func assertAborted(t *testing.T, e env, wantFiles map[string]string) {
 	if base := e.base(t); base != "" {
 		t.Errorf("base = %q, want 空", base)
 	}
-}
-
-// pullPlan は Status を呼び、判定が Pull の plan を返す。
-func pullPlan(t *testing.T, e env) syncore.Plan {
-	t.Helper()
-	plan, err := e.status(t)
-	if err != nil {
-		t.Fatalf("Status: %v", err)
-	}
-	if plan.Decision != syncore.DecisionPull {
-		t.Fatalf("Decision = %v, want DecisionPull", plan.Decision)
-	}
-	return plan
 }
 
 // journalWrite は、ジャーナルを書いた 1 回の中身と、その時点で stage があったか。
@@ -129,7 +97,7 @@ func (e env) coreWithJournalSpy() (*syncore.Core, *journalSpy) {
 // 何も変えずに Pull が止まることを確かめる。
 func assertPullRejected(t *testing.T, e env) {
 	t.Helper()
-	plan := pullPlan(t, e)
+	plan := e.planWant(t, syncore.DecisionPull)
 	core, spy := e.coreWithJournalSpy()
 	var gets atomic.Int32
 	e.remote.Before = func(op memstore.Op, key string) error {
@@ -295,15 +263,9 @@ func TestPull(t *testing.T) {
 
 	t.Run("6章/Pull/判定が Pull でない plan はエラー", func(t *testing.T) {
 		e := newEnv(t)
-		plan, err := e.status(t)
-		if err != nil {
-			t.Fatalf("Status: %v", err)
-		}
-		if plan.Decision != syncore.DecisionNoChange {
-			t.Fatalf("Decision = %v, want 変更なし", plan.Decision)
-		}
+		plan := e.planWant(t, syncore.DecisionNoChange)
 
-		err = e.core.Pull(t.Context(), plan, syncore.PullOptions{})
+		err := e.core.Pull(t.Context(), plan, syncore.PullOptions{})
 		if err == nil || errors.Is(err, syncore.ErrPlanStale) {
 			t.Fatalf("Pull error = %v, want an error other than ErrPlanStale", err)
 		}
@@ -332,7 +294,7 @@ func TestPull中止(t *testing.T) {
 	t.Run("6-A1 object の取得が失敗したら中止し、stage とジャーナルを削除する", func(t *testing.T) {
 		e := newEnv(t)
 		plan := approvedPull(t, e, files)
-		failGet(e, "/objects/", injected)
+		failOn(e, memstore.OpGet, "/objects/", injected)
 
 		if err := e.core.Pull(t.Context(), plan, syncore.PullOptions{}); !errors.Is(err, injected) {
 			t.Fatalf("Pull error = %v, want %v", err, injected)
@@ -573,61 +535,29 @@ func TestPull不正なmanifest(t *testing.T) {
 		}
 	})
 
-	t.Run("6-M5 同じ綴りのディレクトリを共有するのは正当", func(t *testing.T) {
-		e := newEnv(t)
-		removeSaveDir(t, e)
-		files := map[string]string{"dir/a.sav": "one", "dir/b.sav": "two", "dir/sub/c.sav": "three"}
-		plan := approvedPull(t, e, files)
+	validTests := []struct {
+		name  string
+		files map[string]string
+	}{
+		{"6-M5 同じ綴りのディレクトリを共有するのは正当", map[string]string{"dir/a.sav": "one", "dir/b.sav": "two", "dir/sub/c.sav": "three"}},
+		{"6-M13 名前の先頭が同じだけのファイルとディレクトリは正当", map[string]string{"a": "one", "ab/c.sav": "two", "x.sav": "three", "x/b.sav": "four"}},
+		{"6-M10 予約名を名前の一部に含むだけなら正当", map[string]string{"console.sav": "one", "COM10": "two", "aux_1.sav": "three", " aux.sav": "four"}},
+		{"6-M3 要素の一部に .. を含むだけなら正当", map[string]string{"a..b.sav": "one", "dir/..c": "two"}},
+	}
+	for _, tt := range validTests {
+		t.Run(tt.name, func(t *testing.T) {
+			e := newEnv(t)
+			removeSaveDir(t, e)
+			plan := approvedPull(t, e, tt.files)
 
-		if err := e.core.Pull(t.Context(), plan, syncore.PullOptions{}); err != nil {
-			t.Fatalf("Pull: %v", err)
-		}
-		if diff := cmp.Diff(files, readFiles(t, e.saveDir)); diff != "" {
-			t.Errorf("セーブフォルダ (-want +got):\n%s", diff)
-		}
-	})
-
-	t.Run("6-M13 名前の先頭が同じだけのファイルとディレクトリは正当", func(t *testing.T) {
-		e := newEnv(t)
-		removeSaveDir(t, e)
-		files := map[string]string{"a": "one", "ab/c.sav": "two", "x.sav": "three", "x/b.sav": "four"}
-		plan := approvedPull(t, e, files)
-
-		if err := e.core.Pull(t.Context(), plan, syncore.PullOptions{}); err != nil {
-			t.Fatalf("Pull: %v", err)
-		}
-		if diff := cmp.Diff(files, readFiles(t, e.saveDir)); diff != "" {
-			t.Errorf("セーブフォルダ (-want +got):\n%s", diff)
-		}
-	})
-
-	t.Run("6-M10 予約名を名前の一部に含むだけなら正当", func(t *testing.T) {
-		e := newEnv(t)
-		removeSaveDir(t, e)
-		files := map[string]string{"console.sav": "one", "COM10": "two", "aux_1.sav": "three", " aux.sav": "four"}
-		plan := approvedPull(t, e, files)
-
-		if err := e.core.Pull(t.Context(), plan, syncore.PullOptions{}); err != nil {
-			t.Fatalf("Pull: %v", err)
-		}
-		if diff := cmp.Diff(files, readFiles(t, e.saveDir)); diff != "" {
-			t.Errorf("セーブフォルダ (-want +got):\n%s", diff)
-		}
-	})
-
-	t.Run("6-M3 要素の一部に .. を含むだけなら正当", func(t *testing.T) {
-		e := newEnv(t)
-		removeSaveDir(t, e)
-		files := map[string]string{"a..b.sav": "one", "dir/..c": "two"}
-		plan := approvedPull(t, e, files)
-
-		if err := e.core.Pull(t.Context(), plan, syncore.PullOptions{}); err != nil {
-			t.Fatalf("Pull: %v", err)
-		}
-		if diff := cmp.Diff(files, readFiles(t, e.saveDir)); diff != "" {
-			t.Errorf("セーブフォルダ (-want +got):\n%s", diff)
-		}
-	})
+			if err := e.core.Pull(t.Context(), plan, syncore.PullOptions{}); err != nil {
+				t.Fatalf("Pull: %v", err)
+			}
+			if diff := cmp.Diff(tt.files, readFiles(t, e.saveDir)); diff != "" {
+				t.Errorf("セーブフォルダ (-want +got):\n%s", diff)
+			}
+		})
+	}
 }
 
 func TestPull複数PC(t *testing.T) {
@@ -640,13 +570,7 @@ func TestPull複数PC(t *testing.T) {
 			t.Fatalf("Push: %v", err)
 		}
 
-		plan, err := b.status(t)
-		if err != nil {
-			t.Fatalf("Status: %v", err)
-		}
-		if plan.Decision != syncore.DecisionPull {
-			t.Fatalf("Decision = %v, want Pull", plan.Decision)
-		}
+		plan := b.planWant(t, syncore.DecisionPull)
 		if err := b.core.Pull(t.Context(), plan, syncore.PullOptions{}); err != nil {
 			t.Fatalf("Pull: %v", err)
 		}

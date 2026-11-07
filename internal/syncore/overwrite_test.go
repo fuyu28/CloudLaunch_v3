@@ -31,19 +31,9 @@ func planFor(t *testing.T, e env, setup overwriteSetup, want syncore.Decision) s
 		writeFiles(t, e.saveDir, setup.local)
 	}
 	if setup.remote != nil {
-		for _, content := range setup.remote {
-			e.putObject(t, objectKey(content), content)
-		}
-		e.putGeneration(t, entriesOf(setup.remote))
+		e.putRemoteFiles(t, setup.remote)
 	}
-	plan, err := e.status(t)
-	if err != nil {
-		t.Fatalf("Status: %v", err)
-	}
-	if plan.Decision != want {
-		t.Fatalf("Decision = %v, want %v", plan.Decision, want)
-	}
-	return plan
+	return e.planWant(t, want)
 }
 
 var (
