@@ -10,6 +10,7 @@ import (
 	"io"
 	"io/fs"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
 	"sort"
@@ -347,6 +348,20 @@ func (e env) putManifest(t *testing.T, generation string, entries []syncore.Entr
 		t.Fatalf("marshal manifest: %v", err)
 	}
 	e.putObject(t, manifestKey(generation), string(b))
+}
+
+// putRawManifest は、fields に version・createdAt・deviceName を足した JSON を世代の manifest として置き、
+// HEAD をその世代に向ける。entries を欠いた manifest や、Entry で表せない manifest を置くために使う。
+func (e env) putRawManifest(t *testing.T, fields map[string]any) {
+	t.Helper()
+	m := map[string]any{"version": 1, "createdAt": "2026-10-27T00:00:00.000Z", "deviceName": "Other"}
+	maps.Copy(m, fields)
+	b, err := json.Marshal(m)
+	if err != nil {
+		t.Fatalf("marshal manifest: %v", err)
+	}
+	e.putObject(t, manifestKey(testGeneration), string(b))
+	e.putObject(t, headKey(), testGeneration)
 }
 
 // putGeneration は、entries を持つ世代を置き、HEAD をその世代に向ける。

@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"golang.org/x/sync/errgroup"
 )
@@ -104,7 +105,7 @@ func localEntries(ctx context.Context, root string) ([]Entry, error) {
 		return nil, fmt.Errorf("save folder %s is not a plain directory (%s)", root, info.Mode().Type())
 	}
 
-	var rels []string
+	var paths []string
 	err = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -123,23 +124,34 @@ func localEntries(ctx context.Context, root string) ([]Entry, error) {
 		if err != nil {
 			return err
 		}
-		rels = append(rels, rel)
+		paths = append(paths, filepath.ToSlash(rel))
 		return nil
 	})
 	if err != nil {
 		return nil, fmt.Errorf("walk save folder: %w", err)
 	}
 
-	entries := make([]Entry, len(rels))
+	for _, p := range paths {
+		// JSON に書くと U+FFFD に置き換わり、local と remote の manifest ハッシュが一致しなくなる（仕様書 2 章）
+		if !utf8.ValidString(p) {
+			return nil, fmt.Errorf("path %q is not valid UTF-8", p)
+		}
+	}
+	// 当たる manifest を HEAD に書くと、どの PC も Pull できなくなる（仕様書 2 章）。ハッシュの計算を無駄にしないよう先に確かめる
+	if err := validatePaths(paths); err != nil {
+		return nil, fmt.Errorf("save folder %s: %w", root, err)
+	}
+
+	entries := make([]Entry, len(paths))
 	g, ctx := errgroup.WithContext(ctx)
 	g.SetLimit(runtime.NumCPU())
-	for i, rel := range rels {
+	for i, p := range paths {
 		g.Go(func() error {
-			sum, size, err := hashFile(ctx, filepath.Join(root, rel))
+			sum, size, err := hashFile(ctx, filepath.Join(root, filepath.FromSlash(p)))
 			if err != nil {
 				return err
 			}
-			entries[i] = Entry{Path: filepath.ToSlash(rel), SHA256: sum, Size: size}
+			entries[i] = Entry{Path: p, SHA256: sum, Size: size}
 			return nil
 		})
 	}

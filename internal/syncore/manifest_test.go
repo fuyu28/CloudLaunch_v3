@@ -3,6 +3,7 @@ package syncore_test
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -67,6 +68,34 @@ func TestManifest(t *testing.T) {
 			t.Fatal("Status succeeded, want error for non-regular file")
 		}
 	})
+
+	invalidNames := []struct {
+		name  string
+		files []string
+	}{
+		{"正しい UTF-8 でない path があればエラー", []string{"a\xffb.sav"}},
+		{"大文字小文字の違いだけで重複するファイルがあればエラー", []string{"Slot1.sav", "slot1.sav"}},
+		{"予約されたデバイス名のファイルがあればエラー", []string{"dir/aux.sav"}},
+		{"末尾が . のファイルがあればエラー", []string{"a.sav."}},
+		{"使えない文字を含むファイルがあればエラー", []string{"a:b.sav"}},
+	}
+	for _, tt := range invalidNames {
+		t.Run("2章/manifest の計算/"+tt.name, func(t *testing.T) {
+			if runtime.GOOS == "windows" {
+				t.Skip("Windows のファイルシステムには、この名前のファイルを作れない")
+			}
+			e := newEnv(t)
+			files := map[string]string{"ok.sav": "ok"}
+			for _, f := range tt.files {
+				files[f] = f
+			}
+			writeFiles(t, e.saveDir, files)
+
+			if _, err := e.status(t); err == nil {
+				t.Fatal("Status succeeded, want error for invalid path")
+			}
+		})
+	}
 
 	t.Run("2章/manifest/version が 1 でなければエラー", func(t *testing.T) {
 		e := newEnv(t)

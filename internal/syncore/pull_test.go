@@ -70,6 +70,34 @@ func assertAborted(t *testing.T, e env, wantFiles map[string]string) {
 	}
 }
 
+// assertPullRejected は、リモートの世代を不正な manifest として、object を取得せず、何も変えずに Pull が止まることを確かめる。
+func assertPullRejected(t *testing.T, e env) {
+	t.Helper()
+	plan, err := e.status(t)
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if plan.Decision != syncore.DecisionPull {
+		t.Fatalf("Decision = %v, want DecisionPull", plan.Decision)
+	}
+	var gets atomic.Int32
+	e.remote.Before = func(op memstore.Op, key string) error {
+		if op == memstore.OpGet && strings.Contains(key, "/objects/") {
+			gets.Add(1)
+		}
+		return nil
+	}
+
+	err = e.core.Pull(t.Context(), plan, syncore.PullOptions{})
+	if err == nil || errors.Is(err, syncore.ErrPlanStale) {
+		t.Fatalf("Pull error = %v, want an error other than ErrPlanStale", err)
+	}
+	if n := gets.Load(); n != 0 {
+		t.Errorf("object を %d 回取得した", n)
+	}
+	assertAborted(t, e, map[string]string{})
+}
+
 func TestPull(t *testing.T) {
 	files := map[string]string{"slot1.sav": "one", "dir/slot2.sav": "two"}
 
@@ -352,6 +380,21 @@ func TestPull不正なmanifest(t *testing.T) {
 		{"6-M3 末尾が「/」で空の要素がある", []string{"dir/"}},
 		{"6-M4 「\\」を含む", []string{`dir\a.sav`}},
 		{"6-M5 大文字小文字の違いだけで重複する", []string{"Slot1.sav", "slot1.sav"}},
+		{"6-M10 予約されたデバイス名", []string{"CON"}},
+		{"6-M10 予約されたデバイス名（小文字）", []string{"nul"}},
+		{"6-M10 拡張子の付いた予約されたデバイス名", []string{"aux.sav"}},
+		{"6-M10 途中の要素が予約されたデバイス名", []string{"dir/COM1/a.sav"}},
+		{"6-M10 上付き数字の予約されたデバイス名", []string{"COM¹.sav"}},
+		{"6-M10 CONIN$", []string{"CONIN$"}},
+		{"6-M11 要素の末尾が .", []string{"dir./a.sav"}},
+		{"6-M11 要素の末尾が空白", []string{"a.sav "}},
+		{"6-M12 使えない文字を含む（<）", []string{"a<b.sav"}},
+		{"6-M12 使えない文字を含む（>）", []string{"a>b.sav"}},
+		{"6-M12 使えない文字を含む（\"）", []string{`a"b.sav`}},
+		{"6-M12 使えない文字を含む（|）", []string{"a|b.sav"}},
+		{"6-M12 使えない文字を含む（?）", []string{"a?b.sav"}},
+		{"6-M12 使えない文字を含む（*）", []string{"a*b.sav"}},
+		{"6-M12 制御文字を含む", []string{"a\x01b.sav"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -360,30 +403,72 @@ func TestPull不正なmanifest(t *testing.T) {
 			for i, p := range tt.paths {
 				entries[i] = syncore.Entry{Path: p, SHA256: sha256Hex("x"), Size: 1}
 			}
-			e.putObject(t, objectKey("x"), "x")
 			e.putGeneration(t, entries)
-			plan, err := e.status(t)
-			if err != nil {
-				t.Fatalf("Status: %v", err)
-			}
-			var gets atomic.Int32
-			e.remote.Before = func(op memstore.Op, key string) error {
-				if op == memstore.OpGet && strings.Contains(key, "/objects/") {
-					gets.Add(1)
-				}
-				return nil
-			}
-
-			err = e.core.Pull(t.Context(), plan, syncore.PullOptions{})
-			if err == nil || errors.Is(err, syncore.ErrPlanStale) {
-				t.Fatalf("Pull error = %v, want an error other than ErrPlanStale", err)
-			}
-			if n := gets.Load(); n != 0 {
-				t.Errorf("object を %d 回取得した", n)
-			}
-			assertAborted(t, e, map[string]string{})
+			assertPullRejected(t, e)
 		})
 	}
+
+	x := syncore.Entry{Path: "a.sav", SHA256: sha256Hex("x"), Size: 1}
+	y := syncore.Entry{Path: "b.sav", SHA256: sha256Hex("y"), Size: 1}
+	withSHA := func(sum string) []syncore.Entry { return []syncore.Entry{{Path: "a.sav", SHA256: sum, Size: 1}} }
+	rawTests := []struct {
+		name    string
+		entries any
+	}{
+		{"6-M6 entries が null", nil},
+		{"6-M7 sha256 が 64 文字でない", withSHA(sha256Hex("x")[:63])},
+		{"6-M7 sha256 に大文字を含む", withSHA(strings.ToUpper(sha256Hex("x")))},
+		{"6-M7 sha256 に 16 進数でない文字を含む", withSHA("g" + sha256Hex("x")[1:])},
+		{"6-M8 size が負", []syncore.Entry{{Path: "a.sav", SHA256: sha256Hex("x"), Size: -1}}},
+		{"6-M9 path の昇順に並んでいない", []syncore.Entry{y, x}},
+		{"6-M9 同じ path が 2 つある", []syncore.Entry{x, x}},
+	}
+	for _, tt := range rawTests {
+		t.Run(tt.name, func(t *testing.T) {
+			e := newEnv(t)
+			e.putRawManifest(t, map[string]any{"entries": tt.entries})
+			assertPullRejected(t, e)
+		})
+	}
+
+	t.Run("6-M6 entries がない", func(t *testing.T) {
+		e := newEnv(t)
+		e.putRawManifest(t, map[string]any{})
+		assertPullRejected(t, e)
+	})
+
+	t.Run("6-M6 entries が [] の空 manifest は正当", func(t *testing.T) {
+		e := newEnv(t)
+		files := map[string]string{"slot1.sav": "local"}
+		writeFiles(t, e.saveDir, files)
+		e.setBase(t, syncore.ManifestHash(entriesOf(files)))
+		e.putGeneration(t, []syncore.Entry{})
+		plan, err := e.status(t)
+		if err != nil {
+			t.Fatalf("Status: %v", err)
+		}
+
+		if err := e.core.Pull(t.Context(), plan, syncore.PullOptions{}); err != nil {
+			t.Fatalf("Pull: %v", err)
+		}
+		if diff := cmp.Diff(map[string]string{}, readFiles(t, e.saveDir)); diff != "" {
+			t.Errorf("セーブフォルダ (-want +got):\n%s", diff)
+		}
+	})
+
+	t.Run("6-M10 予約名を名前の一部に含むだけなら正当", func(t *testing.T) {
+		e := newEnv(t)
+		removeSaveDir(t, e)
+		files := map[string]string{"console.sav": "one", "COM10": "two", "aux_1.sav": "three"}
+		plan := approvedPull(t, e, files)
+
+		if err := e.core.Pull(t.Context(), plan, syncore.PullOptions{}); err != nil {
+			t.Fatalf("Pull: %v", err)
+		}
+		if diff := cmp.Diff(files, readFiles(t, e.saveDir)); diff != "" {
+			t.Errorf("セーブフォルダ (-want +got):\n%s", diff)
+		}
+	})
 
 	t.Run("6-M3 要素の一部に .. を含むだけなら正当", func(t *testing.T) {
 		e := newEnv(t)
