@@ -23,7 +23,7 @@ Go（同期コア + CLI）と Wails（UI）で作る。
 - M1 では、端から端まで一番細い道（`game add` → `status` → `push` → 別のフォルダで `pull`、判定は「base なし」の行だけ）を MinIO 相手に通し、つなぎ目の問題を先に出す
 - PR は仕様書の節ごとに、テストから CLI まで縦に通して切る。層ごと（DB だけ、コアだけ）には切らない
 - PR の中は、テストだけのコミット（失敗する状態）を先に積み、実装のコミットを後に積む。オーナーはテストのコミットで、仕様どおりのことが検査されているかを確かめる
-- 仕様書の検査できる項目（判定表の行、Push・Pull の手順、Push の中断、Pull の中止、復旧表の行、不正な manifest の条件）には、`{章}-{種類}{番号}`（例: `4-D7`）の ID を振ってある。テストのケース名に ID を入れ、テストのない ID を CI（`scripts/spec-ids.sh`、手元では `mise run spec-ids`）で一覧にする。一覧は CI を失敗させない
+- 仕様書の検査できる項目（判定表の行、Push・Pull の手順、Push の中断、Pull の中止、復旧表の行、不正な manifest の条件、メタ情報の同期と旧版の取り込みの規則・手順（8・9 章））には、`{章}-{種類}{番号}`（例: `4-D7`）の ID を振ってある。テストのケース名に ID を入れ、テストのない ID を CI（`scripts/spec-ids.sh`、手元では `mise run spec-ids`）で一覧にする。一覧は CI を失敗させない
   - 仕様書の行を足したり消したりしても、既存の ID は振り直さない。消した行の ID は欠番にし、再利用しない。振り直すと、テスト名の ID が別の行を指すようになるため
 - M2 が終わったら、バックアップを取ったうえで、実際のゲームのセーブで CLI を使い始める
 
@@ -58,7 +58,7 @@ internal/platform/     OS 固有の処理（PC 全体の同期ロックに使う
 - SQLite には `database/sql` で生の SQL を書く
 - ログは `log/slog` を使い、コアは `*slog.Logger` を受け取る。出力先は配線の側で決める
 - OS 固有の処理は、同じパッケージの中でファイル名の接尾辞（`_windows.go` / `_linux.go`）で分ける。製品として保証するのは Windows で、Linux の実装は開発用の最小限にとどめる。macOS は扱わない
-- CLI は標準の `flag` で書き、`status` / `push` / `pull` / `recover` / `game add` を持つ。v1 の CLI は同期コアを動かして確かめるための道具で、ゲームの管理は GUI で行う
+- CLI は標準の `flag` で書き、`status` / `push` / `pull` / `recover` と、`game add` / `game edit` / `game set-image` / `game remote` / `game import` / `game delete` / `game reupload`、`session add`、`legacy import` / `legacy link` を持つ。v1 の CLI は同期コアを動かして確かめるための道具で、ゲームの管理は GUI で行う
 - GUI（Wails）の配置は、GUI の段階で決める
 
 ## テスト
