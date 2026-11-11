@@ -73,6 +73,7 @@ func (c *Core) uploadSessions(ctx context.Context, gameID string) (int, error) {
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(transferLimit)
 	n := 0
+	stopped := false
 	for _, s := range local {
 		if !ValidSessionID(s.ID) {
 			c.cfg.Logger.Warn("skip session with invalid id", "gameId", gameID, "sessionId", s.ID)
@@ -84,6 +85,7 @@ func (c *Core) uploadSessions(ctx context.Context, gameID string) (int, error) {
 		// 失敗した後に空いた枠で次の PUT を始めないよう、キャンセルを確かめてから入れ、始める前にも確かめる。
 		// Put が ctx を見るかは実装によるため
 		if gctx.Err() != nil {
+			stopped = true
 			break
 		}
 		n++
@@ -96,6 +98,10 @@ func (c *Core) uploadSessions(ctx context.Context, gameID string) (int, error) {
 	}
 	if err := g.Wait(); err != nil {
 		return 0, err
+	}
+	// 入れた PUT がすべて成功していても、呼び出し側のキャンセルで残りを入れずに抜けたなら、成功とは返さない
+	if stopped {
+		return 0, ctx.Err()
 	}
 	return n, nil
 }
