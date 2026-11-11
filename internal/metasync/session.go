@@ -20,6 +20,10 @@ const (
 // sessionIDPattern は、UUIDv7 の形（仕様書 2 章の HEAD と同じ）か、旧版の 32 桁の小文字 16 進に当たる（8-S6）。
 var sessionIDPattern = regexp.MustCompile(`^(?:[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|[0-9a-f]{32})$`)
 
+func ValidSessionID(id string) bool {
+	return sessionIDPattern.MatchString(id)
+}
+
 type sessionJSON struct {
 	ID          string `json:"id"`
 	GameID      string `json:"gameId"`
@@ -46,7 +50,7 @@ func (c *Core) remoteSessionIDs(ctx context.Context, gameID string) (map[string]
 	ids := map[string]bool{}
 	for _, key := range keys {
 		id, ok := strings.CutSuffix(strings.TrimPrefix(key, prefix), ".json")
-		if ok && sessionIDPattern.MatchString(id) {
+		if ok && ValidSessionID(id) {
 			ids[id] = true
 		}
 	}
@@ -55,6 +59,7 @@ func (c *Core) remoteSessionIDs(ctx context.Context, gameID string) (map[string]
 
 // uploadSessions は、ローカルにだけあるセッションを PUT し（8-S1）、PUT した件数を返す。1 件が失敗したら残りを止める。
 // 先に PUT できた分は残るが、同期済みのフラグを持たず毎回リモートの一覧と突き合わせるので、次の同期で残りが PUT される。
+// DB に入れるときにも ID を検証するが（store.CreateSession）、DB を直接書き換えられたときのために、ここでも飛ばす。
 func (c *Core) uploadSessions(ctx context.Context, gameID string) (int, error) {
 	local, err := c.cfg.Local.Sessions(ctx, gameID)
 	if err != nil {
@@ -69,15 +74,25 @@ func (c *Core) uploadSessions(ctx context.Context, gameID string) (int, error) {
 	g.SetLimit(transferLimit)
 	n := 0
 	for _, s := range local {
-		if !sessionIDPattern.MatchString(s.ID) {
+		if !ValidSessionID(s.ID) {
 			c.cfg.Logger.Warn("skip session with invalid id", "gameId", gameID, "sessionId", s.ID)
 			continue
 		}
 		if remote[s.ID] {
 			continue
 		}
+		// 失敗した後に空いた枠で次の PUT を始めないよう、キャンセルを確かめてから入れ、始める前にも確かめる。
+		// Put が ctx を見るかは実装によるため
+		if gctx.Err() != nil {
+			break
+		}
 		n++
-		g.Go(func() error { return c.putSession(gctx, s) })
+		g.Go(func() error {
+			if err := gctx.Err(); err != nil {
+				return err
+			}
+			return c.putSession(gctx, s)
+		})
 	}
 	if err := g.Wait(); err != nil {
 		return 0, err

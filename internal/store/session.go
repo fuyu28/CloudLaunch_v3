@@ -9,8 +9,15 @@ import (
 	"github.com/fuyu28/CloudLaunch_v3/internal/metasync"
 )
 
-// CreateSession は、PlayedAt を UTC のミリ秒に切り捨てて書く（仕様書 3 章の日時の形）。
+// CreateSession は、PlayedAt を UTC のミリ秒に切り捨てて書く（仕様書 3 章の日時の形）。ID が仕様書 8-S6 に合わないときと、
+// UTC の年が 4 桁に収まらないときは書かない。4 桁を超える年は固定長の形で読み戻せず、そのゲームの Sessions が毎回失敗するため。
 func (s *Store) CreateSession(ctx context.Context, sess metasync.Session) error {
+	if !metasync.ValidSessionID(sess.ID) {
+		return fmt.Errorf("invalid session id: %q", sess.ID)
+	}
+	if y := sess.PlayedAt.UTC().Year(); y < 0 || y > 9999 {
+		return fmt.Errorf("played_at out of range: %s", sess.PlayedAt)
+	}
 	if _, err := s.db.ExecContext(ctx,
 		`INSERT INTO play_sessions (id, game_id, played_at, duration_sec) VALUES (?, ?, ?, ?)`,
 		sess.ID, sess.GameID, formatTime(sess.PlayedAt), sess.DurationSec); err != nil {
