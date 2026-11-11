@@ -200,6 +200,9 @@ func Run(t *testing.T, store Store) {
 		{"DeleteMany", func(ctx context.Context, p string) error {
 			return store.DeleteMany(ctx, []string{p + "a"})
 		}},
+		{"空のキーでの DeleteMany", func(ctx context.Context, p string) error {
+			return store.DeleteMany(ctx, nil)
+		}},
 	}
 	for _, tt := range cancelCases {
 		t.Run("objstore/"+tt.name+" はキャンセル済みの ctx ではリモートに触れずに ctx のエラーを返す", func(t *testing.T) {
