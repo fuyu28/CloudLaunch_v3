@@ -3,7 +3,7 @@ package metasync
 
 import (
 	"context"
-	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"time"
@@ -46,6 +46,18 @@ type Result struct {
 }
 
 // Sync は、1 つのゲームのメタ情報を同期する。同期ロックは握らない（仕様書 3 章「排他」）。
+// ゲームの tombstone の記録があれば、リモートに触れずにゼロ値を返す（仕様書 8-M4）。
 func (c *Core) Sync(ctx context.Context, gameID string) (Result, error) {
-	return Result{}, errors.New("not implemented")
+	deleted, err := c.cfg.Local.RemoteDeleted(ctx, gameID)
+	if err != nil {
+		return Result{}, fmt.Errorf("read remote deleted: %w", err)
+	}
+	if deleted {
+		return Result{}, nil
+	}
+	n, err := c.uploadSessions(ctx, gameID)
+	if err != nil {
+		return Result{}, err
+	}
+	return Result{UploadedSessions: n}, nil
 }
