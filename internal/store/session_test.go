@@ -40,6 +40,38 @@ func TestSessions(t *testing.T) {
 		}
 	})
 
+	t.Run("8-S6 store/CreateSession は形に合わない ID のセッションを書かない", func(t *testing.T) {
+		s, _ := openTemp(t)
+		createTestGame(t, s)
+		ctx := context.Background()
+
+		for _, id := range []string{"", "0192D4E8-0000-7000-8000-0000000000C1", "0192d4e8-0000-4000-8000-0000000000c1", "../x"} {
+			if err := s.CreateSession(ctx, metasync.Session{ID: id, GameID: testGameID, PlayedAt: time.Now()}); err == nil {
+				t.Errorf("CreateSession(%q) がエラーを返さなかった", id)
+			}
+		}
+		got, err := s.Sessions(ctx, testGameID)
+		if err != nil {
+			t.Fatalf("Sessions: %v", err)
+		}
+		if len(got) != 0 {
+			t.Errorf("Sessions = %v, want 空", got)
+		}
+	})
+
+	t.Run("store/CreateSession は UTC の年が 4 桁に収まらない日時を書かない", func(t *testing.T) {
+		s, _ := openTemp(t)
+		createTestGame(t, s)
+
+		played := time.Date(9999, 12, 31, 23, 0, 0, 0, time.FixedZone("", -5*60*60))
+		err := s.CreateSession(context.Background(), metasync.Session{
+			ID: "0192d4e8-0000-7000-8000-0000000000c1", GameID: testGameID, PlayedAt: played,
+		})
+		if err == nil {
+			t.Error("CreateSession がエラーを返さなかった")
+		}
+	})
+
 	t.Run("store/CreateSession は登録していないゲームのセッションを書かない", func(t *testing.T) {
 		s, _ := openTemp(t)
 

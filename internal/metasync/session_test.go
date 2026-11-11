@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"path/filepath"
@@ -192,7 +193,9 @@ func TestSyncSessions(t *testing.T) {
 			"0123456789ABCDEF0123456789ABCDEF",     // 大文字の 16 進
 			"../" + sessionB,
 		} {
-			e.addSession(t, id, 60)
+			// CreateSession は 8-S6 に合わない ID を書かないので、DB を直接書き換えられた場合として入れる
+			execDB(t, e.dbPath, `INSERT INTO play_sessions (id, game_id, played_at, duration_sec) VALUES (?, ?, ?, ?)`,
+				id, testGameID, "2026-11-03T01:02:03.004Z", 60)
 		}
 
 		got, err := e.core.Sync(ctx, testGameID)
@@ -251,19 +254,30 @@ func TestSyncSessions(t *testing.T) {
 
 	t.Run("8章/プレイ履歴/PUT に失敗したら、残りを止めてエラーを返す", func(t *testing.T) {
 		e := newEnv(t)
-		e.addSession(t, sessionA, 60)
-		e.addSession(t, sessionB, 90)
+		const sessions = 20
+		for i := range sessions {
+			e.addSession(t, fmt.Sprintf("0192d4e8-0000-7000-8000-%012x", 0x100+i), 60)
+		}
 		errInjected := errors.New("injected")
+		var mu sync.Mutex
+		puts := 0
 		e.remote.Before = func(op memstore.Op, key string) error {
-			if op == memstore.OpPut && key == sessionKey(sessionA) {
-				return errInjected
+			if op != memstore.OpPut {
+				return nil
 			}
-			return nil
+			mu.Lock()
+			puts++
+			mu.Unlock()
+			return errInjected
 		}
 
 		_, err := e.core.Sync(ctx, testGameID)
 		if !errors.Is(err, errInjected) {
 			t.Errorf("Sync = %v, want %v", err, errInjected)
+		}
+		// 並列数（8）の分は失敗より前に始まりうるが、失敗の後に空いた枠では始めない
+		if puts > 8 {
+			t.Errorf("PUT を %d 回呼んだ。失敗の後も続けている（全 %d 件）", puts, sessions)
 		}
 	})
 
@@ -312,13 +326,18 @@ func TestSyncSessions(t *testing.T) {
 // markRemoteDeleted は、ゲームの tombstone の記録（8-T2）を DB に直接書く。記録を書く操作は #100 で作る。
 func markRemoteDeleted(t *testing.T, dbPath string) {
 	t.Helper()
+	execDB(t, dbPath, `UPDATE game_locals SET remote_deleted_at = ?, remote_deleted_by = ? WHERE game_id = ?`,
+		"2026-11-03T00:00:00.000Z", "Laptop", testGameID)
+}
+
+func execDB(t *testing.T, dbPath, query string, args ...any) {
+	t.Helper()
 	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
 	defer func() { _ = db.Close() }()
-	if _, err := db.Exec(`UPDATE game_locals SET remote_deleted_at = ?, remote_deleted_by = ? WHERE game_id = ?`,
-		"2026-11-03T00:00:00.000Z", "Laptop", testGameID); err != nil {
-		t.Fatalf("update game_locals: %v", err)
+	if _, err := db.Exec(query, args...); err != nil {
+		t.Fatalf("exec %q: %v", query, err)
 	}
 }
