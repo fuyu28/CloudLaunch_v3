@@ -128,109 +128,97 @@ func sessionKey(id string) string {
 func TestSyncSessions(t *testing.T) {
 	ctx := context.Background()
 
-	t.Run("8-S1 ローカルにだけあるセッションを PUT する", func(t *testing.T) {
+	prefix := "games/" + testGameID + "/sessions/"
+	tests := []struct {
+		name  string
+		local []string
+		// rawLocal は、CreateSession が書かない 8-S6 に合わない ID。DB を直接書き換えられた場合として入れる
+		rawLocal []string
+		// remote は、リモートに置くキー。中身はローカルと違うが、この Issue では中身を読まない（8-S4 は #96）
+		remote   []string
+		wantPuts []string
+	}{
+		{
+			name:     "8-S1 ローカルにだけあるセッションを PUT する",
+			local:    []string{sessionA, legacySession},
+			wantPuts: []string{sessionKey(legacySession), sessionKey(sessionA)},
+		},
+		{
+			name:     "8-S1 リモートにもあるセッションは PUT しない",
+			local:    []string{sessionA, sessionB},
+			remote:   []string{sessionKey(sessionA)},
+			wantPuts: []string{sessionKey(sessionB)},
+		},
+		{
+			name:     "8-S3 sessions/ の一覧で .deleted.json を数えない",
+			local:    []string{sessionA},
+			remote:   []string{prefix + sessionA + ".deleted.json"},
+			wantPuts: []string{sessionKey(sessionA)},
+		},
+		{
+			name:  "8-S6 形に合わない ID のローカルのセッションは PUT しない",
+			local: []string{sessionA},
+			rawLocal: []string{
+				"0192D4E8-0000-7000-8000-0000000000C3", // 大文字
+				"0192d4e8-0000-4000-8000-0000000000c4", // UUIDv4
+				"0123456789ABCDEF0123456789ABCDEF",     // 大文字の 16 進
+				"../" + sessionB,
+			},
+			wantPuts: []string{sessionKey(sessionA)},
+		},
+		{
+			name:     "8-S6 形に合わない ID のキーはリモートにあるセッションとして数えない",
+			local:    []string{sessionA},
+			remote:   []string{prefix + "bad.json", prefix + "sub/" + sessionA + ".json", prefix + sessionA},
+			wantPuts: []string{sessionKey(sessionA)},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			e := newEnv(t)
+			for _, id := range tt.local {
+				e.addSession(t, id, 60)
+			}
+			for _, id := range tt.rawLocal {
+				execDB(t, e.dbPath, `INSERT INTO play_sessions (id, game_id, played_at, duration_sec) VALUES (?, ?, ?, ?)`,
+					id, testGameID, "2026-11-03T01:02:03.004Z", 60)
+			}
+			for _, key := range tt.remote {
+				e.putRemote(t, key, `{"remote":true}`)
+			}
+
+			got, err := e.core.Sync(ctx, testGameID)
+			if err != nil {
+				t.Fatalf("Sync: %v", err)
+			}
+			if diff := cmp.Diff(metasync.Result{UploadedSessions: len(tt.wantPuts)}, got); diff != "" {
+				t.Errorf("Result (-want +got):\n%s", diff)
+			}
+			if diff := cmp.Diff(tt.wantPuts, e.putKeys()); diff != "" {
+				t.Errorf("PUT したキー (-want +got):\n%s", diff)
+			}
+			for _, key := range tt.remote {
+				if body := e.remoteBody(t, key); body != `{"remote":true}` {
+					t.Errorf("リモートの %s が書き換わった: %s", key, body)
+				}
+			}
+		})
+	}
+
+	t.Run("8章/プレイ履歴/一覧の後にキャンセルされたら、成功とは返さない", func(t *testing.T) {
 		e := newEnv(t)
 		e.addSession(t, sessionA, 60)
-		e.addSession(t, legacySession, 120)
-
-		got, err := e.core.Sync(ctx, testGameID)
-		if err != nil {
-			t.Fatalf("Sync: %v", err)
-		}
-		if diff := cmp.Diff(metasync.Result{UploadedSessions: 2}, got); diff != "" {
-			t.Errorf("Result (-want +got):\n%s", diff)
-		}
-		if diff := cmp.Diff([]string{sessionKey(legacySession), sessionKey(sessionA)}, e.putKeys()); diff != "" {
-			t.Errorf("PUT したキー (-want +got):\n%s", diff)
-		}
-	})
-
-	t.Run("8-S1 リモートにもあるセッションは PUT しない", func(t *testing.T) {
-		e := newEnv(t)
-		e.addSession(t, sessionA, 60)
-		e.addSession(t, sessionB, 90)
-		// 中身はローカルと違うが、この Issue では中身を読まない（8-S4 は #96）
-		e.putRemote(t, sessionKey(sessionA), `{"remote":true}`)
-
-		got, err := e.core.Sync(ctx, testGameID)
-		if err != nil {
-			t.Fatalf("Sync: %v", err)
-		}
-		if diff := cmp.Diff(metasync.Result{UploadedSessions: 1}, got); diff != "" {
-			t.Errorf("Result (-want +got):\n%s", diff)
-		}
-		if diff := cmp.Diff([]string{sessionKey(sessionB)}, e.putKeys()); diff != "" {
-			t.Errorf("PUT したキー (-want +got):\n%s", diff)
-		}
-		if body := e.remoteBody(t, sessionKey(sessionA)); body != `{"remote":true}` {
-			t.Errorf("リモートの %s が書き換わった: %s", sessionA, body)
-		}
-	})
-
-	t.Run("8-S3 sessions/ の一覧で .deleted.json を数えない", func(t *testing.T) {
-		e := newEnv(t)
-		e.addSession(t, sessionA, 60)
-		e.putRemote(t, "games/"+testGameID+"/sessions/"+sessionA+".deleted.json", `{}`)
-
-		got, err := e.core.Sync(ctx, testGameID)
-		if err != nil {
-			t.Fatalf("Sync: %v", err)
-		}
-		if diff := cmp.Diff(metasync.Result{UploadedSessions: 1}, got); diff != "" {
-			t.Errorf("Result (-want +got):\n%s", diff)
-		}
-		if diff := cmp.Diff([]string{sessionKey(sessionA)}, e.putKeys()); diff != "" {
-			t.Errorf("PUT したキー (-want +got):\n%s", diff)
-		}
-	})
-
-	t.Run("8-S6 形に合わない ID のローカルのセッションは PUT しない", func(t *testing.T) {
-		e := newEnv(t)
-		e.addSession(t, sessionA, 60)
-		for _, id := range []string{
-			"0192D4E8-0000-7000-8000-0000000000C3", // 大文字
-			"0192d4e8-0000-4000-8000-0000000000c4", // UUIDv4
-			"0123456789ABCDEF0123456789ABCDEF",     // 大文字の 16 進
-			"../" + sessionB,
-		} {
-			// CreateSession は 8-S6 に合わない ID を書かないので、DB を直接書き換えられた場合として入れる
-			execDB(t, e.dbPath, `INSERT INTO play_sessions (id, game_id, played_at, duration_sec) VALUES (?, ?, ?, ?)`,
-				id, testGameID, "2026-11-03T01:02:03.004Z", 60)
+		cctx, cancel := context.WithCancel(ctx)
+		defer cancel()
+		e.remote.Before = func(op memstore.Op, key string) error {
+			if op == memstore.OpList {
+				cancel()
+			}
+			return nil
 		}
 
-		got, err := e.core.Sync(ctx, testGameID)
-		if err != nil {
-			t.Fatalf("Sync: %v", err)
-		}
-		if diff := cmp.Diff(metasync.Result{UploadedSessions: 1}, got); diff != "" {
-			t.Errorf("Result (-want +got):\n%s", diff)
-		}
-		if diff := cmp.Diff([]string{sessionKey(sessionA)}, e.putKeys()); diff != "" {
-			t.Errorf("PUT したキー (-want +got):\n%s", diff)
-		}
-	})
-
-	t.Run("8-S6 形に合わない ID のキーはリモートにあるセッションとして数えない", func(t *testing.T) {
-		e := newEnv(t)
-		e.addSession(t, sessionA, 60)
-		prefix := "games/" + testGameID + "/sessions/"
-		for _, key := range []string{
-			prefix + "bad.json",
-			prefix + "sub/" + sessionA + ".json",
-			prefix + sessionA,
-		} {
-			e.putRemote(t, key, `{}`)
-		}
-
-		got, err := e.core.Sync(ctx, testGameID)
-		if err != nil {
-			t.Fatalf("Sync: %v", err)
-		}
-		if diff := cmp.Diff(metasync.Result{UploadedSessions: 1}, got); diff != "" {
-			t.Errorf("Result (-want +got):\n%s", diff)
-		}
-		if diff := cmp.Diff([]string{sessionKey(sessionA)}, e.putKeys()); diff != "" {
-			t.Errorf("PUT したキー (-want +got):\n%s", diff)
+		if _, err := e.core.Sync(cctx, testGameID); !errors.Is(err, context.Canceled) {
+			t.Errorf("Sync = %v, want %v", err, context.Canceled)
 		}
 	})
 
