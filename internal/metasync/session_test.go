@@ -443,6 +443,8 @@ func TestDownloadSessions(t *testing.T) {
 		body string
 	}{
 		{"8-V1 JSON として読めないセッションは取り込まない", `{"id":`},
+		{"8-V1 64 KiB を超えるセッションは取り込まない", sessionJSON(sessionA, testGameID, 60) + strings.Repeat(" ", 64<<10)},
+		{"8-V2 項目名の大文字小文字が違うセッションは取り込まない", fmt.Sprintf(`{"ID":%q,"GameID":%q,"PlayedAt":"2026-11-03T01:02:03.004Z","DurationSec":60}`, sessionA, testGameID)},
 		{"8-V2 項目が欠けたセッションは取り込まない", fmt.Sprintf(`{"id":%q,"gameId":%q,"playedAt":"2026-11-03T01:02:03.004Z"}`, sessionA, testGameID)},
 		{"8-V2 項目が null のセッションは取り込まない", fmt.Sprintf(`{"id":%q,"gameId":%q,"playedAt":null,"durationSec":60}`, sessionA, testGameID)},
 		{"8-V3 id がキーの ID と違うセッションは取り込まない", sessionJSON(sessionC, testGameID, 60)},
