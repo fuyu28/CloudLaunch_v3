@@ -53,6 +53,10 @@ func (s *Store) Sessions(ctx context.Context, gameID string) ([]metasync.Session
 	return sessions, nil
 }
 
+func (s *Store) ImportSessions(ctx context.Context, gameID string, sessions []metasync.Session) (metasync.ImportResult, error) {
+	return metasync.ImportResult{}, nil
+}
+
 func (s *Store) RemoteDeleted(ctx context.Context, gameID string) (bool, error) {
 	var deleted bool
 	if err := s.db.QueryRowContext(ctx,

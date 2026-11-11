@@ -126,3 +126,104 @@ func TestRemoteDeleted(t *testing.T) {
 		}
 	})
 }
+
+func TestImportSessions(t *testing.T) {
+	ctx := context.Background()
+	const (
+		otherGameID = "0192d4e8-0000-7000-8000-000000000002"
+		idA         = "0192d4e8-0000-7000-8000-0000000000c1"
+		idB         = "0192d4e8-0000-7000-8000-0000000000c2"
+	)
+	playedAt := time.Date(2026, 11, 3, 1, 2, 3, 4_000_000, time.UTC)
+	session := func(id, gameID string, durationSec int64) metasync.Session {
+		return metasync.Session{ID: id, GameID: gameID, PlayedAt: playedAt, DurationSec: durationSec}
+	}
+	createOtherGame := func(t *testing.T, s *Store) {
+		t.Helper()
+		if err := s.CreateGame(ctx, NewGame{
+			ID: otherGameID, Title: "Other", SaveFolderPath: "/other", ExePath: "/other.exe", CreatedAt: playedAt,
+		}); err != nil {
+			t.Fatalf("CreateGame: %v", err)
+		}
+	}
+	sessionsOf := func(t *testing.T, s *Store, gameID string) []metasync.Session {
+		t.Helper()
+		got, err := s.Sessions(ctx, gameID)
+		if err != nil {
+			t.Fatalf("Sessions: %v", err)
+		}
+		return got
+	}
+
+	t.Run("8-S2 store/ImportSessions はセッションを入れ、入れた件数を返す", func(t *testing.T) {
+		s, _ := openTemp(t)
+		createTestGame(t, s)
+
+		got, err := s.ImportSessions(ctx, testGameID, []metasync.Session{session(idA, testGameID, 60), session(idB, testGameID, 0)})
+		if err != nil {
+			t.Fatalf("ImportSessions: %v", err)
+		}
+		if diff := cmp.Diff(metasync.ImportResult{Inserted: 2}, got); diff != "" {
+			t.Errorf("ImportResult (-want +got):\n%s", diff)
+		}
+		want := []metasync.Session{session(idA, testGameID, 60), session(idB, testGameID, 0)}
+		if diff := cmp.Diff(want, sessionsOf(t, s, testGameID)); diff != "" {
+			t.Errorf("Sessions (-want +got):\n%s", diff)
+		}
+	})
+
+	t.Run("store/ImportSessions は同じゲームに同じ ID があれば、書き換えずに飛ばす", func(t *testing.T) {
+		s, _ := openTemp(t)
+		createTestGame(t, s)
+		if err := s.CreateSession(ctx, session(idA, testGameID, 60)); err != nil {
+			t.Fatalf("CreateSession: %v", err)
+		}
+
+		got, err := s.ImportSessions(ctx, testGameID, []metasync.Session{session(idA, testGameID, 999), session(idB, testGameID, 0)})
+		if err != nil {
+			t.Fatalf("ImportSessions: %v", err)
+		}
+		if diff := cmp.Diff(metasync.ImportResult{Inserted: 1}, got); diff != "" {
+			t.Errorf("ImportResult (-want +got):\n%s", diff)
+		}
+		want := []metasync.Session{session(idA, testGameID, 60), session(idB, testGameID, 0)}
+		if diff := cmp.Diff(want, sessionsOf(t, s, testGameID)); diff != "" {
+			t.Errorf("Sessions (-want +got):\n%s", diff)
+		}
+	})
+
+	t.Run("8-S5 store/ImportSessions は別のゲームに同じ ID があれば、入れずに返す", func(t *testing.T) {
+		s, _ := openTemp(t)
+		createTestGame(t, s)
+		createOtherGame(t, s)
+		if err := s.CreateSession(ctx, session(idA, otherGameID, 60)); err != nil {
+			t.Fatalf("CreateSession: %v", err)
+		}
+
+		got, err := s.ImportSessions(ctx, testGameID, []metasync.Session{session(idA, testGameID, 999), session(idB, testGameID, 0)})
+		if err != nil {
+			t.Fatalf("ImportSessions: %v", err)
+		}
+		if diff := cmp.Diff(metasync.ImportResult{Inserted: 1, OtherGame: []string{idA}}, got); diff != "" {
+			t.Errorf("ImportResult (-want +got):\n%s", diff)
+		}
+		if diff := cmp.Diff([]metasync.Session{session(idB, testGameID, 0)}, sessionsOf(t, s, testGameID)); diff != "" {
+			t.Errorf("Sessions of game (-want +got):\n%s", diff)
+		}
+		if diff := cmp.Diff([]metasync.Session{session(idA, otherGameID, 60)}, sessionsOf(t, s, otherGameID)); diff != "" {
+			t.Errorf("Sessions of other game (-want +got):\n%s", diff)
+		}
+	})
+
+	t.Run("8-S6 store/ImportSessions は形に合わない ID があれば、何も入れずにエラーを返す", func(t *testing.T) {
+		s, _ := openTemp(t)
+		createTestGame(t, s)
+
+		if _, err := s.ImportSessions(ctx, testGameID, []metasync.Session{session(idA, testGameID, 60), session("../x", testGameID, 0)}); err == nil {
+			t.Error("ImportSessions がエラーを返さなかった")
+		}
+		if got := sessionsOf(t, s, testGameID); len(got) != 0 {
+			t.Errorf("Sessions = %v, want 空", got)
+		}
+	})
+}
