@@ -105,6 +105,10 @@ func (s *Store) Delete(ctx context.Context, key string) error {
 // objstore は 1000 キーずつのリクエストの単位で失敗し、同じリクエストの中では失敗したキーの後ろも消えうるので、
 // 消え残るキーの範囲は objstore と同じではない。
 func (s *Store) DeleteMany(ctx context.Context, keys []string) error {
+	// キーが空でも、キャンセル済みなら失敗させる（objstoretest の契約）。ループの Delete だけでは ctx を見ない
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	for _, key := range keys {
 		if err := s.Delete(ctx, key); err != nil {
 			return err
