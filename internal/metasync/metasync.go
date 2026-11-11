@@ -66,9 +66,5 @@ func (c *Core) Sync(ctx context.Context, gameID string) (Result, error) {
 	if deleted {
 		return Result{}, nil
 	}
-	n, err := c.uploadSessions(ctx, gameID)
-	if err != nil {
-		return Result{}, err
-	}
-	return Result{UploadedSessions: n}, nil
+	return c.syncSessions(ctx, gameID)
 }
