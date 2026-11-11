@@ -70,10 +70,10 @@ func (c *Core) uploadSessions(ctx context.Context, gameID string) (int, error) {
 		return 0, err
 	}
 
+	// 失敗した後に回る残りの Put は、キャンセル済みの ctx を受けて PUT せずに返る（objstoretest の契約）
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(transferLimit)
 	n := 0
-	stopped := false
 	for _, s := range local {
 		if !ValidSessionID(s.ID) {
 			c.cfg.Logger.Warn("skip session with invalid id", "gameId", gameID, "sessionId", s.ID)
@@ -82,26 +82,11 @@ func (c *Core) uploadSessions(ctx context.Context, gameID string) (int, error) {
 		if remote[s.ID] {
 			continue
 		}
-		// 失敗した後に空いた枠で次の PUT を始めないよう、キャンセルを確かめてから入れ、始める前にも確かめる。
-		// Put が ctx を見るかは実装によるため
-		if gctx.Err() != nil {
-			stopped = true
-			break
-		}
 		n++
-		g.Go(func() error {
-			if err := gctx.Err(); err != nil {
-				return err
-			}
-			return c.putSession(gctx, s)
-		})
+		g.Go(func() error { return c.putSession(gctx, s) })
 	}
 	if err := g.Wait(); err != nil {
 		return 0, err
-	}
-	// 入れた PUT がすべて成功していても、呼び出し側のキャンセルで残りを入れずに抜けたなら、成功とは返さない
-	if stopped {
-		return 0, ctx.Err()
 	}
 	return n, nil
 }

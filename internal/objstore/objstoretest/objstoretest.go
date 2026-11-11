@@ -18,6 +18,8 @@ import (
 )
 
 // Store は契約テストが使う操作。使う側のインターフェースは syncore と metasync が別に定義する。
+// どの操作も、呼ばれた時点で ctx が終わっていれば、リモートに触れずに ctx のエラーを返す。コアはこれを前提に、
+// 並列の転送で失敗した後の残りを、Put などを呼ぶ前に自分で確かめずに止める。
 type Store interface {
 	Get(ctx context.Context, key string) (io.ReadCloser, error)
 	Put(ctx context.Context, key string, body io.ReadSeeker, size int64) error

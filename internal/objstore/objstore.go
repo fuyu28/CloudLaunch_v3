@@ -25,6 +25,8 @@ type Config struct {
 }
 
 // S3 は複数の goroutine から同時に呼んでよい。
+// どの操作も、ctx が終わっていればリクエストを送らずに ctx のエラーを返す。SDK も ctx を見るが、
+// その内部の振る舞いに契約を預けないよう、入口で確かめる。
 type S3 struct {
 	client *s3.Client
 	bucket string
@@ -53,6 +55,9 @@ func New(cfg Config) (*S3, error) {
 
 // Get はキーがなければ fs.ErrNotExist で包んだエラーを返す。
 func (s *S3) Get(ctx context.Context, key string) (io.ReadCloser, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	out, err := s.client.GetObject(ctx, &s3.GetObjectInput{Bucket: &s.bucket, Key: &key})
 	if err != nil {
 		var noSuchKey *types.NoSuchKey
@@ -65,6 +70,9 @@ func (s *S3) Get(ctx context.Context, key string) (io.ReadCloser, error) {
 }
 
 func (s *S3) Put(ctx context.Context, key string, body io.ReadSeeker, size int64) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	_, err := s.client.PutObject(ctx, &s3.PutObjectInput{
 		Bucket:        &s.bucket,
 		Key:           &key,
@@ -79,6 +87,9 @@ func (s *S3) Put(ctx context.Context, key string, body io.ReadSeeker, size int64
 
 // List は prefix で始まるキーを、すべて辞書順で返す。
 func (s *S3) List(ctx context.Context, prefix string) ([]string, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	keys := []string{}
 	pages := s3.NewListObjectsV2Paginator(s.client, &s3.ListObjectsV2Input{Bucket: &s.bucket, Prefix: &prefix})
 	for pages.HasMorePages() {
@@ -97,6 +108,9 @@ func (s *S3) List(ctx context.Context, prefix string) ([]string, error) {
 
 // Delete はキーがなくてもエラーにしない。
 func (s *S3) Delete(ctx context.Context, key string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if _, err := s.client.DeleteObject(ctx, &s3.DeleteObjectInput{Bucket: &s.bucket, Key: &key}); err != nil {
 		return fmt.Errorf("delete %q: %w", key, err)
 	}
@@ -110,6 +124,9 @@ const deleteBatch = 1000
 // DeleteObjects は、一部のキーを消せなくても HTTP では成功を返し、消せなかったキーをレスポンスの Errors に入れるので、
 // それもエラーにする。
 func (s *S3) DeleteMany(ctx context.Context, keys []string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	for chunk := range slices.Chunk(keys, deleteBatch) {
 		objects := make([]types.ObjectIdentifier, len(chunk))
 		for i, key := range chunk {
