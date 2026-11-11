@@ -190,11 +190,14 @@ func (c *Core) getSession(ctx context.Context, gameID, id string) (*Session, err
 		return nil, fmt.Errorf("get session %s: %w", id, err)
 	}
 	defer func() { _ = r.Close() }()
-	body, err := io.ReadAll(r)
+	body, err := io.ReadAll(io.LimitReader(r, maxSessionSize+1))
 	if err != nil {
 		return nil, fmt.Errorf("read session %s: %w", id, err)
 	}
 	s, err := parseSession(body, gameID, id)
+	if len(body) > maxSessionSize {
+		err = fmt.Errorf("8-V1: body exceeds %d bytes", maxSessionSize)
+	}
 	if err != nil {
 		c.cfg.Logger.Warn("skip invalid remote session", "gameId", gameID, "sessionId", id, "err", err)
 		return nil, nil
@@ -202,39 +205,41 @@ func (c *Core) getSession(ctx context.Context, gameID, id string) (*Session, err
 	return &s, nil
 }
 
-// remoteSessionJSON は、項目がないことと null を見分けるために、ポインタと生の値で受ける。
-// durationSec を json.Number で受けないのは、文字列の "60" も通してしまうため。
-type remoteSessionJSON struct {
-	ID          *string         `json:"id"`
-	GameID      *string         `json:"gameId"`
-	PlayedAt    *string         `json:"playedAt"`
-	DurationSec json.RawMessage `json:"durationSec"`
-}
+// maxSessionSize は、読むセッションの本文の上限。正しい本文は 200 バイトに満たないので、超えるものは壊れた
+// object として 8-V1 で扱い、同期のたびに大きな object を並列でメモリに読まないようにする。
+const maxSessionSize = 64 << 10
 
 // durationPattern は、0 以上の整数の JSON の表記に当たる。小数（1.5）・指数（1e3）・負の数は当たらない。
 var durationPattern = regexp.MustCompile(`^(?:0|[1-9][0-9]*)$`)
 
 // parseSession は、仕様書 8-V1〜8-V6 で検証する。知らない項目は無視する。
+// 構造体に Unmarshal しないのは、encoding/json が項目名を大文字小文字を区別せずに当て、仕様書の項目名を持たない本文が
+// 8-V2 を通るため。項目ごとに読むので、型の違う値も、その項目の ID（8-V3〜8-V6）で不正になる。
 func parseSession(body []byte, gameID, id string) (Session, error) {
-	var j remoteSessionJSON
-	if err := json.Unmarshal(body, &j); err != nil {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(body, &fields); err != nil {
 		return Session{}, fmt.Errorf("8-V1: %w", err)
 	}
-	if j.ID == nil || j.GameID == nil || j.PlayedAt == nil || len(j.DurationSec) == 0 || string(j.DurationSec) == "null" {
-		return Session{}, errors.New("8-V2: missing or null field")
+	for _, name := range []string{"id", "gameId", "playedAt", "durationSec"} {
+		if v, ok := fields[name]; !ok || string(v) == "null" {
+			return Session{}, fmt.Errorf("8-V2: %s is missing or null", name)
+		}
 	}
-	if *j.ID != id {
-		return Session{}, fmt.Errorf("8-V3: id %q does not match key", *j.ID)
+	var sid, sgame, splayed string
+	if err := json.Unmarshal(fields["id"], &sid); err != nil || sid != id {
+		return Session{}, fmt.Errorf("8-V3: id %s does not match key", fields["id"])
 	}
-	if *j.GameID != gameID {
-		return Session{}, fmt.Errorf("8-V4: gameId %q does not match key", *j.GameID)
+	if err := json.Unmarshal(fields["gameId"], &sgame); err != nil || sgame != gameID {
+		return Session{}, fmt.Errorf("8-V4: gameId %s does not match key", fields["gameId"])
 	}
 	// Parse は表記の揺れ（ミリ秒の桁数など）を受け入れうるので、書き戻して元の表記と一致するものだけを通す
-	playedAt, err := time.Parse(timeLayout, *j.PlayedAt)
-	if err != nil || playedAt.UTC().Format(timeLayout) != *j.PlayedAt {
-		return Session{}, fmt.Errorf("8-V5: playedAt %q is not in the spec format", *j.PlayedAt)
+	err := json.Unmarshal(fields["playedAt"], &splayed)
+	playedAt, perr := time.Parse(timeLayout, splayed)
+	if err != nil || perr != nil || playedAt.UTC().Format(timeLayout) != splayed {
+		return Session{}, fmt.Errorf("8-V5: playedAt %s is not in the spec format", fields["playedAt"])
 	}
-	raw := string(j.DurationSec)
+	// json.Number で受けないのは、文字列の "60" も数として通してしまうため
+	raw := string(fields["durationSec"])
 	if !durationPattern.MatchString(raw) {
 		return Session{}, fmt.Errorf("8-V6: durationSec %s is not a non-negative integer", raw)
 	}
