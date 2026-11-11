@@ -15,6 +15,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/fuyu28/CloudLaunch_v3/internal/metasync"
 	"github.com/fuyu28/CloudLaunch_v3/internal/objstore"
 	"github.com/fuyu28/CloudLaunch_v3/internal/platform"
 	"github.com/fuyu28/CloudLaunch_v3/internal/store"
@@ -23,6 +24,7 @@ import (
 
 const usage = `usage:
   cloudlaunch-cli game add --title <タイトル> --save-dir <パス> --exe <パス> [--brand <ブランド>] [--id <gameId>] [--data-dir <dir>]
+  cloudlaunch-cli session add --game <gameId> --duration <秒> [--played-at <RFC3339>] [--data-dir <dir>]
   cloudlaunch-cli status --game <gameId> [--data-dir <dir>]
   cloudlaunch-cli push --game <gameId> [--overwrite] [--data-dir <dir>]
   cloudlaunch-cli pull --game <gameId> [--overwrite] [--data-dir <dir>]
@@ -47,6 +49,10 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 	case "game":
 		if len(args) >= 2 && args[1] == "add" {
 			return gameAdd(ctx, args[2:], stdout)
+		}
+	case "session":
+		if len(args) >= 2 && args[1] == "add" {
+			return sessionAdd(ctx, args[2:], stdout)
 		}
 	case "status":
 		return status(ctx, args[1:], stdout)
@@ -89,20 +95,20 @@ func recoverPulls(ctx context.Context, args []string, stdout io.Writer) error {
 }
 
 func status(ctx context.Context, args []string, stdout io.Writer) error {
-	core, gameID, closeStore, err := openCore(ctx, "status", args, nil)
+	c, err := openCore(ctx, "status", args, nil)
 	if err != nil {
 		return err
 	}
-	defer closeStore()
+	defer c.close()
 
-	plan, err := core.Status(ctx, gameID)
+	plan, err := c.sync.Status(ctx, c.gameID)
 	if err != nil {
 		return err
 	}
 	if err := printPlan(stdout, plan); err != nil {
 		return err
 	}
-	return recordBaseIfNeeded(ctx, core, plan, stdout)
+	return recordBaseIfNeeded(ctx, c.sync, plan, stdout)
 }
 
 // recordBaseIfNeeded は、データを転送しないので確認を取らない（仕様書 4 章）。
@@ -149,15 +155,33 @@ var (
 )
 
 // transfer は push と pull を行う。コマンドの実行を承認とみなして確認を出さない（仕様書 7 章の確認は GUI が出す）。
-// --overwrite を付けると、判定によらず上書きする。
+// --overwrite を付けると、判定によらず上書きする。セーブの同期が見送り・失敗で終わっても、そのあとにメタ情報を同期する
+// （仕様書 8-M2）。メタ情報の同期の失敗は、返すエラーに含めない（8-M3）。
 func transfer(ctx context.Context, args []string, stdout io.Writer, cmd transferCommand) error {
 	var overwrite bool
-	core, gameID, closeStore, err := openCore(ctx, cmd.name, args, &overwrite)
+	c, err := openCore(ctx, cmd.name, args, &overwrite)
 	if err != nil {
 		return err
 	}
-	defer closeStore()
+	defer c.close()
 
+	err = syncSave(ctx, c.sync, c.gameID, stdout, cmd, overwrite)
+	return errors.Join(err, syncMeta(ctx, c, stdout))
+}
+
+// syncMeta は、標準出力への書き込みに失敗したときだけエラーを返す。
+func syncMeta(ctx context.Context, c cores, stdout io.Writer) error {
+	res, err := c.meta.Sync(ctx, c.gameID)
+	if err != nil {
+		c.logger.Warn("metadata sync failed", "gameId", c.gameID, "err", err)
+		_, werr := fmt.Fprintf(stdout, "メタ情報の同期に失敗しました: %v\n", err)
+		return werr
+	}
+	_, err = fmt.Fprintf(stdout, "プレイ履歴を %d 件アップロードしました\n", res.UploadedSessions)
+	return err
+}
+
+func syncSave(ctx context.Context, core *syncore.Core, gameID string, stdout io.Writer, cmd transferCommand, overwrite bool) error {
 	plan, err := core.Status(ctx, gameID)
 	if err != nil {
 		return err
@@ -192,9 +216,18 @@ func printTransferred(w io.Writer, plan syncore.Plan, overwrite bool, done strin
 	return err
 }
 
+// cores は、リモートと DB につないだ同期コアとメタ情報の同期。close は呼び出し側が必ず呼ぶ。
+type cores struct {
+	sync   *syncore.Core
+	meta   *metasync.Core
+	logger *slog.Logger
+	gameID string
+	close  func()
+}
+
 // openCore は --game と --data-dir を読み、リモートと DB につないだコアを返す。overwrite が nil でなければ、
-// --overwrite も読む。closeStore は呼び出し側が必ず呼ぶ。
-func openCore(ctx context.Context, name string, args []string, overwrite *bool) (core *syncore.Core, gameID string, closeStore func(), err error) {
+// --overwrite も読む。
+func openCore(ctx context.Context, name string, args []string, overwrite *bool) (cores, error) {
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
 	game := fs.String("game", "", "ゲーム ID")
 	dataDir := fs.String("data-dir", "", "DB などを置くディレクトリ")
@@ -202,10 +235,10 @@ func openCore(ctx context.Context, name string, args []string, overwrite *bool) 
 		fs.BoolVar(overwrite, "overwrite", false, "判定によらず上書きする")
 	}
 	if err := fs.Parse(args); err != nil {
-		return nil, "", nil, err
+		return cores{}, err
 	}
 	if *game == "" {
-		return nil, "", nil, errors.New("--game is required")
+		return cores{}, errors.New("--game is required")
 	}
 
 	remote, err := objstore.New(objstore.Config{
@@ -216,23 +249,29 @@ func openCore(ctx context.Context, name string, args []string, overwrite *bool) 
 		SecretAccessKey: os.Getenv("CLOUDLAUNCH_S3_SECRET_ACCESS_KEY"),
 	})
 	if err != nil {
-		return nil, "", nil, err
+		return cores{}, err
 	}
 	// deviceName は DB の設定に置き、初期値をホスト名にする（仕様書 3 章）。変更する手段ができるまでは初期値をそのまま渡す
 	host, err := os.Hostname()
 	if err != nil {
-		return nil, "", nil, fmt.Errorf("hostname: %w", err)
+		return cores{}, fmt.Errorf("hostname: %w", err)
 	}
 	s, dir, err := openStore(ctx, *dataDir)
 	if err != nil {
-		return nil, "", nil, err
+		return cores{}, err
 	}
 
 	cfg := localConfig(s, dir)
 	cfg.Remote = remote
 	cfg.DeviceName = host
 	cfg.Processes = platform.Processes{}
-	return syncore.New(cfg), *game, func() { _ = s.Close() }, nil
+	return cores{
+		sync:   syncore.New(cfg),
+		meta:   metasync.New(metasync.Config{Remote: remote, Local: s, Logger: cfg.Logger}),
+		logger: cfg.Logger,
+		gameID: *game,
+		close:  func() { _ = s.Close() },
+	}, nil
 }
 
 // recoveryLabel は、R2 で確かめるときに仕様書の復旧表と突き合わせられるよう、行の ID を添える。
@@ -355,6 +394,54 @@ func gameAdd(ctx context.Context, args []string, stdout io.Writer) error {
 		return err
 	}
 	_, err = fmt.Fprintln(stdout, gameID)
+	return err
+}
+
+// sessionAdd は DB にだけ書き、リモートには次の push・pull でアップロードする（仕様書 8-M2）。
+func sessionAdd(ctx context.Context, args []string, stdout io.Writer) error {
+	fs := flag.NewFlagSet("session add", flag.ContinueOnError)
+	game := fs.String("game", "", "ゲーム ID")
+	duration := fs.Int64("duration", -1, "プレイ時間（秒）")
+	playedAt := fs.String("played-at", "", "プレイした日時（RFC3339）。省くと今の時刻")
+	dataDir := fs.String("data-dir", "", "DB などを置くディレクトリ")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	if *game == "" {
+		return errors.New("--game is required")
+	}
+	if *duration < 0 {
+		return errors.New("--duration is required and must be >= 0")
+	}
+	played := time.Now()
+	if *playedAt != "" {
+		t, err := time.Parse(time.RFC3339Nano, *playedAt)
+		if err != nil {
+			return fmt.Errorf("--played-at must be RFC3339: %w", err)
+		}
+		played = t
+	}
+	u, err := uuid.NewV7()
+	if err != nil {
+		return fmt.Errorf("generate session id: %w", err)
+	}
+
+	s, _, err := openStore(ctx, *dataDir)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = s.Close() }()
+
+	if err := s.CreateSession(ctx, metasync.Session{
+		ID:          u.String(),
+		GameID:      *game,
+		PlayedAt:    played,
+		DurationSec: *duration,
+	}); err != nil {
+		return err
+	}
+	_, err = fmt.Fprintln(stdout, u.String())
 	return err
 }
 

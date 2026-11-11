@@ -148,7 +148,7 @@ func TestPush(t *testing.T) {
 		plan := approvedPush(t, e, files)
 		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
-		// HEAD の PUT の直前にキャンセルする。偽のリモートの Put は ctx を見ないので、HEAD が書けた後の base の更新を確かめる。
+		// HEAD の PUT の直前にキャンセルする。偽のリモートは Before の中でキャンセルされても Put を実行するので、HEAD が書けた後の base の更新を確かめる。
 		// 本物のリモートで、PUT の応答を待つ間にキャンセルされる場合は、このテストでは再現しない
 		e.remote.Before = func(op memstore.Op, key string) error {
 			if op == memstore.OpPut && key == headKey() {

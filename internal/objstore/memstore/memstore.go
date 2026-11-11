@@ -22,7 +22,8 @@ const (
 )
 
 type Store struct {
-	// Before は各操作の前に呼ばれる。エラーを返すと、その操作は実行されずにそのエラーで失敗する。List では key に prefix が渡る
+	// Before は各操作の前に呼ばれる。エラーを返すと、その操作は実行されずにそのエラーで失敗する。List では key に prefix が渡る。
+	// ctx が終わっていれば、Before を呼ばずに失敗する。Before の中で ctx をキャンセルしても、その操作は実行される
 	Before func(op Op, key string) error
 
 	mu      sync.Mutex
@@ -33,7 +34,10 @@ func New() *Store {
 	return &Store{objects: map[string][]byte{}}
 }
 
-func (s *Store) before(op Op, key string) error {
+func (s *Store) before(ctx context.Context, op Op, key string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if s.Before == nil {
 		return nil
 	}
@@ -41,7 +45,7 @@ func (s *Store) before(op Op, key string) error {
 }
 
 func (s *Store) Get(ctx context.Context, key string) (io.ReadCloser, error) {
-	if err := s.before(OpGet, key); err != nil {
+	if err := s.before(ctx, OpGet, key); err != nil {
 		return nil, err
 	}
 	s.mu.Lock()
@@ -55,7 +59,7 @@ func (s *Store) Get(ctx context.Context, key string) (io.ReadCloser, error) {
 
 // Put は size と本文の長さが違えば失敗する。S3 も Content-Length と本文がずれたリクエストを拒否するため、それに合わせる
 func (s *Store) Put(ctx context.Context, key string, body io.ReadSeeker, size int64) error {
-	if err := s.before(OpPut, key); err != nil {
+	if err := s.before(ctx, OpPut, key); err != nil {
 		return err
 	}
 	b, err := io.ReadAll(body)
@@ -72,7 +76,7 @@ func (s *Store) Put(ctx context.Context, key string, body io.ReadSeeker, size in
 }
 
 func (s *Store) List(ctx context.Context, prefix string) ([]string, error) {
-	if err := s.before(OpList, prefix); err != nil {
+	if err := s.before(ctx, OpList, prefix); err != nil {
 		return nil, err
 	}
 	s.mu.Lock()
@@ -88,7 +92,7 @@ func (s *Store) List(ctx context.Context, prefix string) ([]string, error) {
 }
 
 func (s *Store) Delete(ctx context.Context, key string) error {
-	if err := s.before(OpDelete, key); err != nil {
+	if err := s.before(ctx, OpDelete, key); err != nil {
 		return err
 	}
 	s.mu.Lock()
@@ -101,10 +105,11 @@ func (s *Store) Delete(ctx context.Context, key string) error {
 // objstore は 1000 キーずつのリクエストの単位で失敗し、同じリクエストの中では失敗したキーの後ろも消えうるので、
 // 消え残るキーの範囲は objstore と同じではない。
 func (s *Store) DeleteMany(ctx context.Context, keys []string) error {
+	// キーが空でも、キャンセル済みなら失敗させる（objstoretest の契約）。ループの Delete だけでは ctx を見ない
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	for _, key := range keys {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
 		if err := s.Delete(ctx, key); err != nil {
 			return err
 		}

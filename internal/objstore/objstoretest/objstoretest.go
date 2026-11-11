@@ -18,6 +18,8 @@ import (
 )
 
 // Store は契約テストが使う操作。使う側のインターフェースは syncore と metasync が別に定義する。
+// どの操作も、呼ばれた時点で ctx が終わっていれば、リモートに触れずに ctx のエラーを返す。コアはこれを前提に、
+// 並列の転送で失敗した後の残りを、Put などを呼ぶ前に自分で確かめずに止める。
 type Store interface {
 	Get(ctx context.Context, key string) (io.ReadCloser, error)
 	Put(ctx context.Context, key string, body io.ReadSeeker, size int64) error
@@ -173,6 +175,50 @@ func Run(t *testing.T, store Store) {
 			t.Errorf("len(keys) = %d, want 0", len(got))
 		}
 	})
+
+	cancelCases := []struct {
+		name string
+		op   func(ctx context.Context, p string) error
+	}{
+		{"Get", func(ctx context.Context, p string) error {
+			rc, err := store.Get(ctx, p+"a")
+			if err == nil {
+				_ = rc.Close()
+			}
+			return err
+		}},
+		{"Put", func(ctx context.Context, p string) error {
+			return store.Put(ctx, p+"b", bytes.NewReader([]byte("new")), 3)
+		}},
+		{"List", func(ctx context.Context, p string) error {
+			_, err := store.List(ctx, p)
+			return err
+		}},
+		{"Delete", func(ctx context.Context, p string) error {
+			return store.Delete(ctx, p+"a")
+		}},
+		{"DeleteMany", func(ctx context.Context, p string) error {
+			return store.DeleteMany(ctx, []string{p + "a"})
+		}},
+		{"空のキーでの DeleteMany", func(ctx context.Context, p string) error {
+			return store.DeleteMany(ctx, nil)
+		}},
+	}
+	for _, tt := range cancelCases {
+		t.Run("objstore/"+tt.name+" はキャンセル済みの ctx ではリモートに触れずに ctx のエラーを返す", func(t *testing.T) {
+			p := prefix(t, store)
+			put(t, store, p+"a", []byte("old"))
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+
+			if err := tt.op(ctx, p); !errors.Is(err, context.Canceled) {
+				t.Errorf("err = %v, want context.Canceled", err)
+			}
+			if d := cmp.Diff([]string{p + "a"}, list(t, store, p)); d != "" {
+				t.Errorf("keys (-want +got):\n%s", d)
+			}
+		})
+	}
 
 	t.Run("objstore/複数の goroutine から同時に Put と Get をしても壊れない", func(t *testing.T) {
 		p := prefix(t, store)
