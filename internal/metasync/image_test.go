@@ -234,10 +234,11 @@ func TestSyncImage(t *testing.T) {
 		})
 	}
 
-	t.Run("8章/画像/キャッシュの画像の中身が sha256 と違えば PUT せず、game.json も PUT しない", func(t *testing.T) {
+	t.Run("8-I4 キャッシュの画像の中身が sha256 と違えば、画像を PUT せずに game.json を PUT する", func(t *testing.T) {
 		e := newBareEnv(t)
 		sha := e.setImage(t, testPNG, later)
-		if err := os.WriteFile(filepath.Join(e.imageDir, sha), imageBody(pngMagic, "corrupted"), 0o600); err != nil {
+		path := filepath.Join(e.imageDir, sha)
+		if err := os.WriteFile(path, imageBody(pngMagic, "corrupted"), 0o600); err != nil {
 			t.Fatalf("corrupt cache: %v", err)
 		}
 
@@ -245,15 +246,18 @@ func TestSyncImage(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Sync: %v", err)
 		}
-		if diff := cmp.Diff(metasync.Result{GameInfo: metasync.GameInfoUnchanged, Image: metasync.ImageMissing}, got); diff != "" {
+		if diff := cmp.Diff(metasync.Result{GameInfo: metasync.GameInfoUploaded, Image: metasync.ImageMissing}, got); diff != "" {
 			t.Errorf("Result (-want +got):\n%s", diff)
 		}
-		if keys := e.putOrder(); len(keys) != 0 {
-			t.Errorf("PUT した: %v", keys)
+		if diff := cmp.Diff([]string{gameKey}, e.putOrder()); diff != "" {
+			t.Errorf("PUT したキー (-want +got):\n%s", diff)
+		}
+		if _, err := os.Stat(path); !errors.Is(err, fs.ErrNotExist) {
+			t.Errorf("壊れたキャッシュの画像が残っている: %v", err)
 		}
 	})
 
-	t.Run("8章/画像/画像がキャッシュにもリモートにもなければ、game.json を PUT しない", func(t *testing.T) {
+	t.Run("8-I4 画像がキャッシュにもリモートにもなければ、imageSha256 を入れたまま game.json を PUT する", func(t *testing.T) {
 		e := newBareEnv(t)
 		execDB(t, e.dbPath, `UPDATE games SET image_sha256 = ? WHERE id = ?`, testImage, testGameID)
 		e.addSession(t, sessionA, 60)
@@ -262,12 +266,15 @@ func TestSyncImage(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Sync: %v", err)
 		}
-		want := metasync.Result{GameInfo: metasync.GameInfoUnchanged, Image: metasync.ImageMissing, UploadedSessions: 1}
+		want := metasync.Result{GameInfo: metasync.GameInfoUploaded, Image: metasync.ImageMissing, UploadedSessions: 1}
 		if diff := cmp.Diff(want, got); diff != "" {
 			t.Errorf("Result (-want +got):\n%s", diff)
 		}
-		if n := e.gamePuts(); n != 0 {
-			t.Errorf("game.json を %d 回 PUT した", n)
+		if body := e.remoteBody(t, gameKey); !strings.Contains(body, `"imageSha256":"`+testImage+`"`) {
+			t.Errorf("game.json に imageSha256 がない: %s", body)
+		}
+		if got := e.localGameInfo(t).ImageSha256; got != testImage {
+			t.Errorf("DB の imageSha256 = %q, want %q", got, testImage)
 		}
 	})
 
