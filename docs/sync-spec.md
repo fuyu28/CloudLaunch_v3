@@ -364,6 +364,8 @@ Pull は `entries` の `path` に従って stage にファイルを書く。path
 ### ゲーム情報
 
 - `games/{gameId}/game.json` に `{ id, title, brand?, imageSha256?, createdAt, updatedAt }` を置く
+  - `brand`・`imageSha256` は、ないか `null` なら未設定とする。`brand` の空文字も未設定とする。DB は未設定を空文字と区別せずに持つので、空文字を別の値として扱うと、取り込んで PUT し直すたびに表記が変わるためである
+  - PUT するときは、未設定の `brand`・`imageSha256` を項目ごと省く
 - 衝突したら、文書全体で `updatedAt` が大きい方を採る（後勝ち）
   - **8-G1** リモートに game.json がなければ、ローカルのものを PUT する
   - **8-G2** ローカルの `updatedAt` が大きければ、ローカルのものを PUT する
@@ -406,7 +408,7 @@ Pull は `entries` の `path` に従って stage にファイルを書く。path
 
 game.json が次のどれかに当たれば、そのゲームのゲーム情報の同期だけを止める。DB を書き換えず、ローカルのもので上書きする PUT もしない。
 
-- **8-V7** JSON として読めない
+- **8-V7** JSON として読めないか、`brand` が文字列でも `null` でもない
 - **8-V8** `id` がキーのゲームと違う
 - **8-V9** `title` がないか空である
 - **8-V10** `createdAt` か `updatedAt` が、ないか 3 章の日時の形でない
