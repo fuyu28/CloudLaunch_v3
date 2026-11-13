@@ -13,7 +13,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"time"
 
 	"golang.org/x/sync/errgroup"
 )
@@ -225,17 +224,15 @@ func parseSession(body []byte, gameID, id string) (Session, error) {
 			return Session{}, fmt.Errorf("8-V2: %s is missing or null", name)
 		}
 	}
-	var sid, sgame, splayed string
+	var sid, sgame string
 	if err := json.Unmarshal(fields["id"], &sid); err != nil || sid != id {
 		return Session{}, fmt.Errorf("8-V3: id %s does not match key", fields["id"])
 	}
 	if err := json.Unmarshal(fields["gameId"], &sgame); err != nil || sgame != gameID {
 		return Session{}, fmt.Errorf("8-V4: gameId %s does not match key", fields["gameId"])
 	}
-	// Parse は表記の揺れ（ミリ秒の桁数など）を受け入れうるので、書き戻して元の表記と一致するものだけを通す
-	err := json.Unmarshal(fields["playedAt"], &splayed)
-	playedAt, perr := time.Parse(timeLayout, splayed)
-	if err != nil || perr != nil || playedAt.UTC().Format(timeLayout) != splayed {
+	playedAt, ok := parseTimestamp(fields["playedAt"])
+	if !ok {
 		return Session{}, fmt.Errorf("8-V5: playedAt %s is not in the spec format", fields["playedAt"])
 	}
 	// json.Number で受けないのは、文字列の "60" も数として通してしまうため

@@ -80,7 +80,8 @@ type Result struct {
 	DownloadedSessions int
 }
 
-// Sync は、1 つのゲームのメタ情報を同期する。同期ロックは握らない（仕様書 3 章「排他」）。
+// Sync は、1 つのゲームのメタ情報を、ゲーム情報 → プレイ履歴の順に同期する。同期ロックは握らない（仕様書 3 章「排他」）。
+// ゲーム情報の同期が失敗したら、プレイ履歴は同期せずにエラーを返す。不正な game.json は失敗に数えない。
 // ゲームの tombstone の記録があれば、リモートに触れずにゼロ値を返す（仕様書 8-M4）。
 func (c *Core) Sync(ctx context.Context, gameID string) (Result, error) {
 	deleted, err := c.cfg.Local.RemoteDeleted(ctx, gameID)
@@ -90,5 +91,14 @@ func (c *Core) Sync(ctx context.Context, gameID string) (Result, error) {
 	if deleted {
 		return Result{}, nil
 	}
-	return c.syncSessions(ctx, gameID)
+	info, err := c.syncGameInfo(ctx, gameID)
+	if err != nil {
+		return Result{}, err
+	}
+	res, err := c.syncSessions(ctx, gameID)
+	if err != nil {
+		return Result{}, err
+	}
+	res.GameInfo = info
+	return res, nil
 }
