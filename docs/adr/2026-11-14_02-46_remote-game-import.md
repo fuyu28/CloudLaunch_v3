@@ -1,0 +1,110 @@
+# remote-game-import
+
+- 日時: 2026-11-14 02:46 (JST)
+
+## 当初の要求 / 背景
+
+仕様書 8 章「2 台目の PC での取り込み」は、`games/` を区切り文字つきで一覧し、各ゲームの `game.json` を読み、ゲームの tombstone があるゲームと登録済みのゲームを除いて一覧で出し、選んだゲームを同じ gameId で登録するとしている（8-N1〜8-N4）。一覧から除くゲームの扱いと、登録の直前の読み直しは、仕様書の変更 PR（#122）で 8-N5〜8-N12 として書く。
+
+ゲーム情報の後勝ちの同期は 2026-11-14_00-43_game-info-sync.md、画像の同期は 2026-11-14_01-52_game-image-sync.md で作った。登録した後の画像とプレイ履歴は、それらの同期で取得できる。
+
+objstore は、キー指定で Get / Put / List / Delete と DeleteMany を行う汎用のオブジェクトストアで、List は接頭辞で始まるキーをすべて返す（2026-10-23_00-30_remote-object-store.md）。`games/` を List すると、全ゲームの manifest と object のキーまで返るので、ゲームの一覧には使えない。CLI の `game add --id` は、`createdAt`・`updatedAt` を登録した時刻で作るので、8-N3 の「時刻もそのまま入れる」を満たさない。
+
+## 仕様
+
+- 扱う仕様書の ID の範囲
+- ObjectStore に足す操作
+- 一覧の手順と並列数
+- 一覧専用の索引
+- 登録の直前の読み直し
+- 登録の後の画像とプレイ履歴
+- API の形
+- CLI の入口
+- テスト
+- 進め方と PR の大きさ
+
+## 決定事項
+
+### 扱う仕様書の ID の範囲
+
+- 事項: この作業で、8 章のどの項目を満たすか
+- 決定内容: 8-N1〜8-N12 を扱う。8-N2（ユーザーが選ぶ）は CLI と GUI の操作なので、コアのテストは書かない。既存のローカル登録をリモートのゲームに紐付け直すことは扱わない
+- 判断理由: 紐付け直しは仕様書 1 章で対象外としている
+
+### ObjectStore に足す操作
+
+- 事項: `games/` 直下のゲームの一覧を、どの操作で得るか
+- 決定内容: objstore・memstore・契約テスト（objstoretest）に `ListPrefixes(ctx, prefix string) ([]string, error)` を足す。区切り文字は `/` に固定し、prefix の直下の共通の接頭辞（`games/{gameId}/` の形の完全な接頭辞）だけを辞書順で返し、直下のキーは返さない。1000 件を超えても全件を返す。キャンセル済みの ctx では、ほかの操作と同じくリモートに触れずに ctx のエラーを返す。memstore で失敗を仕込むときは、新しい Op を作らず `OpList` を使い、key に prefix を渡す
+- 判断理由: S3 の ListObjectsV2 は `Delimiter` を指定すると、共通の接頭辞を `CommonPrefixes` で返すので、1 回のリクエストで 1000 ゲームまで一覧できる。区切り文字を引数で受け取る汎用の形は、`/` 以外を使う予定がなく、契約テストで確かめる組み合わせが増えるだけなので採らない。直下のキーも返す形は、使う側がなく、返り値の型が増えるので採らない。既存の `List` に区切り文字の有無を足す形は、既存の呼び出しをすべて書き換えることになるので採らない。`OpList` を使い回すのは、一覧の失敗を仕込むテストで、どちらの List かを区別する必要がないため
+
+### 一覧の手順と並列数
+
+- 事項: 8-N1・8-N5〜8-N11 を、どの順で、どう並べて行うか
+- 決定内容: 次の順で行う
+  1. DB に登録済みの gameId を読む（ゲームの tombstone の記録があるものを含む）
+  2. `games/` を `ListPrefixes` し、登録済みの gameId（8-N5）と、UUIDv7 の形でない gameId（8-N6）を、GET の前に除く
+  3. 残ったゲームごとに `deleted.json` を GET し、`fs.ErrNotExist` のときだけ `game.json` を GET する（8-N7）。ゲームの中の 2 つの GET は順に行い、ゲーム同士は `errgroup` の `SetLimit(8)` で並べる。1 つが失敗したら残りをキャンセルし、一覧の全体をエラーにする（8-N11）
+  4. 不正な tombstone（8-N8）と、ない・不正な `game.json`（8-N9）は、Warn のログを残して除き、件数を数える（8-N10）。`deleted.json` の検証（8-T4〜8-T6）は、#100 でも使える形で metasync に置く
+  5. 残ったゲームを gameId の順に並べて返す
+- 判断理由: 登録済みのゲームまで GET すると、PC が持つゲームの数だけ GET が無駄になる。並列数 8 は AGENTS.md の転送の並列数に揃える。ゲームの中の 2 つの GET を並べても GET の回数は減らず、tombstone のあるゲームで `game.json` を余分に読むので、順に行う。100 ゲームでも往復は約 25 回で済む。gameId の順に並べるのは、並列に読んでも出力の順を変えないため
+
+### 一覧専用の索引
+
+- 事項: ゲームの一覧を 1 回で読める索引（`games/index.json` など）を、リモートに置くか
+- 決定内容: 置かない。一覧は `ListPrefixes` と、ゲームごとに最大 2 回の GET で作る
+- 判断理由: 索引は全ゲームで共有する書き換え可能な object になる。2 台の PC が別々のゲームを同時に登録すると、片方の追加が消える。防ぐには条件付きの PUT と再試行が要り、objstore の契約も増える。ゲームの登録・削除（8-X5〜8-X7）・上げ直し（8-U4）・消し残りの削除（8-T2）のすべてで索引も書く必要があり、途中で失敗すると実体とずれる。索引が古いかもしれない以上、`deleted.json` と `game.json` は読み直すことになり、GET はあまり減らない。取り込みは 2 台目の PC を用意するときの操作で、頻繁には行わない。GUI で一覧を頻繁に出すようになって遅さが問題になれば、List と GET から作り直せるキャッシュとして足せる
+
+### 登録の直前の読み直し
+
+- 事項: 8-N12 の読み直しで、何を読み、何を登録するか
+- 決定内容: 登録の直前に、選んだゲームの `deleted.json` と `game.json` を、一覧と同じ順と規則で GET し直す。登録するゲーム情報は、読み直した `game.json` のものにする。ゲームの tombstone がある・不正な tombstone・ない・不正な `game.json`・読み込みの失敗のどれかに当たれば、登録せずにエラーを返す。一覧は作り直さない。登録済みの gameId は、リモートを読む前にエラーにする
+- 判断理由: CLI では一覧と登録が別のコマンドで、GUI でも一覧を出してから選ぶまでに時間が空く。その間にほかの PC が削除や編集をすることがある。読み直した `game.json` を使えば、一覧の後に編集された内容で登録できる。選んだゲームだけを読めば足りるので、一覧の全体は作り直さない
+
+### 登録の後の画像とプレイ履歴
+
+- 事項: 登録のときに、画像とプレイ履歴も取得するか
+- 決定内容: 取得しない。次のメタ情報の同期（CLI の `push`・`pull`）で、画像は 8-I3、プレイ履歴は 8-S2 で取得する
+- 判断理由: 既存の同期でそのまま取得できるので、登録の処理に同じ手順を持ち込まずに済む。登録は GET 2 回と DB の書き込みだけで終わり、登録の途中で画像やプレイ履歴の取得に失敗したときの扱いを決める必要がない
+
+### API の形
+
+- 事項: metasync と store に何を足すか
+- 決定内容:
+  - metasync の `ObjectStore` に `ListPrefixes` を足す
+  - metasync の `LocalStore` に `GameIDs(ctx) ([]string, error)` と `RegisterGame(ctx, g GameInfo, saveFolderPath, exePath string) error` を足す
+  - `Core.RemoteGames(ctx) (RemoteGames, error)` を足す。`RemoteGames` は、取り込める `[]GameInfo` と、除いた件数 `Skipped int` を持つ
+  - `Core.ImportGame(ctx, gameID, saveFolderPath, exePath string) (GameInfo, error)` を足す。登録したゲーム情報を返す
+  - store の `RegisterGame` は、1 つのトランザクションで `games`（`createdAt`・`updatedAt` を含む全項目をそのまま）と `game_locals`（base は NULL）に書く。同じ gameId が登録済みなら、主キーの衝突でエラーにする
+  - ゲームの tombstone がある・不正な `game.json` などで登録しなかったエラーは、センチネルエラーにせず `%w` で包んで返す
+- 判断理由: 既存の `CreateGame` は `createdAt` を `updatedAt` にも入れ、`imageSha256` を持たないので、8-N3 を満たさない。`CreateGame` に引数を足すより、リモートのゲーム情報をそのまま受け取る入口を分ける方が、`game add` の振る舞いを変えずに済む。セーブフォルダと実行ファイルのパスは metasync では使わず、そのまま store に渡す。登録しなかった理由で振る舞いを分ける呼び出し側は、今はない。GUI で分ける必要が出たら M4 で足す
+
+### CLI の入口
+
+- 事項: 取り込みを CLI で確かめるため、何を足すか
+- 決定内容:
+  - `game remote [--data-dir D]`: 取り込めるゲームを、1 行に 1 つ `gameId<TAB>title<TAB>brand（なければ -）<TAB>updatedAt` の形で出す。除いたゲームがあれば、最後に「取り込めないゲームが N 件あります（詳細はログ）」と出す（8-N10）
+  - `game import --game ID --save-dir PATH --exe PATH [--data-dir D]`: パスの検査は `game add` と同じ（絶対パスであること、存在は確かめない）にし、登録した gameId と title を出す
+- 判断理由: コマンド名は AGENTS.md の CLI の一覧に合わせる。タブ区切りにすると、`game import` に渡す gameId を `cut` などで取り出せる。セーブフォルダの存在を確かめないのは、`game add` と同じく、2 台目の PC ではまだセーブフォルダがないことがあるため（仕様書 4 章の「local なし」）
+
+### テスト
+
+- 事項: どう確かめるか
+- 決定内容:
+  - objstoretest に、`ListPrefixes` が直下の共通の接頭辞だけを辞書順で返すこと、1000 件を超えても全件を返すこと、キャンセル済みの ctx の契約を足し、objstore（versitygw）と memstore の両方で走らせる
+  - metasync は `package metasync_test` で、本物の SQLite と memstore を使い、8-N1・8-N3〜8-N12 を書く。8-N8 は 8-T4〜8-T6 の各条件、8-N9 は `game.json` がないときと 8-V7 などの不正なときを書く。8-N4 は、登録した後の store の `GameLocal` の base が空であることで確かめる。8-N5 は、登録済みのゲームのキーを GET しないことを、memstore の `Before` の記録で確かめる
+  - store の `RegisterGame` は、metasync のテストで本物の SQLite を通して確かめ、store に別のテストは書かない。cmd の配線にはテストを書かない
+- 判断理由: AGENTS.md のテストの方針に従う。8-N4 の「base なしから判定する」は、判定表の「base なし」の行を syncore の既存のテストが確かめているので、metasync のテストで syncore を組み立てる必要はない。store の `RegisterGame` は SQL 1 回ずつの書き込みで、metasync のテストが全項目を読み戻して比べる
+
+### 進め方と PR の大きさ
+
+- 事項: 仕様書の変更と、この作業の PR をどう進めるか
+- 決定内容: 8-N5〜8-N12 は文書だけの PR（#122）で先に出し、#122 → この PR の順にマージする。見込みは約 800 行（テスト約 350、objstore・memstore・契約テスト約 90、metasync 約 150、store 約 40、CLI 約 80、ADR と AGENTS.md 約 130）。1,000 行を超えそうなら、`ListPrefixes` を先に別の PR に分ける
+- 判断理由: Issue #99 の見込み（約 450 行）は 8-N5〜8-N12 を足す前のもので、除くゲームの条件ごとのテストが増える。2026-11-14_01-52_game-image-sync.md の見込みと実際の差（約 800 行に対して約 1,030 行）を踏まえ、テストを多めに見積もった
+
+## 結果 / 影響
+
+（作業の後に書く）
+
+## 更新履歴
+
+- 2026-11-14 02:46 作成
