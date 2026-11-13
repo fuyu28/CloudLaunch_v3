@@ -11,7 +11,7 @@ import (
 	"github.com/fuyu28/CloudLaunch_v3/internal/metasync"
 )
 
-// GameEdit は、nil の項目を変えない。Brand の空文字は brand を消す。
+// GameEdit は、nil の項目を変えない。Brand と ImageSha256 の空文字は、その項目を消す。
 type GameEdit struct {
 	Title       *string
 	Brand       *string
@@ -82,17 +82,24 @@ func (s *Store) EditGame(ctx context.Context, gameID string, edit GameEdit, now 
 	if edit.Title != nil {
 		title = sql.NullString{String: *edit.Title, Valid: true}
 	}
-	var brand string
+	var brand, image string
 	if edit.Brand != nil {
 		brand = *edit.Brand
+	}
+	if edit.ImageSha256 != nil {
+		image = *edit.ImageSha256
+		if image != "" && !metasync.ValidSHA256(image) {
+			return fmt.Errorf("invalid image sha256: %q", image)
+		}
 	}
 	res, err := s.db.ExecContext(ctx,
 		`UPDATE games SET
 		   title = COALESCE(?, title),
 		   brand = CASE WHEN ? THEN NULLIF(?, '') ELSE brand END,
+		   image_sha256 = CASE WHEN ? THEN NULLIF(?, '') ELSE image_sha256 END,
 		   updated_at = max(?, COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', updated_at, '+0.001 seconds'), updated_at))
 		 WHERE id = ?`,
-		title, edit.Brand != nil, brand, formatTime(now), gameID)
+		title, edit.Brand != nil, brand, edit.ImageSha256 != nil, image, formatTime(now), gameID)
 	if err != nil {
 		return fmt.Errorf("update games: %w", err)
 	}

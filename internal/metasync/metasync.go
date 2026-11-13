@@ -126,7 +126,7 @@ func (c *Core) Sync(ctx context.Context, gameID string) (Result, error) {
 	if deleted {
 		return Result{}, nil
 	}
-	info, err := c.syncGameInfo(ctx, gameID)
+	info, img, err := c.syncGameInfo(ctx, gameID)
 	if err != nil {
 		return Result{}, err
 	}
@@ -134,6 +134,6 @@ func (c *Core) Sync(ctx context.Context, gameID string) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	res.GameInfo = info
+	res.GameInfo, res.Image = info, img
 	return res, nil
 }
