@@ -155,6 +155,22 @@ func TestEditGame(t *testing.T) {
 		}
 	})
 
+	t.Run("store/EditGame は updated_at が日時の上限でも失敗しない", func(t *testing.T) {
+		s, _ := openTemp(t)
+		createTestGame(t, s)
+		const last = "9999-12-31T23:59:59.999Z"
+		if _, err := s.db.Exec(`UPDATE games SET updated_at = ? WHERE id = ?`, last, testGameID); err != nil {
+			t.Fatalf("update: %v", err)
+		}
+
+		if err := s.EditGame(ctx, testGameID, GameEdit{Title: str("New")}, testCreatedAt); err != nil {
+			t.Fatalf("EditGame: %v", err)
+		}
+		if got := gameInfo(t, s); got.Title != "New" || got.UpdatedAt.Format(timeLayout) != last {
+			t.Errorf("GameInfo = %+v, want title New, updatedAt %s", got, last)
+		}
+	})
+
 	t.Run("store/EditGame は空の title を書かない", func(t *testing.T) {
 		s, _ := openTemp(t)
 		createTestGame(t, s)
