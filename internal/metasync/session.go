@@ -17,10 +17,7 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-const (
-	transferLimit = 8
-	timeLayout    = "2006-01-02T15:04:05.000Z"
-)
+const transferLimit = 8
 
 // sessionIDPattern は、UUIDv7 の形（仕様書 2 章の HEAD と同じ）か、旧版の 32 桁の小文字 16 進に当たる（8-S6）。
 var sessionIDPattern = regexp.MustCompile(`^(?:[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|[0-9a-f]{32})$`)

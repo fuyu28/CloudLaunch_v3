@@ -180,17 +180,3 @@ func unmarshalString(fields map[string]json.RawMessage, name string, dst *string
 	}
 	return json.Unmarshal(v, dst)
 }
-
-// parseTimestamp は、3 章の日時の形の JSON 文字列だけを受け入れる。ない項目・null・文字列でない値は通さない。
-// time.Parse は表記の揺れ（ミリ秒の桁数など）を受け入れうるので、書き戻して元の表記と一致するものだけを通す。
-func parseTimestamp(raw json.RawMessage) (time.Time, bool) {
-	var s string
-	if err := json.Unmarshal(raw, &s); err != nil {
-		return time.Time{}, false
-	}
-	t, err := time.Parse(timeLayout, s)
-	if err != nil || t.UTC().Format(timeLayout) != s {
-		return time.Time{}, false
-	}
-	return t, true
-}
