@@ -163,7 +163,7 @@ func TestSyncGameInfo(t *testing.T) {
 	}{
 		{"8-V7 JSON として読めない game.json は同期しない", `{"id":`},
 		{"8-V7 64 KiB を超える game.json は同期しない", remoteGameJSON(newerStamp) + strings.Repeat(" ", 64<<10)},
-		{"8-V7 brand が文字列でない game.json は同期しない", gameJSONWith(id, title, field("brand", "5"), created, updated)},
+		{"8-V15 brand が文字列でない game.json は同期しない", gameJSONWith(id, title, field("brand", "5"), created, updated)},
 		{"8-V8 id がキーのゲームと違う game.json は同期しない", gameJSONWith(field("id", q("0192d4e8-0000-7000-8000-000000000002")), title, created, updated)},
 		{"8-V8 id がない game.json は同期しない", gameJSONWith(title, created, updated)},
 		{"8-V8 id が文字列でない game.json は同期しない", gameJSONWith(field("id", "5"), title, created, updated)},

@@ -51,7 +51,7 @@ const (
 	GameInfoUnchanged GameInfoOutcome = iota
 	GameInfoUploaded
 	GameInfoDownloaded
-	// GameInfoInvalid は、リモートの game.json が不正（仕様書 8-V7〜8-V11）で同期しなかったことを表す
+	// GameInfoInvalid は、リモートの game.json が不正（仕様書 8-V7〜8-V11・8-V15）で同期しなかったことを表す
 	GameInfoInvalid
 )
 

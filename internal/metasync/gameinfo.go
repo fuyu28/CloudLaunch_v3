@@ -38,7 +38,7 @@ type gameInfoJSON struct {
 	UpdatedAt   string `json:"updatedAt"`
 }
 
-// syncGameInfo は、GET・PUT・DB の書き込みの失敗だけをエラーにする。不正な game.json（8-V7〜8-V11）は、ログに残して
+// syncGameInfo は、GET・PUT・DB の書き込みの失敗だけをエラーにする。不正な game.json（8-V7〜8-V11・8-V15）は、ログに残して
 // GameInfoInvalid を返し、DB もリモートも書き換えない。
 func (c *Core) syncGameInfo(ctx context.Context, gameID string) (GameInfoOutcome, error) {
 	local, err := c.cfg.Local.GameInfo(ctx, gameID)
@@ -112,7 +112,7 @@ func (c *Core) putGameInfo(ctx context.Context, g GameInfo) (GameInfoOutcome, er
 	return GameInfoUploaded, nil
 }
 
-// parseGameInfo は、仕様書 8-V7〜8-V11 で検証する。知らない項目は無視する。parseSession と同じ理由で、構造体に
+// parseGameInfo は、仕様書 8-V7〜8-V11・8-V15 で検証する。知らない項目は無視する。parseSession と同じ理由で、構造体に
 // Unmarshal せず項目ごとに読む。brand・imageSha256 は、ないか null なら未設定とし、brand の空文字も未設定とする。
 func parseGameInfo(body []byte, gameID string) (GameInfo, error) {
 	if len(body) > maxGameInfoSize {
@@ -125,7 +125,7 @@ func parseGameInfo(body []byte, gameID string) (GameInfo, error) {
 	var g GameInfo
 	var err error
 	if g.Brand, err = optionalString(fields["brand"]); err != nil {
-		return GameInfo{}, fmt.Errorf("8-V7: brand %s is not a string", fields["brand"])
+		return GameInfo{}, fmt.Errorf("8-V15: brand %s is not a string", fields["brand"])
 	}
 	if err := unmarshalString(fields, "id", &g.ID); err != nil || g.ID != gameID {
 		return GameInfo{}, fmt.Errorf("8-V8: id %s does not match key", fields["id"])
