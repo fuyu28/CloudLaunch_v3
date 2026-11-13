@@ -72,6 +72,21 @@ const (
 	GameInfoInvalid
 )
 
+type ImageOutcome int
+
+const (
+	// ImageNone は、画像を扱わなかったこと（画像がない・同期を飛ばした・game.json が不正）を表す
+	ImageNone ImageOutcome = iota
+	// ImageUnchanged は、画像がキャッシュにもリモートにもあり、転送しなかったことを表す
+	ImageUnchanged
+	ImageUploaded
+	ImageDownloaded
+	// ImageInvalid は、取得した画像が不正（仕様書 8-V12〜8-V14）で、キャッシュに入れなかったことを表す
+	ImageInvalid
+	// ImageMissing は、要る画像がリモートになく、PUT できるものもキャッシュになかったことを表す
+	ImageMissing
+)
+
 type ImportResult struct {
 	Inserted  int
 	OtherGame []string
@@ -81,6 +96,8 @@ type Config struct {
 	Remote ObjectStore
 	Local  LocalStore
 	Logger *slog.Logger
+	// ImageDir は、画像のキャッシュのフォルダ。なければ作る
+	ImageDir string
 }
 
 type Core struct {
@@ -93,6 +110,7 @@ func New(cfg Config) *Core {
 
 type Result struct {
 	GameInfo           GameInfoOutcome
+	Image              ImageOutcome
 	UploadedSessions   int
 	DownloadedSessions int
 }

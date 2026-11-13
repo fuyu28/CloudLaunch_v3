@@ -171,6 +171,43 @@ func TestEditGame(t *testing.T) {
 		}
 	})
 
+	t.Run("store/EditGame は imageSha256 を設定し、空文字で外す", func(t *testing.T) {
+		s, _ := openTemp(t)
+		createTestGame(t, s)
+		const sha = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+		now := testCreatedAt.Add(time.Hour)
+
+		if err := s.EditGame(ctx, testGameID, GameEdit{ImageSha256: str(sha)}, now); err != nil {
+			t.Fatalf("EditGame: %v", err)
+		}
+		want := metasync.GameInfo{ID: testGameID, Title: "Game", ImageSha256: sha, CreatedAt: testCreatedAt, UpdatedAt: now}
+		if diff := cmp.Diff(want, gameInfo(t, s)); diff != "" {
+			t.Errorf("設定した後の GameInfo (-want +got):\n%s", diff)
+		}
+
+		if err := s.EditGame(ctx, testGameID, GameEdit{ImageSha256: str("")}, now.Add(time.Hour)); err != nil {
+			t.Fatalf("EditGame: %v", err)
+		}
+		want = metasync.GameInfo{ID: testGameID, Title: "Game", CreatedAt: testCreatedAt, UpdatedAt: now.Add(time.Hour)}
+		if diff := cmp.Diff(want, gameInfo(t, s)); diff != "" {
+			t.Errorf("外した後の GameInfo (-want +got):\n%s", diff)
+		}
+	})
+
+	t.Run("store/EditGame は sha256 の形でない imageSha256 を書かない", func(t *testing.T) {
+		s, _ := openTemp(t)
+		createTestGame(t, s)
+
+		for _, sha := range []string{"0123", "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF"} {
+			if err := s.EditGame(ctx, testGameID, GameEdit{ImageSha256: str(sha)}, testCreatedAt.Add(time.Hour)); err == nil {
+				t.Errorf("EditGame(%q) がエラーを返さなかった", sha)
+			}
+		}
+		if diff := cmp.Diff(testGameInfo, gameInfo(t, s)); diff != "" {
+			t.Errorf("GameInfo (-want +got):\n%s", diff)
+		}
+	})
+
 	t.Run("store/EditGame は空の title を書かない", func(t *testing.T) {
 		s, _ := openTemp(t)
 		createTestGame(t, s)

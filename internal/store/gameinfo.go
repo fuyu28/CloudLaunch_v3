@@ -13,8 +13,9 @@ import (
 
 // GameEdit は、nil の項目を変えない。Brand の空文字は brand を消す。
 type GameEdit struct {
-	Title *string
-	Brand *string
+	Title       *string
+	Brand       *string
+	ImageSha256 *string
 }
 
 func (s *Store) GameInfo(ctx context.Context, gameID string) (metasync.GameInfo, error) {
