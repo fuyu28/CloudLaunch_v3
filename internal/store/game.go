@@ -50,13 +50,8 @@ func (s *Store) CreateGame(ctx context.Context, g NewGame) error {
 // RegisterGame は、リモートから取り込むゲームを登録する（仕様書 8-N3・8-N4）。CreateGame と違い、createdAt・updatedAt と
 // imageSha256 も g のものをそのまま書く。base は書かない。
 func (s *Store) RegisterGame(ctx context.Context, g metasync.GameInfo, saveFolderPath, exePath string) error {
-	if g.ImageSha256 != "" && !metasync.ValidSHA256(g.ImageSha256) {
-		return fmt.Errorf("invalid image sha256: %q", g.ImageSha256)
-	}
-	for _, t := range []time.Time{g.CreatedAt, g.UpdatedAt} {
-		if err := validateTime(t); err != nil {
-			return err
-		}
+	if err := validateGameInfo(g); err != nil {
+		return err
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {

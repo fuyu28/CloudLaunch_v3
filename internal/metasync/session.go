@@ -19,8 +19,11 @@ import (
 
 const transferLimit = 8
 
-// sessionIDPattern は、UUIDv7 の形（仕様書 2 章の HEAD と同じ）か、旧版の 32 桁の小文字 16 進に当たる（8-S6）。
-var sessionIDPattern = regexp.MustCompile(`^(?:[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|[0-9a-f]{32})$`)
+// uuidV7Expr は、UUIDv7 の形（仕様書 2 章の HEAD と同じ）。セッション ID（8-S6）とゲーム ID（8-N6）の検証で同じ形を使う。
+const uuidV7Expr = `[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}`
+
+// sessionIDPattern は、UUIDv7 の形か、旧版の 32 桁の小文字 16 進に当たる（8-S6）。
+var sessionIDPattern = regexp.MustCompile(`^(?:` + uuidV7Expr + `|[0-9a-f]{32})$`)
 
 func ValidSessionID(id string) bool {
 	return sessionIDPattern.MatchString(id)

@@ -17,7 +17,7 @@ import (
 const gamesPrefix = "games/"
 
 // gameIDPattern は、UUIDv7 の形（仕様書 2 章の HEAD と同じ）に当たる。
-var gameIDPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
+var gameIDPattern = regexp.MustCompile(`^` + uuidV7Expr + `$`)
 
 var (
 	errRemoteDeleted = errors.New("game is deleted on remote")
@@ -43,11 +43,15 @@ func (c *Core) RemoteGames(ctx context.Context) (RemoteGames, error) {
 	if err != nil {
 		return RemoteGames{}, fmt.Errorf("list games: %w", err)
 	}
+	registered := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		registered[id] = true
+	}
 	var res RemoteGames
 	var candidates []string
 	for _, p := range prefixes {
 		id := strings.TrimSuffix(strings.TrimPrefix(p, gamesPrefix), "/")
-		if slices.Contains(ids, id) { // 8-N5
+		if registered[id] { // 8-N5
 			continue
 		}
 		if !gameIDPattern.MatchString(id) { // 8-N6

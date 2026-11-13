@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"time"
 
 	"github.com/google/uuid"
@@ -318,7 +319,7 @@ func openCore(ctx context.Context, name string, args []string, overwrite *bool) 
 	cfg.Processes = platform.Processes{}
 	return cores{
 		sync:   syncore.New(cfg),
-		meta:   metasync.New(metasync.Config{Remote: remote, Local: s, Logger: cfg.Logger, ImageDir: imageDir(dir)}),
+		meta:   newMeta(remote, s, cfg.Logger, dir),
 		logger: cfg.Logger,
 		gameID: *game,
 		close:  func() { _ = s.Close() },
@@ -346,12 +347,19 @@ func openMeta(ctx context.Context, dataDir string) (*metasync.Core, func(), erro
 	if err != nil {
 		return nil, nil, err
 	}
-	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
-	core := metasync.New(metasync.Config{Remote: remote, Local: s, Logger: logger, ImageDir: imageDir(dir)})
-	return core, func() { _ = s.Close() }, nil
+	return newMeta(remote, s, newLogger(), dir), func() { _ = s.Close() }, nil
 }
 
-// gameRemote は、game import に渡す gameId を cut などで取り出せるよう、タブ区切りで出す。
+func newMeta(remote *objstore.S3, s *store.Store, logger *slog.Logger, dataDir string) *metasync.Core {
+	return metasync.New(metasync.Config{Remote: remote, Local: s, Logger: logger, ImageDir: imageDir(dataDir)})
+}
+
+func newLogger() *slog.Logger {
+	return slog.New(slog.NewTextHandler(os.Stderr, nil))
+}
+
+// gameRemote は、game import に渡す gameId を cut などで取り出せるよう、タブ区切りで出す。title と brand はほかの PC が
+// 書いた値で、タブ・改行・端末の制御文字を含みうるので、Go の引用符つきの表記にして列と行を崩さない。
 func gameRemote(ctx context.Context, args []string, stdout io.Writer) error {
 	fs := flag.NewFlagSet("game remote", flag.ContinueOnError)
 	dataDir := fs.String("data-dir", "", "DB などを置くディレクトリ")
@@ -369,8 +377,8 @@ func gameRemote(ctx context.Context, args []string, stdout io.Writer) error {
 		return err
 	}
 	for _, g := range res.Games {
-		if _, err := fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\n",
-			g.ID, g.Title, orDash(g.Brand), g.UpdatedAt.Format(time.RFC3339Nano)); err != nil {
+		if _, err := fmt.Fprintf(stdout, "%s\t%q\t%s\t%s\n",
+			g.ID, g.Title, quoteOrDash(g.Brand), g.UpdatedAt.Format(time.RFC3339Nano)); err != nil {
 			return err
 		}
 	}
@@ -383,6 +391,13 @@ func gameRemote(ctx context.Context, args []string, stdout io.Writer) error {
 		_, err = fmt.Fprintf(stdout, "取り込めないゲームが %d 件あります（詳細はログ）\n", res.Skipped)
 	}
 	return err
+}
+
+func quoteOrDash(s string) string {
+	if s == "" {
+		return "-"
+	}
+	return strconv.Quote(s)
 }
 
 // gameImport は、画像とプレイ履歴を取得しない。次の push・pull のメタ情報の同期で取得する（仕様書 8-N12）。
@@ -463,7 +478,7 @@ func explainSyncError(err error) error {
 func localConfig(s *store.Store, dataDir string) syncore.Config {
 	return syncore.Config{
 		Local:      s,
-		Logger:     slog.New(slog.NewTextHandler(os.Stderr, nil)),
+		Logger:     newLogger(),
 		BackupsDir: filepath.Join(dataDir, "backups"),
 		Locker:     platform.NewFileLock(filepath.Join(dataDir, "sync.lock")),
 		Rename:     platform.Rename,

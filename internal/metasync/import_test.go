@@ -158,6 +158,7 @@ func TestRemoteGames(t *testing.T) {
 		body string
 	}{
 		{"8-N8 ゲームの tombstone が JSON として読めなければ（8-T4）、除く", `{`},
+		{"8-N8 ゲームの tombstone が 64 KiB を超えれば（8-T4）、除く", deletedJSON + strings.Repeat(" ", 64<<10)},
 		{"8-N8 ゲームの tombstone の deletedAt がなければ（8-T5）、除く", `{"deviceName":"Laptop"}`},
 		{"8-N8 ゲームの tombstone の deviceName が空なら（8-T5）、除く", `{"deletedAt":"2026-11-03T01:02:03.004Z","deviceName":""}`},
 		{"8-N8 ゲームの tombstone の deletedAt が日時の形でなければ（8-T6）、除く", `{"deletedAt":"2026-11-03","deviceName":"Laptop"}`},
@@ -189,6 +190,12 @@ func TestRemoteGames(t *testing.T) {
 		{"8-N9 game.json が JSON として読めなければ（8-V7）、除く", `{`},
 		{"8-N9 game.json の id がキーのゲームと違えば（8-V8）、除く", fullGameJSON(remoteGameB, "A")},
 		{"8-N9 game.json の title が空なら（8-V9）、除く", fullGameJSON(remoteGameA, "")},
+		{"8-N9 game.json の updatedAt が日時の形でなければ（8-V10）、除く",
+			fmt.Sprintf(`{"id":%q,"title":"A","createdAt":%q,"updatedAt":"2026-11-05"}`, remoteGameA, olderStamp)},
+		{"8-N9 game.json の imageSha256 が sha256 の形でなければ（8-V11）、除く",
+			fmt.Sprintf(`{"id":%q,"title":"A","imageSha256":"ABC","createdAt":%q,"updatedAt":%q}`, remoteGameA, olderStamp, newerStamp)},
+		{"8-N9 game.json の brand が文字列でなければ（8-V15）、除く",
+			fmt.Sprintf(`{"id":%q,"title":"A","brand":1,"createdAt":%q,"updatedAt":%q}`, remoteGameA, olderStamp, newerStamp)},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			e := newBareEnv(t)
