@@ -84,7 +84,8 @@ const (
 	ImageDownloaded
 	// ImageInvalid は、取得した画像が不正（仕様書 8-V12〜8-V14）で、キャッシュに入れなかったことを表す
 	ImageInvalid
-	// ImageMissing は、要る画像がリモートになく、PUT できるものもキャッシュになかったことを表す
+	// ImageMissing は、要る画像がリモートになく、PUT できるものもキャッシュになかったことを表す。game.json は、
+	// imageSha256 を入れたまま PUT する（仕様書 8-I4）
 	ImageMissing
 )
 
