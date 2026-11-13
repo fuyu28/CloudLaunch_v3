@@ -1,0 +1,4 @@
+node_modules/
+# ビルドした結果は入れない。.gitkeep だけ入れ、フロントエンドをビルドしなくても Go の //go:embed と検査が通るようにする
+dist/*
+!dist/.gitkeep
