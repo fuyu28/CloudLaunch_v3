@@ -179,6 +179,7 @@ func TestSyncGameInfo(t *testing.T) {
 		{"8-V10 createdAt が 3 章の日時の形でない game.json は同期しない", gameJSONWith(id, title, field("createdAt", q("2026-11-01")), updated)},
 		{"8-V11 imageSha256 が大文字の game.json は同期しない", gameJSONWith(id, title, field("imageSha256", q(strings.ToUpper(testImage))), created, updated)},
 		{"8-V11 imageSha256 の長さが違う game.json は同期しない", gameJSONWith(id, title, field("imageSha256", q(testImage[:63])), created, updated)},
+		{"8-V11 imageSha256 が空文字の game.json は同期しない", gameJSONWith(id, title, field("imageSha256", q("")), created, updated)},
 		{"8-V11 imageSha256 が文字列でない game.json は同期しない", gameJSONWith(id, title, field("imageSha256", "5"), created, updated)},
 	}
 	for _, tt := range invalid {
@@ -227,7 +228,7 @@ func TestSyncGameInfo(t *testing.T) {
 		}
 	})
 
-	t.Run("8章/ゲーム情報/brand・imageSha256 が null か空文字なら、未設定として取り込む", func(t *testing.T) {
+	t.Run("8章/ゲーム情報/brand が空文字、imageSha256 が null なら、未設定として取り込む", func(t *testing.T) {
 		e := newBareEnv(t)
 		execDB(t, e.dbPath, `UPDATE games SET brand = ?, image_sha256 = ? WHERE id = ?`, "Brand", testImage, testGameID)
 		e.putRemote(t, gameKey, gameJSONWith(id, title, field("brand", q("")), field("imageSha256", "null"), created, updated))
