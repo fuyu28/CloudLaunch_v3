@@ -87,6 +87,11 @@ func (c *Core) writeCache(sha string, body []byte) error {
 	}
 	if err := os.Rename(f.Name(), c.imagePath(sha)); err != nil {
 		_ = os.Remove(f.Name())
+		// 同期ロックを握らないので、別のプロセスが同じ画像を同時に書くことがある。Windows では、相手が宛先を開いていると
+		// 置き換えが失敗する。中身は sha256 で決まり同じなので、宛先がもうあれば成功とする
+		if _, serr := os.Stat(c.imagePath(sha)); serr == nil {
+			return nil
+		}
 		return fmt.Errorf("rename image cache file: %w", err)
 	}
 	return nil
