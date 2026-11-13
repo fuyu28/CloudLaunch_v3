@@ -45,45 +45,55 @@ func (c *Core) syncGameInfo(ctx context.Context, gameID string) (GameInfoOutcome
 	if err != nil {
 		return 0, 0, fmt.Errorf("read local game info: %w", err)
 	}
+	// current は、game.json の同期の後に DB にあるゲーム情報。その imageSha256 の画像がキャッシュになければ、最後に取得する
+	// （8-I3）。8-G3・8-G4 に限らず確かめるので、前の同期で取得できなかった画像も取り直す
+	var outcome GameInfoOutcome
+	var uploaded ImageOutcome
+	current := local
 	body, err := c.getGameJSON(ctx, gameID)
-	if errors.Is(err, fs.ErrNotExist) {
-		return c.uploadGameInfo(ctx, local) // 8-G1
-	}
-	if err != nil {
-		return 0, 0, err
-	}
-	remote, err := parseGameInfo(body, gameID)
-	if err != nil {
-		c.cfg.Logger.Warn("skip invalid remote game.json", "gameId", gameID, "err", err)
-		return GameInfoInvalid, ImageNone, nil
-	}
-
 	switch {
-	case local.UpdatedAt.After(remote.UpdatedAt): // 8-G2
-		return c.uploadGameInfo(ctx, local)
-	case remote.UpdatedAt.After(local.UpdatedAt): // 8-G3
-		// GET の後にこの PC で編集されていれば書き換わらない。そのときはローカルが新しいので、次の同期で 8-G2 になる
-		replaced, err := c.cfg.Local.ReplaceGameInfo(ctx, remote)
+	case errors.Is(err, fs.ErrNotExist): // 8-G1
+		if outcome, uploaded, err = c.uploadGameInfo(ctx, local); err != nil || outcome != GameInfoUploaded {
+			return outcome, uploaded, err
+		}
+	case err != nil:
+		return 0, 0, err
+	default:
+		remote, err := parseGameInfo(body, gameID)
 		if err != nil {
-			return 0, 0, fmt.Errorf("replace game info: %w", err)
+			c.cfg.Logger.Warn("skip invalid remote game.json", "gameId", gameID, "err", err)
+			return GameInfoInvalid, ImageNone, nil
 		}
-		if !replaced {
-			return GameInfoUnchanged, ImageNone, nil
+		switch {
+		case local.UpdatedAt.After(remote.UpdatedAt): // 8-G2
+			if outcome, uploaded, err = c.uploadGameInfo(ctx, local); err != nil || outcome != GameInfoUploaded {
+				return outcome, uploaded, err
+			}
+		case remote.UpdatedAt.After(local.UpdatedAt): // 8-G3
+			// GET の後にこの PC で編集されていれば書き換わらない。そのときはローカルが新しいので、次の同期で 8-G2 になる
+			replaced, err := c.cfg.Local.ReplaceGameInfo(ctx, remote)
+			if err != nil {
+				return 0, 0, fmt.Errorf("replace game info: %w", err)
+			}
+			if replaced {
+				outcome, current = GameInfoDownloaded, remote
+			}
+		default: // 8-G4
+			if !sameGameInfo(remote, local) {
+				c.cfg.Logger.Info("game.json differs but has the same updatedAt", "gameId", gameID, "updatedAt", local.UpdatedAt)
+			}
 		}
-		img, err := c.cacheRemoteImage(ctx, gameID, remote.ImageSha256)
-		return GameInfoDownloaded, img, err
-	default: // 8-G4
-		if !sameGameInfo(remote, local) {
-			c.cfg.Logger.Info("game.json differs but has the same updatedAt", "gameId", gameID, "updatedAt", local.UpdatedAt)
-		}
-		// 前の同期で画像を取得できなかったときに、取り直す
-		img, err := c.cacheRemoteImage(ctx, gameID, local.ImageSha256)
-		return GameInfoUnchanged, img, err
 	}
+	img, err := c.cacheRemoteImage(ctx, gameID, current.ImageSha256)
+	// PUT した画像はキャッシュから送ったものなので、取得の確かめは ImageUnchanged を返す。結果には PUT したことを出す
+	if uploaded == ImageUploaded {
+		img = ImageUploaded
+	}
+	return outcome, img, err
 }
 
 // uploadGameInfo は、指す画像をリモートに揃えてから game.json を PUT する（8-I1）。画像がキャッシュにもリモートにもなければ、
-// game.json を PUT しない。リモートにあってキャッシュにない画像は、PUT の後に取得する。
+// game.json を PUT せずに GameInfoUnchanged と ImageMissing を返す。
 func (c *Core) uploadGameInfo(ctx context.Context, g GameInfo) (GameInfoOutcome, ImageOutcome, error) {
 	img, err := c.uploadImage(ctx, g)
 	if err != nil {
@@ -95,10 +105,7 @@ func (c *Core) uploadGameInfo(ctx context.Context, g GameInfo) (GameInfoOutcome,
 	if err := c.putGameInfo(ctx, g); err != nil {
 		return 0, 0, err
 	}
-	if img == ImageUnchanged {
-		img, err = c.cacheRemoteImage(ctx, g.ID, g.ImageSha256)
-	}
-	return GameInfoUploaded, img, err
+	return GameInfoUploaded, img, nil
 }
 
 // getGameJSON は、game.json がなければ fs.ErrNotExist で包んだエラーを返す。上限を超える本文は、上限の 1 バイト先までしか
