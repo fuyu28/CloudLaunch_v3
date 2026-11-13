@@ -4,8 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/go-cmp/cmp"
 
@@ -255,6 +258,44 @@ func TestRemoteGames(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("8-N11 読み込みに失敗したら、読み込み中のほかの GET をキャンセルする", func(t *testing.T) {
+		e := newBareEnv(t)
+		e.putRemoteGame(t, remoteGameA, "A")
+		e.putRemoteGame(t, remoteGameB, "B")
+		e.failOn(memstore.OpGet, remoteGameKey(remoteGameB, "deleted.json"))
+		// remoteGameA の tombstone の GET は、ctx がキャンセルされるまで返らない。キャンセルしなければ RemoteGames も返らない
+		remote := blockingStore{Store: e.remote, key: remoteGameKey(remoteGameA, "deleted.json")}
+		core := metasync.New(metasync.Config{Remote: remote, Local: e.store, Logger: slog.New(slog.DiscardHandler), ImageDir: e.imageDir})
+
+		done := make(chan error, 1)
+		go func() {
+			_, err := core.RemoteGames(ctx)
+			done <- err
+		}()
+		select {
+		case err := <-done:
+			if !errors.Is(err, errInjected) {
+				t.Errorf("RemoteGames = %v, want %v", err, errInjected)
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatal("RemoteGames が返らない: 失敗した後に、読み込み中の GET をキャンセルしていない")
+		}
+	})
+}
+
+// blockingStore は、key の Get だけを、ctx が終わるまで返さない。
+type blockingStore struct {
+	*memstore.Store
+	key string
+}
+
+func (s blockingStore) Get(ctx context.Context, key string) (io.ReadCloser, error) {
+	if key == s.key {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	return s.Store.Get(ctx, key)
 }
 
 func TestImportGame(t *testing.T) {

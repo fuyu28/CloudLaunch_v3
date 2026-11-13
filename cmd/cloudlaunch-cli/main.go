@@ -426,7 +426,8 @@ func gameImport(ctx context.Context, args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	_, err = fmt.Fprintf(stdout, "%s\t%s\n", g.ID, g.Title)
+	// title はほかの PC が書いた値なので、game remote と同じく引用符つきで出す
+	_, err = fmt.Fprintf(stdout, "%s\t%q\n", g.ID, g.Title)
 	return err
 }
 
