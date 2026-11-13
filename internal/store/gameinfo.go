@@ -6,13 +6,10 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"regexp"
 	"time"
 
 	"github.com/fuyu28/CloudLaunch_v3/internal/metasync"
 )
-
-var sha256Pattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
 // GameEdit は、nil の項目を変えない。Brand の空文字は brand を消す。
 type GameEdit struct {
@@ -47,7 +44,7 @@ func (s *Store) ReplaceGameInfo(ctx context.Context, g metasync.GameInfo) (bool,
 	if g.Title == "" {
 		return false, errors.New("empty title")
 	}
-	if g.ImageSha256 != "" && !sha256Pattern.MatchString(g.ImageSha256) {
+	if g.ImageSha256 != "" && !metasync.ValidSHA256(g.ImageSha256) {
 		return false, fmt.Errorf("invalid image sha256: %q", g.ImageSha256)
 	}
 	for _, t := range []time.Time{g.CreatedAt, g.UpdatedAt} {
@@ -72,6 +69,7 @@ func (s *Store) ReplaceGameInfo(ctx context.Context, g metasync.GameInfo) (bool,
 // EditGame は、updated_at を now（ミリ秒に切り捨てる）と、今の updated_at に 1 ms を足した時刻の、大きい方にする。
 // PC の時計が遅れていても、編集が直前の内容より新しくなり、後勝ち（仕様書 8-G2）で負けないようにするため。
 // 今の値の読み出しと書き込みを 1 つの UPDATE で行い、間に入った同期の書き換えを基準にできるようにする。
+// 今の updated_at が日時の上限（9999 年の最後）なら、strftime が NULL を返すので、updated_at を変えない。
 func (s *Store) EditGame(ctx context.Context, gameID string, edit GameEdit, now time.Time) error {
 	if edit.Title != nil && *edit.Title == "" {
 		return errors.New("empty title")
@@ -91,7 +89,7 @@ func (s *Store) EditGame(ctx context.Context, gameID string, edit GameEdit, now 
 		`UPDATE games SET
 		   title = COALESCE(?, title),
 		   brand = CASE WHEN ? THEN NULLIF(?, '') ELSE brand END,
-		   updated_at = max(?, strftime('%Y-%m-%dT%H:%M:%fZ', updated_at, '+0.001 seconds'))
+		   updated_at = max(?, COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', updated_at, '+0.001 seconds'), updated_at))
 		 WHERE id = ?`,
 		title, edit.Brand != nil, brand, formatTime(now), gameID)
 	if err != nil {

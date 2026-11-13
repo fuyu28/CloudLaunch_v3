@@ -54,10 +54,7 @@ func validateSession(sess metasync.Session) error {
 	if !metasync.ValidSessionID(sess.ID) {
 		return fmt.Errorf("invalid session id: %q", sess.ID)
 	}
-	if y := sess.PlayedAt.UTC().Year(); y < 0 || y > 9999 {
-		return fmt.Errorf("played_at out of range: %s", sess.PlayedAt)
-	}
-	return nil
+	return validateTime(sess.PlayedAt)
 }
 
 // ImportSessions は、sessions の GameID を見ずに gameID のセッションとして書く。ID と日時を CreateSession と同じく検証し、

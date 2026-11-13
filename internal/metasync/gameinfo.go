@@ -19,6 +19,11 @@ const maxGameInfoSize = 64 << 10
 
 var sha256Pattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
+// ValidSHA256 は、2 章の sha256 の表記（小文字の 16 進 64 文字）に当たる。
+func ValidSHA256(s string) bool {
+	return sha256Pattern.MatchString(s)
+}
+
 func gameKey(gameID string) string {
 	return "games/" + gameID + "/game.json"
 }
@@ -139,7 +144,7 @@ func parseGameInfo(body []byte, gameID string) (GameInfo, error) {
 		*f.dst = t
 	}
 	g.ImageSha256, err = optionalString(fields["imageSha256"])
-	if err != nil || (g.ImageSha256 != "" && !sha256Pattern.MatchString(g.ImageSha256)) {
+	if err != nil || (g.ImageSha256 != "" && !ValidSHA256(g.ImageSha256)) {
 		return GameInfo{}, fmt.Errorf("8-V11: imageSha256 %s is not a sha256", fields["imageSha256"])
 	}
 	return g, nil
