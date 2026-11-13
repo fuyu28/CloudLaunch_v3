@@ -10,6 +10,8 @@ import (
 )
 
 type ObjectStore interface {
+	// Get はキーがなければ fs.ErrNotExist で包んだエラーを返す
+	Get(ctx context.Context, key string) (io.ReadCloser, error)
 	Put(ctx context.Context, key string, body io.ReadSeeker, size int64) error
 	List(ctx context.Context, prefix string) ([]string, error)
 }
@@ -25,6 +27,14 @@ type LocalStore interface {
 	Sessions(ctx context.Context, gameID string) ([]Session, error)
 	// RemoteDeleted は、ゲームの tombstone の記録（仕様書 8-T2）があれば true を返す。登録していないゲームはエラーにする
 	RemoteDeleted(ctx context.Context, gameID string) (bool, error)
+	// ImportSessions は、sessions を 1 つのトランザクションで gameID のセッションとして入れる。同じゲームに同じ ID が
+	// あれば飛ばし、別のゲームに同じ ID があれば入れずに ImportResult.OtherGame で返す（仕様書 8-S5）
+	ImportSessions(ctx context.Context, gameID string, sessions []Session) (ImportResult, error)
+}
+
+type ImportResult struct {
+	Inserted  int
+	OtherGame []string
 }
 
 type Config struct {
@@ -42,7 +52,8 @@ func New(cfg Config) *Core {
 }
 
 type Result struct {
-	UploadedSessions int
+	UploadedSessions   int
+	DownloadedSessions int
 }
 
 // Sync は、1 つのゲームのメタ情報を同期する。同期ロックは握らない（仕様書 3 章「排他」）。
@@ -55,9 +66,5 @@ func (c *Core) Sync(ctx context.Context, gameID string) (Result, error) {
 	if deleted {
 		return Result{}, nil
 	}
-	n, err := c.uploadSessions(ctx, gameID)
-	if err != nil {
-		return Result{}, err
-	}
-	return Result{UploadedSessions: n}, nil
+	return c.syncSessions(ctx, gameID)
 }

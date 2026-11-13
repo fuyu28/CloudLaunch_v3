@@ -177,7 +177,7 @@ func syncMeta(ctx context.Context, c cores, stdout io.Writer) error {
 		_, werr := fmt.Fprintf(stdout, "メタ情報の同期に失敗しました: %v\n", err)
 		return werr
 	}
-	_, err = fmt.Fprintf(stdout, "プレイ履歴を %d 件アップロードしました\n", res.UploadedSessions)
+	_, err = fmt.Fprintf(stdout, "プレイ履歴を %d 件アップロードし、%d 件取り込みました\n", res.UploadedSessions, res.DownloadedSessions)
 	return err
 }
 

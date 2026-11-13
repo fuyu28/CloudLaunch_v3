@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"path/filepath"
 	"sort"
@@ -36,12 +37,31 @@ type env struct {
 	store  *store.Store
 	remote *memstore.Store
 	dbPath string
-	// puts は、リモートに PUT したキーを記録する。PUT は並列なので mu で守る
+	// puts と gets は、リモートに PUT・GET したキーを記録する。並列なので mu で守る
 	mu   sync.Mutex
 	puts []string
+	gets []string
 }
 
 func newEnv(t *testing.T) *env {
+	t.Helper()
+	e := newEnvOn(t, memstore.New())
+	e.remote.Before = func(op memstore.Op, key string) error {
+		e.mu.Lock()
+		defer e.mu.Unlock()
+		switch op {
+		case memstore.OpPut:
+			e.puts = append(e.puts, key)
+		case memstore.OpGet:
+			e.gets = append(e.gets, key)
+		}
+		return nil
+	}
+	return e
+}
+
+// newEnvOn は、remote を使う PC を 1 台作る。複数の PC で同じ remote を共有するときに使い、PUT・GET は記録しない。
+func newEnvOn(t *testing.T, remote *memstore.Store) *env {
 	t.Helper()
 	ctx := context.Background()
 	dbPath := filepath.Join(t.TempDir(), "cloudlaunch.db")
@@ -60,15 +80,7 @@ func newEnv(t *testing.T) *env {
 		t.Fatalf("CreateGame: %v", err)
 	}
 
-	e := &env{store: s, remote: memstore.New(), dbPath: dbPath}
-	e.remote.Before = func(op memstore.Op, key string) error {
-		if op == memstore.OpPut {
-			e.mu.Lock()
-			e.puts = append(e.puts, key)
-			e.mu.Unlock()
-		}
-		return nil
-	}
+	e := &env{store: s, remote: remote, dbPath: dbPath}
 	e.core = metasync.New(metasync.Config{
 		Remote: e.remote,
 		Local:  s,
@@ -99,12 +111,43 @@ func (e *env) putRemote(t *testing.T, key, body string) {
 	e.mu.Unlock()
 }
 
+// putRemoteSession は、#95 の PUT と同じ形のセッションをリモートに置く。
+func (e *env) putRemoteSession(t *testing.T, id string, durationSec int64) {
+	t.Helper()
+	e.putRemote(t, sessionKey(id), sessionJSON(id, testGameID, durationSec))
+}
+
+func sessionJSON(id, gameID string, durationSec int64) string {
+	return fmt.Sprintf(`{"id":%q,"gameId":%q,"playedAt":"2026-11-03T01:02:03.004Z","durationSec":%d}`, id, gameID, durationSec)
+}
+
+func session(id string, durationSec int64) metasync.Session {
+	return metasync.Session{ID: id, GameID: testGameID, PlayedAt: testPlayedAt, DurationSec: durationSec}
+}
+
 func (e *env) putKeys() []string {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	keys := append([]string{}, e.puts...)
 	sort.Strings(keys)
 	return keys
+}
+
+func (e *env) getKeys() []string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	keys := append([]string{}, e.gets...)
+	sort.Strings(keys)
+	return keys
+}
+
+func (e *env) localSessions(t *testing.T) []metasync.Session {
+	t.Helper()
+	got, err := e.store.Sessions(context.Background(), testGameID)
+	if err != nil {
+		t.Fatalf("Sessions: %v", err)
+	}
+	return got
 }
 
 func (e *env) remoteBody(t *testing.T, key string) string {
@@ -134,7 +177,7 @@ func TestSyncSessions(t *testing.T) {
 		local []string
 		// rawLocal は、CreateSession が書かない 8-S6 に合わない ID。DB を直接書き換えられた場合として入れる
 		rawLocal []string
-		// remote は、リモートに置くキー。中身はローカルと違うが、この Issue では中身を読まない（8-S4 は #96）
+		// remote は、リモートに置くキー。どれもローカルにもある ID（8-S4）か、セッションとして数えないキーなので、中身は読まれない
 		remote   []string
 		wantPuts []string
 	}{
@@ -307,6 +350,206 @@ func TestSyncSessions(t *testing.T) {
 
 		if _, err := e.core.Sync(ctx, "0192d4e8-0000-7000-8000-0000000000ff"); err == nil {
 			t.Error("Sync がエラーを返さなかった")
+		}
+	})
+}
+
+func TestDownloadSessions(t *testing.T) {
+	ctx := context.Background()
+	const sessionC = "0192d4e8-0000-7000-8000-0000000000c3"
+
+	t.Run("8-S2 リモートにだけあるセッションを DB に入れる", func(t *testing.T) {
+		e := newEnv(t)
+		e.putRemoteSession(t, sessionA, 3600)
+		e.putRemoteSession(t, legacySession, 0)
+
+		got, err := e.core.Sync(ctx, testGameID)
+		if err != nil {
+			t.Fatalf("Sync: %v", err)
+		}
+		if diff := cmp.Diff(metasync.Result{DownloadedSessions: 2}, got); diff != "" {
+			t.Errorf("Result (-want +got):\n%s", diff)
+		}
+		want := []metasync.Session{session(legacySession, 0), session(sessionA, 3600)}
+		if diff := cmp.Diff(want, e.localSessions(t)); diff != "" {
+			t.Errorf("DB のセッション (-want +got):\n%s", diff)
+		}
+		if keys := e.putKeys(); len(keys) != 0 {
+			t.Errorf("取り込んだセッションを PUT した: %v", keys)
+		}
+	})
+
+	t.Run("8-S4 両方にある ID のセッションは、中身が違っても GET せず、どちらも書き換えない", func(t *testing.T) {
+		e := newEnv(t)
+		e.addSession(t, sessionA, 60)
+		remote := sessionJSON(sessionA, testGameID, 999)
+		e.putRemote(t, sessionKey(sessionA), remote)
+
+		got, err := e.core.Sync(ctx, testGameID)
+		if err != nil {
+			t.Fatalf("Sync: %v", err)
+		}
+		if diff := cmp.Diff(metasync.Result{}, got); diff != "" {
+			t.Errorf("Result (-want +got):\n%s", diff)
+		}
+		if keys := e.getKeys(); len(keys) != 0 {
+			t.Errorf("GET した: %v", keys)
+		}
+		if diff := cmp.Diff([]metasync.Session{session(sessionA, 60)}, e.localSessions(t)); diff != "" {
+			t.Errorf("DB のセッション (-want +got):\n%s", diff)
+		}
+		if body := e.remoteBody(t, sessionKey(sessionA)); body != remote {
+			t.Errorf("リモートが書き換わった: %s", body)
+		}
+	})
+
+	t.Run("8-S5 別のゲームに同じ ID があるセッションは取り込まない", func(t *testing.T) {
+		e := newEnv(t)
+		const otherGameID = "0192d4e8-0000-7000-8000-000000000002"
+		if err := e.store.CreateGame(ctx, store.NewGame{
+			ID: otherGameID, Title: "Other", SaveFolderPath: "/other", ExePath: "/other.exe", CreatedAt: testPlayedAt,
+		}); err != nil {
+			t.Fatalf("CreateGame: %v", err)
+		}
+		other := metasync.Session{ID: sessionA, GameID: otherGameID, PlayedAt: testPlayedAt, DurationSec: 60}
+		if err := e.store.CreateSession(ctx, other); err != nil {
+			t.Fatalf("CreateSession: %v", err)
+		}
+		e.putRemoteSession(t, sessionA, 999)
+		e.putRemoteSession(t, sessionB, 0)
+
+		got, err := e.core.Sync(ctx, testGameID)
+		if err != nil {
+			t.Fatalf("Sync: %v", err)
+		}
+		if diff := cmp.Diff(metasync.Result{DownloadedSessions: 1}, got); diff != "" {
+			t.Errorf("Result (-want +got):\n%s", diff)
+		}
+		if diff := cmp.Diff([]metasync.Session{session(sessionB, 0)}, e.localSessions(t)); diff != "" {
+			t.Errorf("DB のセッション (-want +got):\n%s", diff)
+		}
+		otherSessions, err := e.store.Sessions(ctx, otherGameID)
+		if err != nil {
+			t.Fatalf("Sessions: %v", err)
+		}
+		if diff := cmp.Diff([]metasync.Session{other}, otherSessions); diff != "" {
+			t.Errorf("別のゲームのセッション (-want +got):\n%s", diff)
+		}
+	})
+
+	// 不正なセッションを sessionA のキーに置き、正しいセッション sessionB と並べる。不正な 1 件だけを飛ばし、残りは取り込む
+	invalid := []struct {
+		name string
+		body string
+	}{
+		{"8-V1 JSON として読めないセッションは取り込まない", `{"id":`},
+		{"8-V1 64 KiB を超えるセッションは取り込まない", sessionJSON(sessionA, testGameID, 60) + strings.Repeat(" ", 64<<10)},
+		{"8-V2 項目名の大文字小文字が違うセッションは取り込まない", fmt.Sprintf(`{"ID":%q,"GameID":%q,"PlayedAt":"2026-11-03T01:02:03.004Z","DurationSec":60}`, sessionA, testGameID)},
+		{"8-V2 項目が欠けたセッションは取り込まない", fmt.Sprintf(`{"id":%q,"gameId":%q,"playedAt":"2026-11-03T01:02:03.004Z"}`, sessionA, testGameID)},
+		{"8-V2 項目が null のセッションは取り込まない", fmt.Sprintf(`{"id":%q,"gameId":%q,"playedAt":null,"durationSec":60}`, sessionA, testGameID)},
+		{"8-V3 id がキーの ID と違うセッションは取り込まない", sessionJSON(sessionC, testGameID, 60)},
+		{"8-V4 gameId がキーのゲームと違うセッションは取り込まない", sessionJSON(sessionA, "0192d4e8-0000-7000-8000-000000000002", 60)},
+		{"8-V5 playedAt が 3 章の日時の形でないセッションは取り込まない（時差つき）", fmt.Sprintf(`{"id":%q,"gameId":%q,"playedAt":"2026-11-03T10:02:03.004+09:00","durationSec":60}`, sessionA, testGameID)},
+		{"8-V5 playedAt が 3 章の日時の形でないセッションは取り込まない（ミリ秒なし）", fmt.Sprintf(`{"id":%q,"gameId":%q,"playedAt":"2026-11-03T01:02:03Z","durationSec":60}`, sessionA, testGameID)},
+		{"8-V6 durationSec が負のセッションは取り込まない", sessionJSON(sessionA, testGameID, -1)},
+		{"8-V6 durationSec が小数のセッションは取り込まない", fmt.Sprintf(`{"id":%q,"gameId":%q,"playedAt":"2026-11-03T01:02:03.004Z","durationSec":1.5}`, sessionA, testGameID)},
+		{"8-V6 durationSec が指数表記のセッションは取り込まない", fmt.Sprintf(`{"id":%q,"gameId":%q,"playedAt":"2026-11-03T01:02:03.004Z","durationSec":1e3}`, sessionA, testGameID)},
+		{"8-V6 durationSec が文字列のセッションは取り込まない", fmt.Sprintf(`{"id":%q,"gameId":%q,"playedAt":"2026-11-03T01:02:03.004Z","durationSec":"60"}`, sessionA, testGameID)},
+	}
+	for _, tt := range invalid {
+		t.Run(tt.name, func(t *testing.T) {
+			e := newEnv(t)
+			e.putRemote(t, sessionKey(sessionA), tt.body)
+			e.putRemoteSession(t, sessionB, 0)
+
+			got, err := e.core.Sync(ctx, testGameID)
+			if err != nil {
+				t.Fatalf("Sync: %v", err)
+			}
+			if diff := cmp.Diff(metasync.Result{DownloadedSessions: 1}, got); diff != "" {
+				t.Errorf("Result (-want +got):\n%s", diff)
+			}
+			if diff := cmp.Diff([]metasync.Session{session(sessionB, 0)}, e.localSessions(t)); diff != "" {
+				t.Errorf("DB のセッション (-want +got):\n%s", diff)
+			}
+		})
+	}
+
+	t.Run("8章/プレイ履歴/知らない項目があっても取り込む", func(t *testing.T) {
+		e := newEnv(t)
+		e.putRemote(t, sessionKey(sessionA),
+			fmt.Sprintf(`{"id":%q,"gameId":%q,"playedAt":"2026-11-03T01:02:03.004Z","durationSec":60,"note":"x"}`, sessionA, testGameID))
+
+		if _, err := e.core.Sync(ctx, testGameID); err != nil {
+			t.Fatalf("Sync: %v", err)
+		}
+		if diff := cmp.Diff([]metasync.Session{session(sessionA, 60)}, e.localSessions(t)); diff != "" {
+			t.Errorf("DB のセッション (-want +got):\n%s", diff)
+		}
+	})
+
+	t.Run("8章/プレイ履歴/2 台の PC で同期すると、両方の DB が和集合になる", func(t *testing.T) {
+		remote := memstore.New()
+		pcA, pcB := newEnvOn(t, remote), newEnvOn(t, remote)
+		pcA.addSession(t, sessionA, 60)
+		pcB.addSession(t, sessionB, 120)
+
+		for _, pc := range []*env{pcA, pcB, pcA} {
+			if _, err := pc.core.Sync(ctx, testGameID); err != nil {
+				t.Fatalf("Sync: %v", err)
+			}
+		}
+
+		want := []metasync.Session{session(sessionA, 60), session(sessionB, 120)}
+		for name, pc := range map[string]*env{"A": pcA, "B": pcB} {
+			if diff := cmp.Diff(want, pc.localSessions(t)); diff != "" {
+				t.Errorf("PC %s の DB のセッション (-want +got):\n%s", name, diff)
+			}
+		}
+	})
+
+	t.Run("8章/プレイ履歴/一覧の後に消えたセッションは飛ばす", func(t *testing.T) {
+		e := newEnv(t)
+		e.putRemoteSession(t, sessionA, 60)
+		e.putRemoteSession(t, sessionB, 0)
+		// 一覧の後に、別の PC がゲームを削除して sessionA が消えたものとする
+		e.remote.Before = func(op memstore.Op, key string) error {
+			if op == memstore.OpGet && key == sessionKey(sessionA) {
+				return fmt.Errorf("get %q: %w", key, fs.ErrNotExist)
+			}
+			return nil
+		}
+
+		got, err := e.core.Sync(ctx, testGameID)
+		if err != nil {
+			t.Fatalf("Sync: %v", err)
+		}
+		if diff := cmp.Diff(metasync.Result{DownloadedSessions: 1}, got); diff != "" {
+			t.Errorf("Result (-want +got):\n%s", diff)
+		}
+		if diff := cmp.Diff([]metasync.Session{session(sessionB, 0)}, e.localSessions(t)); diff != "" {
+			t.Errorf("DB のセッション (-want +got):\n%s", diff)
+		}
+	})
+
+	t.Run("8章/プレイ履歴/GET に失敗したら、何も DB に入れずにエラーを返す", func(t *testing.T) {
+		e := newEnv(t)
+		e.putRemoteSession(t, sessionA, 60)
+		e.putRemoteSession(t, sessionB, 0)
+		e.putRemoteSession(t, sessionC, 0)
+		errInjected := errors.New("injected")
+		e.remote.Before = func(op memstore.Op, key string) error {
+			if op == memstore.OpGet && key == sessionKey(sessionB) {
+				return errInjected
+			}
+			return nil
+		}
+
+		if _, err := e.core.Sync(ctx, testGameID); !errors.Is(err, errInjected) {
+			t.Errorf("Sync = %v, want %v", err, errInjected)
+		}
+		if got := e.localSessions(t); len(got) != 0 {
+			t.Errorf("DB に入れた: %v", got)
 		}
 	})
 }
