@@ -24,6 +24,7 @@ import (
 
 const usage = `usage:
   cloudlaunch-cli game add --title <タイトル> --save-dir <パス> --exe <パス> [--brand <ブランド>] [--id <gameId>] [--data-dir <dir>]
+  cloudlaunch-cli game edit --game <gameId> [--title <タイトル>] [--brand <ブランド>] [--data-dir <dir>]
   cloudlaunch-cli session add --game <gameId> --duration <秒> [--played-at <RFC3339>] [--data-dir <dir>]
   cloudlaunch-cli status --game <gameId> [--data-dir <dir>]
   cloudlaunch-cli push --game <gameId> [--overwrite] [--data-dir <dir>]
@@ -49,6 +50,9 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 	case "game":
 		if len(args) >= 2 && args[1] == "add" {
 			return gameAdd(ctx, args[2:], stdout)
+		}
+		if len(args) >= 2 && args[1] == "edit" {
+			return gameEdit(ctx, args[2:], stdout)
 		}
 	case "session":
 		if len(args) >= 2 && args[1] == "add" {
@@ -177,8 +181,22 @@ func syncMeta(ctx context.Context, c cores, stdout io.Writer) error {
 		_, werr := fmt.Fprintf(stdout, "メタ情報の同期に失敗しました: %v\n", err)
 		return werr
 	}
-	_, err = fmt.Fprintf(stdout, "プレイ履歴を %d 件アップロードし、%d 件取り込みました\n", res.UploadedSessions, res.DownloadedSessions)
+	_, err = fmt.Fprintf(stdout, "ゲーム情報: %s\nプレイ履歴を %d 件アップロードし、%d 件取り込みました\n",
+		gameInfoLabel(res.GameInfo), res.UploadedSessions, res.DownloadedSessions)
 	return err
+}
+
+func gameInfoLabel(o metasync.GameInfoOutcome) string {
+	switch o {
+	case metasync.GameInfoUploaded:
+		return "アップロードしました"
+	case metasync.GameInfoDownloaded:
+		return "取り込みました"
+	case metasync.GameInfoInvalid:
+		return "リモートの game.json が不正なので同期しませんでした"
+	default:
+		return "変更なし"
+	}
 }
 
 func syncSave(ctx context.Context, core *syncore.Core, gameID string, stdout io.Writer, cmd transferCommand, overwrite bool) error {
@@ -394,6 +412,51 @@ func gameAdd(ctx context.Context, args []string, stdout io.Writer) error {
 		return err
 	}
 	_, err = fmt.Fprintln(stdout, gameID)
+	return err
+}
+
+// gameEdit は DB にだけ書き、リモートには次の push・pull で反映する（仕様書 8-M2）。指定した flag の項目だけを変えるので、
+// --brand "" で brand を消せる。
+func gameEdit(ctx context.Context, args []string, stdout io.Writer) error {
+	fs := flag.NewFlagSet("game edit", flag.ContinueOnError)
+	game := fs.String("game", "", "ゲーム ID")
+	title := fs.String("title", "", "ゲームのタイトル")
+	brand := fs.String("brand", "", "ブランド名。空文字で消す")
+	dataDir := fs.String("data-dir", "", "DB などを置くディレクトリ")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	if *game == "" {
+		return errors.New("--game is required")
+	}
+	var edit store.GameEdit
+	fs.Visit(func(f *flag.Flag) {
+		switch f.Name {
+		case "title":
+			edit.Title = title
+		case "brand":
+			edit.Brand = brand
+		}
+	})
+	if edit.Title == nil && edit.Brand == nil {
+		return errors.New("specify --title or --brand")
+	}
+
+	s, _, err := openStore(ctx, *dataDir)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = s.Close() }()
+
+	if err := s.EditGame(ctx, *game, edit, time.Now()); err != nil {
+		return err
+	}
+	g, err := s.GameInfo(ctx, *game)
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintf(stdout, "title: %s\nbrand: %s\nupdatedAt: %s\n", g.Title, orDash(g.Brand), g.UpdatedAt.Format(time.RFC3339Nano))
 	return err
 }
 

@@ -43,7 +43,17 @@ type env struct {
 	gets []string
 }
 
+// newEnv は、ローカルと同じ game.json をリモートに置く。ゲーム情報は同期しても変わらず（8-G4）、プレイ履歴のテストの
+// PUT・GET の記録と結果に、game.json の PUT が混ざらない。
 func newEnv(t *testing.T) *env {
+	t.Helper()
+	e := newBareEnv(t)
+	e.putRemote(t, gameKey, localGameJSON)
+	return e
+}
+
+// newBareEnv は、リモートを空にした PC を 1 台作り、PUT・GET したキーを記録する。
+func newBareEnv(t *testing.T) *env {
 	t.Helper()
 	e := newEnvOn(t, memstore.New())
 	e.remote.Before = func(op memstore.Op, key string) error {
@@ -265,9 +275,11 @@ func TestSyncSessions(t *testing.T) {
 		}
 	})
 
-	t.Run("8-M4 ゲームの tombstone の記録があれば PUT しない", func(t *testing.T) {
-		e := newEnv(t)
+	t.Run("8-M4 ゲームの tombstone の記録があれば、プレイ履歴もゲーム情報も同期しない", func(t *testing.T) {
+		e := newBareEnv(t)
 		e.addSession(t, sessionA, 60)
+		// 同期すれば 8-G3 で DB が書き換わる game.json を置いておく
+		e.putRemote(t, gameKey, remoteGameJSON(newerStamp))
 		markRemoteDeleted(t, e.dbPath)
 		e.remote.Before = func(op memstore.Op, key string) error {
 			t.Errorf("リモートを操作した: op %d, key %s", op, key)
@@ -280,6 +292,9 @@ func TestSyncSessions(t *testing.T) {
 		}
 		if diff := cmp.Diff(metasync.Result{}, got); diff != "" {
 			t.Errorf("Result (-want +got):\n%s", diff)
+		}
+		if diff := cmp.Diff(localGameInfo, e.localGameInfo(t)); diff != "" {
+			t.Errorf("DB のゲーム情報 (-want +got):\n%s", diff)
 		}
 	})
 
@@ -392,8 +407,8 @@ func TestDownloadSessions(t *testing.T) {
 		if diff := cmp.Diff(metasync.Result{}, got); diff != "" {
 			t.Errorf("Result (-want +got):\n%s", diff)
 		}
-		if keys := e.getKeys(); len(keys) != 0 {
-			t.Errorf("GET した: %v", keys)
+		if diff := cmp.Diff([]string{gameKey}, e.getKeys()); diff != "" {
+			t.Errorf("GET したキー (-want +got):\n%s", diff)
 		}
 		if diff := cmp.Diff([]metasync.Session{session(sessionA, 60)}, e.localSessions(t)); diff != "" {
 			t.Errorf("DB のセッション (-want +got):\n%s", diff)
