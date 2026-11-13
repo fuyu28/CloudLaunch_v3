@@ -38,45 +38,78 @@ type gameInfoJSON struct {
 	UpdatedAt   string `json:"updatedAt"`
 }
 
-// syncGameInfo は、GET・PUT・DB の書き込みの失敗だけをエラーにする。不正な game.json（8-V7〜8-V11・8-V15）は、ログに残して
-// GameInfoInvalid を返し、DB もリモートも書き換えない。
-func (c *Core) syncGameInfo(ctx context.Context, gameID string) (GameInfoOutcome, error) {
+// syncGameInfo は、game.json と、それが指す画像を同期する。GET・PUT・DB やキャッシュの書き込みの失敗だけをエラーにする。
+// 不正な game.json（8-V7〜8-V11・8-V15）は、ログに残して GameInfoInvalid を返し、DB もリモートも書き換えず、画像も扱わない。
+func (c *Core) syncGameInfo(ctx context.Context, gameID string) (GameInfoOutcome, ImageOutcome, error) {
 	local, err := c.cfg.Local.GameInfo(ctx, gameID)
 	if err != nil {
-		return 0, fmt.Errorf("read local game info: %w", err)
+		return 0, 0, fmt.Errorf("read local game info: %w", err)
 	}
+	// current は、game.json の同期の後に DB にあるゲーム情報。その imageSha256 の画像がキャッシュになければ、最後に取得する
+	// （8-I3）。8-G3・8-G4 に限らず確かめるので、前の同期で取得できなかった画像も取り直す
+	var outcome GameInfoOutcome
+	current := local
+	upload := false
 	body, err := c.getGameJSON(ctx, gameID)
-	if errors.Is(err, fs.ErrNotExist) {
-		return c.putGameInfo(ctx, local) // 8-G1
+	switch {
+	case errors.Is(err, fs.ErrNotExist): // 8-G1
+		upload = true
+	case err != nil:
+		return 0, 0, err
+	default:
+		remote, err := parseGameInfo(body, gameID)
+		if err != nil {
+			c.cfg.Logger.Warn("skip invalid remote game.json", "gameId", gameID, "err", err)
+			return GameInfoInvalid, ImageNone, nil
+		}
+		switch {
+		case local.UpdatedAt.After(remote.UpdatedAt): // 8-G2
+			upload = true
+		case remote.UpdatedAt.After(local.UpdatedAt): // 8-G3
+			// GET の後にこの PC で編集されていれば書き換わらない。そのときはローカルが新しいので、次の同期で 8-G2 になる
+			replaced, err := c.cfg.Local.ReplaceGameInfo(ctx, remote)
+			if err != nil {
+				return 0, 0, fmt.Errorf("replace game info: %w", err)
+			}
+			if replaced {
+				outcome, current = GameInfoDownloaded, remote
+			}
+		default: // 8-G4
+			if !sameGameInfo(remote, local) {
+				c.cfg.Logger.Info("game.json differs but has the same updatedAt", "gameId", gameID, "updatedAt", local.UpdatedAt)
+			}
+		}
 	}
+	var uploaded ImageOutcome
+	if upload {
+		if uploaded, err = c.uploadGameInfo(ctx, local); err != nil {
+			return 0, 0, err
+		}
+		outcome = GameInfoUploaded
+		if uploaded == ImageMissing { // 8-I4: 画像はどこにもないので、取得も試さない
+			return outcome, uploaded, nil
+		}
+	}
+	img, err := c.cacheRemoteImage(ctx, gameID, current.ImageSha256)
+	// PUT した画像はキャッシュから送ったものなので、取得の確かめは ImageUnchanged を返す。結果には PUT したことを出す
+	if uploaded == ImageUploaded {
+		img = ImageUploaded
+	}
+	return outcome, img, err
+}
+
+// uploadGameInfo は、指す画像をリモートに揃えてから game.json を PUT する（8-I1）。画像の PUT に失敗したら、game.json を
+// PUT しない。画像がキャッシュにもリモートにもなければ、imageSha256 を入れたまま game.json を PUT し、ImageMissing を返す
+// （8-I4）。画像は必須でないので、画像がないことでゲーム情報の編集の同期を止めない。
+func (c *Core) uploadGameInfo(ctx context.Context, g GameInfo) (ImageOutcome, error) {
+	img, err := c.uploadImage(ctx, g)
 	if err != nil {
 		return 0, err
 	}
-	remote, err := parseGameInfo(body, gameID)
-	if err != nil {
-		c.cfg.Logger.Warn("skip invalid remote game.json", "gameId", gameID, "err", err)
-		return GameInfoInvalid, nil
+	if err := c.putGameInfo(ctx, g); err != nil {
+		return 0, err
 	}
-
-	switch {
-	case local.UpdatedAt.After(remote.UpdatedAt): // 8-G2
-		return c.putGameInfo(ctx, local)
-	case remote.UpdatedAt.After(local.UpdatedAt): // 8-G3
-		// GET の後にこの PC で編集されていれば書き換わらない。そのときはローカルが新しいので、次の同期で 8-G2 になる
-		replaced, err := c.cfg.Local.ReplaceGameInfo(ctx, remote)
-		if err != nil {
-			return 0, fmt.Errorf("replace game info: %w", err)
-		}
-		if !replaced {
-			return GameInfoUnchanged, nil
-		}
-		return GameInfoDownloaded, nil
-	default: // 8-G4
-		if !sameGameInfo(remote, local) {
-			c.cfg.Logger.Info("game.json differs but has the same updatedAt", "gameId", gameID, "updatedAt", local.UpdatedAt)
-		}
-		return GameInfoUnchanged, nil
-	}
+	return img, nil
 }
 
 // getGameJSON は、game.json がなければ fs.ErrNotExist で包んだエラーを返す。上限を超える本文は、上限の 1 バイト先までしか
@@ -94,7 +127,7 @@ func (c *Core) getGameJSON(ctx context.Context, gameID string) ([]byte, error) {
 	return body, nil
 }
 
-func (c *Core) putGameInfo(ctx context.Context, g GameInfo) (GameInfoOutcome, error) {
+func (c *Core) putGameInfo(ctx context.Context, g GameInfo) error {
 	body, err := json.Marshal(gameInfoJSON{
 		ID:          g.ID,
 		Title:       g.Title,
@@ -104,12 +137,12 @@ func (c *Core) putGameInfo(ctx context.Context, g GameInfo) (GameInfoOutcome, er
 		UpdatedAt:   g.UpdatedAt.UTC().Format(timeLayout),
 	})
 	if err != nil {
-		return 0, fmt.Errorf("encode game.json: %w", err)
+		return fmt.Errorf("encode game.json: %w", err)
 	}
 	if err := c.cfg.Remote.Put(ctx, gameKey(g.ID), bytes.NewReader(body), int64(len(body))); err != nil {
-		return 0, fmt.Errorf("put game.json: %w", err)
+		return fmt.Errorf("put game.json: %w", err)
 	}
-	return GameInfoUploaded, nil
+	return nil
 }
 
 // parseGameInfo は、仕様書 8-V7〜8-V11・8-V15 で検証する。知らない項目は無視する。parseSession と同じ理由で、構造体に

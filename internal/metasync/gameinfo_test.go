@@ -17,7 +17,6 @@ import (
 
 const (
 	gameKey     = "games/" + testGameID + "/game.json"
-	testImage   = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 	localStamp  = "2026-11-03T01:02:03.004Z"
 	olderStamp  = "2026-11-01T00:00:00.000Z"
 	newerStamp  = "2026-11-05T00:00:00.000Z"
@@ -105,12 +104,13 @@ func TestSyncGameInfo(t *testing.T) {
 		remote := fmt.Sprintf(`{"id":%q,"title":"Remote","brand":"Brand","imageSha256":%q,"createdAt":%q,"updatedAt":%q}`,
 			testGameID, testImage, olderStamp, newerStamp)
 		e.putRemote(t, gameKey, remote)
+		e.putRemote(t, imageKey(testImage), string(testPNG))
 
 		got, err := e.core.Sync(ctx, testGameID)
 		if err != nil {
 			t.Fatalf("Sync: %v", err)
 		}
-		if diff := cmp.Diff(metasync.Result{GameInfo: metasync.GameInfoDownloaded}, got); diff != "" {
+		if diff := cmp.Diff(metasync.Result{GameInfo: metasync.GameInfoDownloaded, Image: metasync.ImageDownloaded}, got); diff != "" {
 			t.Errorf("Result (-want +got):\n%s", diff)
 		}
 		want := metasync.GameInfo{
@@ -206,6 +206,8 @@ func TestSyncGameInfo(t *testing.T) {
 	t.Run("8章/ゲーム情報/PUT する JSON の形", func(t *testing.T) {
 		e := newBareEnv(t)
 		execDB(t, e.dbPath, `UPDATE games SET brand = ?, image_sha256 = ? WHERE id = ?`, "Brand", testImage, testGameID)
+		// 指す画像がリモートになければ、game.json を PUT しない（8-I1）
+		e.putRemote(t, imageKey(testImage), string(testPNG))
 
 		if _, err := e.core.Sync(ctx, testGameID); err != nil {
 			t.Fatalf("Sync: %v", err)
@@ -266,6 +268,7 @@ func TestSyncGameInfo(t *testing.T) {
 		e := newBareEnv(t)
 		e.putRemote(t, gameKey, fmt.Sprintf(`{"id":%q,"title":"Remote","brand":"Brand","imageSha256":%q,"createdAt":%q,"updatedAt":%q}`,
 			testGameID, testImage, olderStamp, newerStamp))
+		e.putRemote(t, imageKey(testImage), string(testPNG))
 
 		if _, err := e.core.Sync(ctx, testGameID); err != nil {
 			t.Fatalf("Sync 1: %v", err)
@@ -274,7 +277,7 @@ func TestSyncGameInfo(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Sync 2: %v", err)
 		}
-		if diff := cmp.Diff(metasync.Result{GameInfo: metasync.GameInfoUnchanged}, got); diff != "" {
+		if diff := cmp.Diff(metasync.Result{GameInfo: metasync.GameInfoUnchanged, Image: metasync.ImageUnchanged}, got); diff != "" {
 			t.Errorf("Result (-want +got):\n%s", diff)
 		}
 		if n := e.gamePuts(); n != 0 {

@@ -37,7 +37,9 @@ type env struct {
 	store  *store.Store
 	remote *memstore.Store
 	dbPath string
-	// puts と gets は、リモートに PUT・GET したキーを記録する。並列なので mu で守る
+	// imageDir は、画像のキャッシュのフォルダ
+	imageDir string
+	// puts と gets は、リモートに PUT・GET したキーを、呼んだ順に記録する。並列なので mu で守る
 	mu   sync.Mutex
 	puts []string
 	gets []string
@@ -90,11 +92,12 @@ func newEnvOn(t *testing.T, remote *memstore.Store) *env {
 		t.Fatalf("CreateGame: %v", err)
 	}
 
-	e := &env{store: s, remote: remote, dbPath: dbPath}
+	e := &env{store: s, remote: remote, dbPath: dbPath, imageDir: filepath.Join(t.TempDir(), "images")}
 	e.core = metasync.New(metasync.Config{
-		Remote: e.remote,
-		Local:  s,
-		Logger: slog.New(slog.DiscardHandler),
+		Remote:   e.remote,
+		Local:    s,
+		Logger:   slog.New(slog.DiscardHandler),
+		ImageDir: e.imageDir,
 	})
 	return e
 }

@@ -25,6 +25,7 @@ import (
 const usage = `usage:
   cloudlaunch-cli game add --title <タイトル> --save-dir <パス> --exe <パス> [--brand <ブランド>] [--id <gameId>] [--data-dir <dir>]
   cloudlaunch-cli game edit --game <gameId> [--title <タイトル>] [--brand <ブランド>] [--data-dir <dir>]
+  cloudlaunch-cli game set-image --game <gameId> (--file <パス> | --clear) [--data-dir <dir>]
   cloudlaunch-cli session add --game <gameId> --duration <秒> [--played-at <RFC3339>] [--data-dir <dir>]
   cloudlaunch-cli status --game <gameId> [--data-dir <dir>]
   cloudlaunch-cli push --game <gameId> [--overwrite] [--data-dir <dir>]
@@ -53,6 +54,9 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 		}
 		if len(args) >= 2 && args[1] == "edit" {
 			return gameEdit(ctx, args[2:], stdout)
+		}
+		if len(args) >= 2 && args[1] == "set-image" {
+			return gameSetImage(ctx, args[2:], stdout)
 		}
 	case "session":
 		if len(args) >= 2 && args[1] == "add" {
@@ -181,9 +185,30 @@ func syncMeta(ctx context.Context, c cores, stdout io.Writer) error {
 		_, werr := fmt.Fprintf(stdout, "メタ情報の同期に失敗しました: %v\n", err)
 		return werr
 	}
-	_, err = fmt.Fprintf(stdout, "ゲーム情報: %s\nプレイ履歴を %d 件アップロードし、%d 件取り込みました\n",
-		gameInfoLabel(res.GameInfo), res.UploadedSessions, res.DownloadedSessions)
+	_, err = fmt.Fprintf(stdout, "ゲーム情報: %s\n画像: %s\nプレイ履歴を %d 件アップロードし、%d 件取り込みました\n",
+		gameInfoLabel(res.GameInfo), imageLabel(res), res.UploadedSessions, res.DownloadedSessions)
 	return err
+}
+
+// imageLabel は、game.json が不正で画像を扱わなかったときに「なし」と出さない。DB には画像があるので、外れたと誤解させるため。
+func imageLabel(res metasync.Result) string {
+	if res.GameInfo == metasync.GameInfoInvalid {
+		return "ゲーム情報を同期しなかったので扱いませんでした"
+	}
+	switch res.Image {
+	case metasync.ImageUnchanged:
+		return "変更なし"
+	case metasync.ImageUploaded:
+		return "アップロードしました"
+	case metasync.ImageDownloaded:
+		return "取得しました"
+	case metasync.ImageInvalid:
+		return "リモートの画像が不正なので取得しませんでした"
+	case metasync.ImageMissing:
+		return "リモートにもキャッシュにもないので同期しませんでした"
+	default:
+		return "なし"
+	}
 }
 
 func gameInfoLabel(o metasync.GameInfoOutcome) string {
@@ -285,7 +310,7 @@ func openCore(ctx context.Context, name string, args []string, overwrite *bool) 
 	cfg.Processes = platform.Processes{}
 	return cores{
 		sync:   syncore.New(cfg),
-		meta:   metasync.New(metasync.Config{Remote: remote, Local: s, Logger: cfg.Logger}),
+		meta:   metasync.New(metasync.Config{Remote: remote, Local: s, Logger: cfg.Logger, ImageDir: imageDir(dir)}),
 		logger: cfg.Logger,
 		gameID: *game,
 		close:  func() { _ = s.Close() },
@@ -413,6 +438,59 @@ func gameAdd(ctx context.Context, args []string, stdout io.Writer) error {
 	}
 	_, err = fmt.Fprintln(stdout, gameID)
 	return err
+}
+
+// gameSetImage は、画像をキャッシュに入れて DB だけを書き換え、リモートには次の push・pull で画像 → game.json の順に
+// 反映する（仕様書 8-I1）。--clear は画像を外す。
+func gameSetImage(ctx context.Context, args []string, stdout io.Writer) error {
+	fs := flag.NewFlagSet("game set-image", flag.ContinueOnError)
+	game := fs.String("game", "", "ゲーム ID")
+	file := fs.String("file", "", "画像のファイル（PNG・JPEG・WebP、10 MiB まで）")
+	clearImage := fs.Bool("clear", false, "画像を外す")
+	dataDir := fs.String("data-dir", "", "DB などを置くディレクトリ")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	if *game == "" {
+		return errors.New("--game is required")
+	}
+	if (*file == "") == !*clearImage {
+		return errors.New("specify either --file or --clear")
+	}
+
+	s, dir, err := openStore(ctx, *dataDir)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = s.Close() }()
+
+	// 登録していないゲームの ID を打ち間違えたときに、どこからも参照されない画像をキャッシュに残さない
+	if _, err := s.GameInfo(ctx, *game); err != nil {
+		return err
+	}
+	var sha string
+	if *file != "" {
+		f, err := os.Open(*file)
+		if err != nil {
+			return fmt.Errorf("open image: %w", err)
+		}
+		defer func() { _ = f.Close() }()
+		// CacheImage はリモートに触れないので、接続先を読まずに Core を作る
+		sha, err = metasync.New(metasync.Config{ImageDir: imageDir(dir)}).CacheImage(f)
+		if err != nil {
+			return err
+		}
+	}
+	if err := s.EditGame(ctx, *game, store.GameEdit{ImageSha256: &sha}, time.Now()); err != nil {
+		return err
+	}
+	_, err = fmt.Fprintf(stdout, "imageSha256: %s\n", orDash(sha))
+	return err
+}
+
+func imageDir(dataDir string) string {
+	return filepath.Join(dataDir, "images")
 }
 
 // gameEdit は DB にだけ書き、リモートには次の push・pull で反映する（仕様書 8-M2）。指定した flag の項目だけを変えるので、

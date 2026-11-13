@@ -72,6 +72,23 @@ const (
 	GameInfoInvalid
 )
 
+type ImageOutcome int
+
+const (
+	// ImageNone は、画像を扱わなかったこと（画像がない・同期を飛ばした・game.json が不正）を表す
+	ImageNone ImageOutcome = iota
+	// ImageUnchanged は、画像がキャッシュにあり、転送しなかったことを表す。リモートにあるかは、game.json を PUT するときだけ
+	// 確かめる
+	ImageUnchanged
+	ImageUploaded
+	ImageDownloaded
+	// ImageInvalid は、取得した画像が不正（仕様書 8-V12〜8-V14）で、キャッシュに入れなかったことを表す
+	ImageInvalid
+	// ImageMissing は、要る画像がリモートになく、PUT できるものもキャッシュになかったことを表す。game.json は、
+	// imageSha256 を入れたまま PUT する（仕様書 8-I4）
+	ImageMissing
+)
+
 type ImportResult struct {
 	Inserted  int
 	OtherGame []string
@@ -81,6 +98,8 @@ type Config struct {
 	Remote ObjectStore
 	Local  LocalStore
 	Logger *slog.Logger
+	// ImageDir は、画像のキャッシュのフォルダ。なければ作る
+	ImageDir string
 }
 
 type Core struct {
@@ -93,6 +112,7 @@ func New(cfg Config) *Core {
 
 type Result struct {
 	GameInfo           GameInfoOutcome
+	Image              ImageOutcome
 	UploadedSessions   int
 	DownloadedSessions int
 }
@@ -108,7 +128,7 @@ func (c *Core) Sync(ctx context.Context, gameID string) (Result, error) {
 	if deleted {
 		return Result{}, nil
 	}
-	info, err := c.syncGameInfo(ctx, gameID)
+	info, img, err := c.syncGameInfo(ctx, gameID)
 	if err != nil {
 		return Result{}, err
 	}
@@ -116,6 +136,6 @@ func (c *Core) Sync(ctx context.Context, gameID string) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	res.GameInfo = info
+	res.GameInfo, res.Image = info, img
 	return res, nil
 }
