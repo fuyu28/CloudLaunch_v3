@@ -15,6 +15,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/fuyu28/CloudLaunch_v3/internal/legacy"
 	"github.com/fuyu28/CloudLaunch_v3/internal/metasync"
 	"github.com/fuyu28/CloudLaunch_v3/internal/objstore"
 	"github.com/fuyu28/CloudLaunch_v3/internal/platform"
@@ -27,6 +28,7 @@ const usage = `usage:
   cloudlaunch-cli game edit --game <gameId> [--title <タイトル>] [--brand <ブランド>] [--data-dir <dir>]
   cloudlaunch-cli game set-image --game <gameId> (--file <パス> | --clear) [--data-dir <dir>]
   cloudlaunch-cli session add --game <gameId> --duration <秒> [--played-at <RFC3339>] [--data-dir <dir>]
+  cloudlaunch-cli legacy import [--data-dir <dir>] <旧版のエクスポートの JSON>
   cloudlaunch-cli status --game <gameId> [--data-dir <dir>]
   cloudlaunch-cli push --game <gameId> [--overwrite] [--data-dir <dir>]
   cloudlaunch-cli pull --game <gameId> [--overwrite] [--data-dir <dir>]
@@ -61,6 +63,10 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 	case "session":
 		if len(args) >= 2 && args[1] == "add" {
 			return sessionAdd(ctx, args[2:], stdout)
+		}
+	case "legacy":
+		if len(args) >= 2 && args[1] == "import" {
+			return legacyImport(ctx, args[2:], stdout)
 		}
 	case "status":
 		return status(ctx, args[1:], stdout)
@@ -583,6 +589,41 @@ func sessionAdd(ctx context.Context, args []string, stdout io.Writer) error {
 		return err
 	}
 	_, err = fmt.Fprintln(stdout, u.String())
+	return err
+}
+
+func legacyImport(ctx context.Context, args []string, stdout io.Writer) error {
+	fs := flag.NewFlagSet("legacy import", flag.ContinueOnError)
+	dataDir := fs.String("data-dir", "", "DB などを置くディレクトリ")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	switch {
+	case fs.NArg() == 0:
+		return errors.New("export file is required")
+	case fs.NArg() > 1:
+		// flag は最初の位置引数で読むのをやめるので、ファイルの後ろに書いたフラグもここに来る
+		return fmt.Errorf("only one export file is allowed, and flags must come before it: %q", fs.Args())
+	}
+
+	f, err := os.Open(fs.Arg(0))
+	if err != nil {
+		return fmt.Errorf("open export: %w", err)
+	}
+	defer func() { _ = f.Close() }()
+
+	s, _, err := openStore(ctx, *dataDir)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = s.Close() }()
+
+	res, err := legacy.Import(ctx, f, s)
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintf(stdout, "旧版のプレイ履歴を %d 件保持しました（既にある %d 件、games にない %d 件は保持していません）\n",
+		res.Added, res.Existing, res.Orphaned)
 	return err
 }
 

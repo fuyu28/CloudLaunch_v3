@@ -11,7 +11,7 @@ linters:
   exclusions:
     rules:
       # 公開 API 経由のテストを強制するのはコアだけ。store・platform は SQL や OS の細部を内部から確かめる
-      - path-except: ^internal/(syncore|metasync)/
+      - path-except: ^internal/(syncore|metasync|legacy)/
         linters:
           - testpackage
 

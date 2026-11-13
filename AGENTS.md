@@ -42,6 +42,7 @@ Go（同期コア + CLI）と Wails（UI）で作る。
 cmd/cloudlaunch-cli/   CLI のエントリポイント。各パッケージを組み合わせる配線だけを書く
 internal/syncore/      セーブ同期のコア（仕様書 2・4〜7 章）
 internal/metasync/     メタ情報の同期（仕様書 8 章）。ゲームの tombstone の確認と掃除もここが持つ
+internal/legacy/       旧版からのプレイ履歴の取り込み（仕様書 9 章）
 internal/store/        SQLite（goose の migration を含む）
 internal/objstore/     S3 互換オブジェクトストアのクライアント
 internal/platform/     OS 固有の処理（PC 全体の同期ロックに使うファイルロック、reparse point の検出、プロセス検出）
@@ -50,7 +51,7 @@ internal/platform/     OS 固有の処理（PC 全体の同期ロックに使う
 - 理由: `docs/adr/2026-10-23_00-30_package-structure.md`・`docs/adr/2026-10-23_00-30_remote-object-store.md`・`docs/adr/2026-10-23_00-30_db-migration-goose.md`・`docs/adr/2026-11-04_15-21_sync-lock.md`（synclock を作らない）
 - パッケージは責務で分ける。`services`・`domain`・`util` のような、何でも入る名前のパッケージは作らない
 - syncore の中は、仕様書の章に合わせてファイルを分ける。独立して意味を持つ部分（最初の候補は manifest）が育ったら、サブパッケージに切り出す
-- 依存の向き: syncore と metasync が必要な操作だけのインターフェースを定義し、store・objstore・platform がそれを実装する。syncore と metasync は互いに import せず、cmd で組み合わせる
+- 依存の向き: syncore・metasync・legacy が必要な操作だけのインターフェースを定義し、store・objstore・platform がそれを実装する。syncore と metasync は互いに import せず、cmd で組み合わせる
 - リモートは、キー指定で `io.Reader` を受け渡す汎用のオブジェクトストア（Get / Put / List / Delete と、まとめての削除の DeleteMany）として扱う。キーの形（仕様書 2 章）はコアが持つ。実装は、複数の goroutine から同時に呼んでも安全にする
 - 並列実行は、呼び出す側のコアが `golang.org/x/sync/errgroup` の `SetLimit` で制御する。転送は 8 並列、ハッシュ計算は CPU の数まで。1 つが失敗したら残りをキャンセルし、再試行は SDK に任せる。進捗は直列化したコールバックで通知する
 - syncore の公開 API は、`Status`（副作用なしで plan を返す）→ `Push` / `Pull` / `Adopt`（plan を受け取り、承認後に状況が変わっていればセンチネルエラーを返す）、起動時の `Recover` の形にする
@@ -65,8 +66,8 @@ internal/platform/     OS 固有の処理（PC 全体の同期ロックに使う
 
 ### 方針
 
-- syncore と metasync は TDD で書く。UI・Wails の配線・CLI の配線にはテストを書かない
-- syncore と metasync のテストは外部のテストパッケージ（`package syncore_test`）に置き、公開 API 経由で書く。golangci-lint の `testpackage` で検査する
+- syncore・metasync・legacy は TDD で書く。UI・Wails の配線・CLI の配線にはテストを書かない
+- syncore・metasync・legacy のテストは外部のテストパッケージ（`package syncore_test`）に置き、公開 API 経由で書く。golangci-lint の `testpackage` で検査する
 - サブパッケージに切り出した部分は、それ自身の公開 API でテストしてよい
 - テストはテーブル駆動で書き、`t.Run` のケース名を日本語にする
   - 仕様書の ID に当たるケースは「{ID} {項目}」にする（例: `4-D5 base なし・local あり・remote あり（local と異なる） → 競合`）。1 つのケースには、主に検査する ID を 1 つだけ書く
