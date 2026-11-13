@@ -234,6 +234,25 @@ func TestSyncImage(t *testing.T) {
 		})
 	}
 
+	t.Run("8章/画像/キャッシュの画像の中身が sha256 と違えば PUT せず、game.json も PUT しない", func(t *testing.T) {
+		e := newBareEnv(t)
+		sha := e.setImage(t, testPNG, later)
+		if err := os.WriteFile(filepath.Join(e.imageDir, sha), imageBody(pngMagic, "corrupted"), 0o600); err != nil {
+			t.Fatalf("corrupt cache: %v", err)
+		}
+
+		got, err := e.core.Sync(ctx, testGameID)
+		if err != nil {
+			t.Fatalf("Sync: %v", err)
+		}
+		if diff := cmp.Diff(metasync.Result{GameInfo: metasync.GameInfoUnchanged, Image: metasync.ImageMissing}, got); diff != "" {
+			t.Errorf("Result (-want +got):\n%s", diff)
+		}
+		if keys := e.putOrder(); len(keys) != 0 {
+			t.Errorf("PUT した: %v", keys)
+		}
+	})
+
 	t.Run("8章/画像/画像がキャッシュにもリモートにもなければ、game.json を PUT しない", func(t *testing.T) {
 		e := newBareEnv(t)
 		execDB(t, e.dbPath, `UPDATE games SET image_sha256 = ? WHERE id = ?`, testImage, testGameID)
@@ -373,4 +392,26 @@ func TestCacheImage(t *testing.T) {
 			}
 		})
 	}
+
+	// Windows では、開かれているファイルへのリネームが失敗するので、キャッシュにある画像は書き直さない
+	t.Run("8章/画像/キャッシュにある画像は書き直さない", func(t *testing.T) {
+		e := newBareEnv(t)
+		sha := e.setImage(t, testPNG, testPlayedAt)
+		path := filepath.Join(e.imageDir, sha)
+		old := time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
+		if err := os.Chtimes(path, old, old); err != nil {
+			t.Fatalf("chtimes: %v", err)
+		}
+
+		if _, err := e.core.CacheImage(bytes.NewReader(testPNG)); err != nil {
+			t.Fatalf("CacheImage: %v", err)
+		}
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatalf("stat: %v", err)
+		}
+		if !info.ModTime().Equal(old) {
+			t.Errorf("書き直した: mtime %v", info.ModTime())
+		}
+	})
 }
