@@ -143,8 +143,10 @@ func parseGameInfo(body []byte, gameID string) (GameInfo, error) {
 		}
 		*f.dst = t
 	}
-	g.ImageSha256, err = optionalString(fields["imageSha256"])
-	if err != nil || (g.ImageSha256 != "" && !ValidSHA256(g.ImageSha256)) {
+	// 空文字を未設定とするのは brand だけで、imageSha256 は値があれば空文字も sha256 の形でないとして拒む
+	raw := fields["imageSha256"]
+	g.ImageSha256, err = optionalString(raw)
+	if err != nil || (raw != nil && string(raw) != "null" && !ValidSHA256(g.ImageSha256)) {
 		return GameInfo{}, fmt.Errorf("8-V11: imageSha256 %s is not a sha256", fields["imageSha256"])
 	}
 	return g, nil
