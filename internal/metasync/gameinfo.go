@@ -112,17 +112,22 @@ func (c *Core) uploadGameInfo(ctx context.Context, g GameInfo) (ImageOutcome, er
 	return img, nil
 }
 
-// getGameJSON は、game.json がなければ fs.ErrNotExist で包んだエラーを返す。上限を超える本文は、上限の 1 バイト先までしか
-// 読まない。
+// getGameJSON は、game.json がなければ fs.ErrNotExist で包んだエラーを返す。
 func (c *Core) getGameJSON(ctx context.Context, gameID string) ([]byte, error) {
-	r, err := c.cfg.Remote.Get(ctx, gameKey(gameID))
+	return c.getLimited(ctx, gameKey(gameID), maxGameInfoSize)
+}
+
+// getLimited は、キーがなければ fs.ErrNotExist で包んだエラーを返す。limit を超える本文は、limit の 1 バイト先までしか
+// 読まないので、呼び出し側は長さで超えたことを判定できる。
+func (c *Core) getLimited(ctx context.Context, key string, limit int64) ([]byte, error) {
+	r, err := c.cfg.Remote.Get(ctx, key)
 	if err != nil {
-		return nil, fmt.Errorf("get game.json: %w", err)
+		return nil, fmt.Errorf("get %s: %w", key, err)
 	}
 	defer func() { _ = r.Close() }()
-	body, err := io.ReadAll(io.LimitReader(r, maxGameInfoSize+1))
+	body, err := io.ReadAll(io.LimitReader(r, limit+1))
 	if err != nil {
-		return nil, fmt.Errorf("read game.json: %w", err)
+		return nil, fmt.Errorf("read %s: %w", key, err)
 	}
 	return body, nil
 }
