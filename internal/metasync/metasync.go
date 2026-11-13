@@ -77,7 +77,8 @@ type ImageOutcome int
 const (
 	// ImageNone は、画像を扱わなかったこと（画像がない・同期を飛ばした・game.json が不正）を表す
 	ImageNone ImageOutcome = iota
-	// ImageUnchanged は、画像がキャッシュにもリモートにもあり、転送しなかったことを表す
+	// ImageUnchanged は、画像がキャッシュにあり、転送しなかったことを表す。リモートにあるかは、game.json を PUT するときだけ
+	// 確かめる
 	ImageUnchanged
 	ImageUploaded
 	ImageDownloaded

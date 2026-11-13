@@ -43,6 +43,10 @@ func (c *Core) CacheImage(r io.Reader) (string, error) {
 		return "", fmt.Errorf("8-I2: %w", err)
 	}
 	sha := sha256Hex(body)
+	// Windows では、表示や同期で開かれているファイルへのリネームが失敗するので、すでにあれば書き直さない
+	if _, err := os.Stat(c.imagePath(sha)); err == nil {
+		return sha, nil
+	}
 	if err := c.writeCache(sha, body); err != nil {
 		return "", err
 	}
@@ -89,7 +93,8 @@ func (c *Core) writeCache(sha string, body []byte) error {
 }
 
 // uploadImage は、g の画像がリモートになければ、キャッシュから PUT する。画像は書き換えない object なので、キーがあれば
-// 中身は同じとみなす。キャッシュにもなければ、ログに残して ImageMissing を返す。
+// 中身は同じとみなす。そのため、壊れた中身を一度 PUT すると直らないので、PUT の前に sha256 を確かめ、違えばキャッシュから
+// 消す。キャッシュにない（壊れていた）ときは、ログに残して ImageMissing を返す。
 func (c *Core) uploadImage(ctx context.Context, g GameInfo) (ImageOutcome, error) {
 	if g.ImageSha256 == "" {
 		return ImageNone, nil
@@ -110,6 +115,13 @@ func (c *Core) uploadImage(ctx context.Context, g GameInfo) (ImageOutcome, error
 	}
 	if err != nil {
 		return 0, fmt.Errorf("read cached image: %w", err)
+	}
+	if sha256Hex(body) != g.ImageSha256 {
+		c.cfg.Logger.Warn("skip game.json upload: cached image is corrupted", "gameId", g.ID, "imageSha256", g.ImageSha256)
+		if err := os.Remove(c.imagePath(g.ImageSha256)); err != nil {
+			return 0, fmt.Errorf("remove corrupted cached image: %w", err)
+		}
+		return ImageMissing, nil
 	}
 	if err := c.cfg.Remote.Put(ctx, key, bytes.NewReader(body), int64(len(body))); err != nil {
 		return 0, fmt.Errorf("put image: %w", err)
