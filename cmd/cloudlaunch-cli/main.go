@@ -186,12 +186,16 @@ func syncMeta(ctx context.Context, c cores, stdout io.Writer) error {
 		return werr
 	}
 	_, err = fmt.Fprintf(stdout, "ゲーム情報: %s\n画像: %s\nプレイ履歴を %d 件アップロードし、%d 件取り込みました\n",
-		gameInfoLabel(res.GameInfo), imageLabel(res.Image), res.UploadedSessions, res.DownloadedSessions)
+		gameInfoLabel(res.GameInfo), imageLabel(res), res.UploadedSessions, res.DownloadedSessions)
 	return err
 }
 
-func imageLabel(o metasync.ImageOutcome) string {
-	switch o {
+// imageLabel は、game.json が不正で画像を扱わなかったときに「なし」と出さない。DB には画像があるので、外れたと誤解させるため。
+func imageLabel(res metasync.Result) string {
+	if res.GameInfo == metasync.GameInfoInvalid {
+		return "ゲーム情報を同期しなかったので扱いませんでした"
+	}
+	switch res.Image {
 	case metasync.ImageUnchanged:
 		return "変更なし"
 	case metasync.ImageUploaded:
@@ -461,6 +465,10 @@ func gameSetImage(ctx context.Context, args []string, stdout io.Writer) error {
 	}
 	defer func() { _ = s.Close() }()
 
+	// 登録していないゲームの ID を打ち間違えたときに、どこからも参照されない画像をキャッシュに残さない
+	if _, err := s.GameInfo(ctx, *game); err != nil {
+		return err
+	}
 	var sha string
 	if *file != "" {
 		f, err := os.Open(*file)
