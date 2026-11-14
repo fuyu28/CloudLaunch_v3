@@ -86,7 +86,7 @@ func (c *Core) RemoteGames(ctx context.Context) (RemoteGames, error) {
 		switch {
 		case r.err == nil:
 			res.Games = append(res.Games, r.info)
-		case errors.Is(r.err, errRemoteDeleted): // 8-N7: 数えずに除く
+		case errors.Is(r.err, errRemoteDeleted): // 8-N7
 		case errors.Is(r.err, errUnimportable):
 			c.cfg.Logger.Warn("skip remote game that cannot be imported", "gameId", candidates[i], "err", r.err)
 			res.Skipped++
