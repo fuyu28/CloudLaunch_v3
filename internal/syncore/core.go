@@ -41,7 +41,6 @@ type LocalStore interface {
 	InsertPullOperation(ctx context.Context, opID, gameID, livePath, stagePath, oldPath string, createdAt time.Time) error
 	DeletePullOperation(ctx context.Context, opID string) error
 	ListPullOperations(ctx context.Context) ([]PullOperation, error)
-	// DeleteGame は、ゲームの登録を解除し、ローカル情報とプレイ履歴も消す（仕様書 8-X1）
 	DeleteGame(ctx context.Context, gameID string) error
 }
 

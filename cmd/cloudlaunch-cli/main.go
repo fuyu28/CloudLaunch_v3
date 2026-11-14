@@ -355,7 +355,6 @@ func openCore(ctx context.Context, name string, args []string, overwrite *bool) 
 	return connectCores(ctx, *game, *dataDir)
 }
 
-// connectCores は、リモートと DB につないだコアを返す。
 func connectCores(ctx context.Context, gameID, dataDir string) (cores, error) {
 	remote, err := openRemote()
 	if err != nil {

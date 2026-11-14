@@ -38,7 +38,6 @@ func (e env) deleteGame(t *testing.T, del *fakeRemoteDeletion) error {
 
 var errUnregister = errors.New("injected: unregister")
 
-// failingUnregister は、登録の解除だけを失敗させる LocalStore。
 type failingUnregister struct {
 	*store.Store
 }
@@ -54,7 +53,6 @@ func (e env) registered(t *testing.T) bool {
 	return n == 1
 }
 
-// assertLockReleased は、DeleteGame が同期ロックを取ったなら、戻る前に外したことを確かめる。
 func assertLockReleased(t *testing.T, e env) {
 	t.Helper()
 	if _, held := e.lock.state(); held {

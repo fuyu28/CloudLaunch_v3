@@ -82,7 +82,6 @@ func (c *Core) DeleteGame(ctx context.Context, gameID string, deleteRemote func(
 	return res, nil
 }
 
-// ensureNotDeletedBeforeDelete は、既に tombstone があるゲームを拒否する（仕様書 8-X11）。
 func (c *Core) ensureNotDeletedBeforeDelete(ctx context.Context, gameID string) error {
 	t, deleted, err := c.readTombstone(ctx, gameID)
 	if err != nil {
