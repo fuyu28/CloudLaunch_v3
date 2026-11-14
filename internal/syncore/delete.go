@@ -91,8 +91,7 @@ func (c *Core) DeleteGame(ctx context.Context, gameID string) (DeleteResult, err
 // 後の失敗は ErrDeleteIncomplete で包む。既に tombstone があるかは確かめないので、呼び出し側が先に確かめる（8-X11）。
 func (c *Core) deleteRemote(ctx context.Context, gameID string) error {
 	t := Tombstone{DeletedAt: c.cfg.Now(), DeviceName: c.cfg.DeviceName}
-	deletedAt := t.DeletedAt.UTC().Format(timeLayout)
-	body, err := json.Marshal(tombstoneJSON{DeletedAt: &deletedAt, DeviceName: &t.DeviceName})
+	body, err := json.Marshal(tombstoneJSON{DeletedAt: t.DeletedAt.UTC().Format(timeLayout), DeviceName: t.DeviceName})
 	if err != nil {
 		return fmt.Errorf("encode deleted.json: %w", err)
 	}
@@ -123,6 +122,8 @@ func (c *Core) ensureNotDeletedBeforeDelete(ctx context.Context, gameID string) 
 // DeviceName が空のまま tombstone を書くと 8-T5 に当たり、どの PC もそのゲームを確かめられなくなるので、空なら止める。
 func (c *Core) checkDeleteConfig() error {
 	switch {
+	case c.cfg.Remote == nil:
+		return errors.New("remote is not configured")
 	case c.cfg.DeviceName == "":
 		return errors.New("device name is not configured")
 	case c.cfg.Processes == nil:

@@ -12,8 +12,8 @@ import (
 	"time"
 )
 
-// ErrRemoteDeleted は、ゲームがリモートで削除されていて、Push・Pull できないことを表す。呼び出し側は、DB への記録と
-// リモートの掃除（仕様書 8-T2）を行い、「リモートで削除されました」と表示する。
+// ErrRemoteDeleted は、ゲームがリモートで削除されていて、Push・Pull できないことを表す。呼び出し側は、HandleTombstone で
+// DB への記録とリモートの掃除（仕様書 8-T2）を行い、「リモートで削除されました」と表示する。
 var ErrRemoteDeleted = errors.New("game is deleted on remote")
 
 // ErrInvalidTombstone は、deleted.json が仕様書 8-T4〜8-T6 に当たることを表す。削除されたとも、削除されていないとも
@@ -30,36 +30,36 @@ type Tombstone struct {
 }
 
 type tombstoneJSON struct {
-	DeletedAt  *string `json:"deletedAt"`
-	DeviceName *string `json:"deviceName"`
+	DeletedAt  string `json:"deletedAt"`
+	DeviceName string `json:"deviceName"`
 }
 
-func gamePrefix(gameID string) string {
-	return "games/" + gameID + "/"
-}
-
-func tombstoneKey(gameID string) string {
-	return gamePrefix(gameID) + "deleted.json"
-}
-
-// parseTombstone は、仕様書 8-T4〜8-T6 で検証する。知らない項目は無視する。
+// parseTombstone は、仕様書 8-T4〜8-T6 で検証する。知らない項目は無視する。構造体へ直接 Unmarshal すると、文字列でない
+// 項目が 8-T5 ではなく JSON のエラー（8-T4）になるので、項目ごとに読む。
 func parseTombstone(body []byte) (Tombstone, error) {
 	if len(body) > maxTombstoneSize {
 		return Tombstone{}, fmt.Errorf("8-T4: body exceeds %d bytes", maxTombstoneSize)
 	}
-	var j tombstoneJSON
-	if err := json.Unmarshal(body, &j); err != nil {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(body, &fields); err != nil {
 		return Tombstone{}, fmt.Errorf("8-T4: %w", err)
 	}
-	if j.DeletedAt == nil || *j.DeletedAt == "" || j.DeviceName == nil || *j.DeviceName == "" {
-		return Tombstone{}, errors.New("8-T5: deletedAt or deviceName is missing or empty")
+	var j tombstoneJSON
+	for _, f := range []struct {
+		name string
+		dst  *string
+	}{{"deletedAt", &j.DeletedAt}, {"deviceName", &j.DeviceName}} {
+		raw, ok := fields[f.name]
+		if !ok || string(raw) == "null" || json.Unmarshal(raw, f.dst) != nil || *f.dst == "" {
+			return Tombstone{}, fmt.Errorf("8-T5: %s %s is missing or empty", f.name, raw)
+		}
 	}
-	t, err := time.Parse(timeLayout, *j.DeletedAt)
+	t, err := time.Parse(timeLayout, j.DeletedAt)
 	// 3 章の固定長の形だけを受け付けるため、書き戻して比べる
-	if err != nil || t.UTC().Format(timeLayout) != *j.DeletedAt {
-		return Tombstone{}, fmt.Errorf("8-T6: deletedAt %q is not in the spec format", *j.DeletedAt)
+	if err != nil || t.UTC().Format(timeLayout) != j.DeletedAt {
+		return Tombstone{}, fmt.Errorf("8-T6: deletedAt %q is not in the spec format", j.DeletedAt)
 	}
-	return Tombstone{DeletedAt: t, DeviceName: *j.DeviceName}, nil
+	return Tombstone{DeletedAt: t, DeviceName: j.DeviceName}, nil
 }
 
 // ReadRemoteTombstone は、DB の記録を見ずに deleted.json だけを読む。登録していないゲームにも使える。deleted.json がなければ

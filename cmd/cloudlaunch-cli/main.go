@@ -407,7 +407,8 @@ func openRemote() (*objstore.S3, error) {
 	})
 }
 
-// openMeta は、syncore を使わない game remote・game import のために、メタ情報の同期だけをリモートと DB につなぐ。
+// openMeta は、セーブを同期しない game remote・game import のために、メタ情報の同期をリモートと DB につなぐ。syncore は
+// tombstone の確認のためだけに使う。
 // 返す store は、game import の後の照合（仕様書 9-K4）に使う。store は呼び出し側が必ず閉じる。
 func openMeta(ctx context.Context, dataDir string) (*metasync.Core, *store.Store, error) {
 	remote, err := openRemote()
@@ -419,7 +420,7 @@ func openMeta(ctx context.Context, dataDir string) (*metasync.Core, *store.Store
 		return nil, nil, err
 	}
 	logger := newLogger()
-	// 取り込みの tombstone の確認（仕様書 8-N7）は、リモートだけを読むので、同期ロックなどの設定は要らない
+	// 取り込みの tombstone の確認（仕様書 8-N7）はリモートだけを読むので、同期ロックなどの設定は要らない
 	tombstones := syncore.New(syncore.Config{Remote: remote, Local: s, Logger: logger})
 	return newMeta(remote, s, logger, dir, tombstones), s, nil
 }

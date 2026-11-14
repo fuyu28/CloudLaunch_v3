@@ -28,6 +28,7 @@ var invalidTombstones = []struct {
 	{"8-T4 64 KiB を超える", testTombstoneJSON + strings.Repeat(" ", 64<<10)},
 	{"8-T5 deletedAt がない", `{"deviceName":"Laptop"}`},
 	{"8-T5 deviceName が空", `{"deletedAt":"2026-11-03T01:02:03.004Z","deviceName":""}`},
+	{"8-T5 deviceName が文字列でない", `{"deletedAt":"2026-11-03T01:02:03.004Z","deviceName":1}`},
 	{"8-T6 deletedAt が日時の形でない", `{"deletedAt":"2026-11-03","deviceName":"Laptop"}`},
 }
 

@@ -504,6 +504,7 @@ func TestDeleteGame(t *testing.T) {
 			{"BackupsDir", func(cfg *syncore.Config) { cfg.BackupsDir = "" }},
 			{"Rename", func(cfg *syncore.Config) { cfg.Rename = nil }},
 			{"DeviceName", func(cfg *syncore.Config) { cfg.DeviceName = "" }},
+			{"Remote", func(cfg *syncore.Config) { cfg.Remote = nil }},
 		}
 		for _, tc := range cases {
 			t.Run(tc.name, func(t *testing.T) {

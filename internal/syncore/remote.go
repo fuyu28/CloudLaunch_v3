@@ -13,12 +13,20 @@ import (
 
 var generationPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 
+func gamePrefix(gameID string) string {
+	return "games/" + gameID + "/"
+}
+
 func headKey(gameID string) string {
-	return "games/" + gameID + "/HEAD"
+	return gamePrefix(gameID) + "HEAD"
+}
+
+func tombstoneKey(gameID string) string {
+	return gamePrefix(gameID) + "deleted.json"
 }
 
 func manifestsPrefix(gameID string) string {
-	return "games/" + gameID + "/manifests/"
+	return gamePrefix(gameID) + "manifests/"
 }
 
 func manifestKey(gameID, generation string) string {
@@ -26,7 +34,7 @@ func manifestKey(gameID, generation string) string {
 }
 
 func objectsPrefix(gameID string) string {
-	return "games/" + gameID + "/objects/"
+	return gamePrefix(gameID) + "objects/"
 }
 
 func objectKey(gameID, sha256 string) string {

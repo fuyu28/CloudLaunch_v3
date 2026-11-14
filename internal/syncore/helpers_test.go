@@ -193,7 +193,7 @@ func (e env) putTombstoneOnGet(n int) {
 	placing := false
 	e.remote.Before = func(op memstore.Op, key string) error {
 		mu.Lock()
-		if placing {
+		if placing && op == memstore.OpPut && key == tombstoneKey() {
 			mu.Unlock()
 			return nil
 		}
