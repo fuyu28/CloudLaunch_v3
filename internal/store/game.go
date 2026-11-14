@@ -24,6 +24,10 @@ type NewGame struct {
 
 // CreateGame は games と game_locals に 1 行ずつ書き込む。
 func (s *Store) CreateGame(ctx context.Context, g NewGame) error {
+	createdAt, err := formatTime(g.CreatedAt)
+	if err != nil {
+		return fmt.Errorf("game %s: created_at: %w", g.ID, err)
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin: %w", err)
@@ -31,7 +35,6 @@ func (s *Store) CreateGame(ctx context.Context, g NewGame) error {
 	defer func() { _ = tx.Rollback() }()
 
 	brand := sql.NullString{String: g.Brand, Valid: g.Brand != ""}
-	createdAt := formatTime(g.CreatedAt)
 	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO games (id, title, brand, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`,
 		g.ID, g.Title, brand, createdAt, createdAt); err != nil {
@@ -54,6 +57,10 @@ func (s *Store) RegisterGame(ctx context.Context, g metasync.GameInfo, saveFolde
 	if err := validateGameInfo(g); err != nil {
 		return err
 	}
+	createdAt, updatedAt, err := formatGameTimes(g)
+	if err != nil {
+		return err
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin: %w", err)
@@ -62,7 +69,7 @@ func (s *Store) RegisterGame(ctx context.Context, g metasync.GameInfo, saveFolde
 
 	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO games (id, title, brand, image_sha256, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
-		g.ID, g.Title, nullIfEmpty(g.Brand), nullIfEmpty(g.ImageSha256), formatTime(g.CreatedAt), formatTime(g.UpdatedAt),
+		g.ID, g.Title, nullIfEmpty(g.Brand), nullIfEmpty(g.ImageSha256), createdAt, updatedAt,
 	); err != nil {
 		return fmt.Errorf("insert games: %w", err)
 	}
@@ -123,6 +130,10 @@ func (s *Store) ReuploadGame(ctx context.Context, oldID string, g metasync.GameI
 	if err := validateGameInfo(g); err != nil {
 		return err
 	}
+	createdAt, updatedAt, err := formatGameTimes(g)
+	if err != nil {
+		return err
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin: %w", err)
@@ -140,7 +151,7 @@ func (s *Store) ReuploadGame(ctx context.Context, oldID string, g metasync.GameI
 
 	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO games (id, title, brand, image_sha256, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
-		g.ID, g.Title, nullIfEmpty(g.Brand), nullIfEmpty(g.ImageSha256), formatTime(g.CreatedAt), formatTime(g.UpdatedAt),
+		g.ID, g.Title, nullIfEmpty(g.Brand), nullIfEmpty(g.ImageSha256), createdAt, updatedAt,
 	); err != nil {
 		return fmt.Errorf("insert games: %w", err)
 	}

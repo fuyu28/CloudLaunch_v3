@@ -45,10 +45,13 @@ func (s *Store) ReplaceGameInfo(ctx context.Context, g metasync.GameInfo) (bool,
 	if err := validateGameInfo(g); err != nil {
 		return false, err
 	}
-	updatedAt := formatTime(g.UpdatedAt)
+	createdAt, updatedAt, err := formatGameTimes(g)
+	if err != nil {
+		return false, err
+	}
 	res, err := s.db.ExecContext(ctx,
 		`UPDATE games SET title = ?, brand = ?, image_sha256 = ?, created_at = ?, updated_at = ? WHERE id = ? AND updated_at < ?`,
-		g.Title, nullIfEmpty(g.Brand), nullIfEmpty(g.ImageSha256), formatTime(g.CreatedAt), updatedAt, g.ID, updatedAt)
+		g.Title, nullIfEmpty(g.Brand), nullIfEmpty(g.ImageSha256), createdAt, updatedAt, g.ID, updatedAt)
 	if err != nil {
 		return false, fmt.Errorf("update games: %w", err)
 	}
@@ -67,8 +70,9 @@ func (s *Store) EditGame(ctx context.Context, gameID string, edit GameEdit, now 
 	if edit.Title != nil && *edit.Title == "" {
 		return errors.New("empty title")
 	}
-	if err := validateTime(now); err != nil {
-		return err
+	nowStr, err := formatTime(now)
+	if err != nil {
+		return fmt.Errorf("game %s: updated_at: %w", gameID, err)
 	}
 	var title sql.NullString
 	if edit.Title != nil {
@@ -91,7 +95,7 @@ func (s *Store) EditGame(ctx context.Context, gameID string, edit GameEdit, now 
 		   image_sha256 = CASE WHEN ? THEN NULLIF(?, '') ELSE image_sha256 END,
 		   updated_at = max(?, COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', updated_at, '+0.001 seconds'), updated_at))
 		 WHERE id = ?`,
-		title, edit.Brand != nil, brand, edit.ImageSha256 != nil, image, formatTime(now), gameID)
+		title, edit.Brand != nil, brand, edit.ImageSha256 != nil, image, nowStr, gameID)
 	if err != nil {
 		return fmt.Errorf("update games: %w", err)
 	}
@@ -113,20 +117,17 @@ func validateGameInfo(g metasync.GameInfo) error {
 	if g.ImageSha256 != "" && !metasync.ValidSHA256(g.ImageSha256) {
 		return fmt.Errorf("invalid image sha256: %q", g.ImageSha256)
 	}
-	for _, t := range []time.Time{g.CreatedAt, g.UpdatedAt} {
-		if err := validateTime(t); err != nil {
-			return err
-		}
-	}
 	return nil
 }
 
-// validateTime は、UTC の年が 4 桁に収まらない日時を拒む。4 桁を超える年は固定長の形で読み戻せないため。
-func validateTime(t time.Time) error {
-	if y := t.UTC().Year(); y < 0 || y > 9999 {
-		return fmt.Errorf("time out of range: %s", t)
+func formatGameTimes(g metasync.GameInfo) (createdAt, updatedAt string, err error) {
+	if createdAt, err = formatTime(g.CreatedAt); err != nil {
+		return "", "", fmt.Errorf("game %s: created_at: %w", g.ID, err)
 	}
-	return nil
+	if updatedAt, err = formatTime(g.UpdatedAt); err != nil {
+		return "", "", fmt.Errorf("game %s: updated_at: %w", g.ID, err)
+	}
+	return createdAt, updatedAt, nil
 }
 
 func nullIfEmpty(s string) sql.NullString {
