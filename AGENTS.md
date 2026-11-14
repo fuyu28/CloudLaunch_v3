@@ -31,15 +31,17 @@ Go（同期コア + CLI）と Wails（UI）で作る。
 
 1. `docs/sync-spec.md`
 2. 同期コア + CLI（`status` / `push` / `pull`）
-3. GUI（Wails）
-   - フロントエンドの第一候補は Go のテンプレート + htmx、次点は Svelte。GUI に着手するときに、進捗の表示と確認ダイアログを含む 1 画面を試作して決める
-   - 状態と画面の組み立ては Go に置き、Go の型を TS で書き直す層や、Go の API を包む層を作らない
-   - 理由: `docs/adr/2026-10-23_00-30_gui-frontend.md`
+3. GUI（Wails v3 + Svelte）
+   - 同期の状態・判定・画面に出すデータの組み立ては Go に置き、Svelte は表示と、表示のための状態（ダイアログの開閉、入力中の値、進捗の表示など）だけを持つ
+   - Go の型と API は `wails3 generate bindings` で生成した TS をそのまま使い、Go の型を TS で書き直す層や、Go の API を包む層を作らない
+   - 理由: `docs/adr/2026-10-23_00-30_gui-frontend.md`・`docs/adr/2026-11-15_01-56_gui-svelte-wails3.md`
 
 ## 構成
 
 ```
 cmd/cloudlaunch-cli/   CLI のエントリポイント。各パッケージを組み合わせる配線だけを書く
+cmd/cloudlaunch-gui/   GUI のエントリポイント。Wails の配線と、画面に出すデータの組み立てを書く
+  frontend/            Svelte のフロント。ビルド結果は //go:embed で取り込み、git には dist/.gitkeep と生成したバインディングだけを入れる
 internal/syncore/      セーブ同期のコア（仕様書 2・4〜7 章）。ゲームの tombstone とゲームの削除（8 章）もここが持つ
 internal/metasync/     メタ情報の同期（仕様書 8 章）
 internal/legacy/       旧版からのプレイ履歴の取り込み（仕様書 9 章）
@@ -60,7 +62,7 @@ internal/platform/     OS 固有の処理（PC 全体の同期ロックに使う
 - ログは `log/slog` を使い、コアは `*slog.Logger` を受け取る。出力先は配線の側で決める
 - OS 固有の処理は、同じパッケージの中でファイル名の接尾辞（`_windows.go` / `_linux.go`）で分ける。製品として保証するのは Windows で、Linux の実装は開発用の最小限にとどめる。macOS は扱わない
 - CLI は標準の `flag` で書き、`status` / `push` / `pull` / `recover` と、`game add` / `game edit` / `game set-image` / `game remote` / `game import` / `game delete` / `game reupload`、`session add`、`legacy import` / `legacy link` を持つ。v1 の CLI は同期コアを動かして確かめるための道具で、ゲームの管理は GUI で行う
-- GUI（Wails）の配置は、GUI の段階で決める
+- GUI でもテストの要るロジック（ゲームの起動と終了の待機、プレイ時間の計測）は `cmd/cloudlaunch-gui/` に置かず、`internal/` のパッケージに置いて TDD で書く（理由: `docs/adr/2026-11-15_01-56_gui-svelte-wails3.md`）
 
 ## テスト
 
