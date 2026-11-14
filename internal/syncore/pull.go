@@ -15,6 +15,9 @@ import (
 // Pull は、上書き（opts.Overwrite）でなければ、判定が Pull の plan だけを受け付ける。入れ替えを始めた後に失敗した
 // ときは、ジャーナルを残してエラーを返す。残った状態は仕様書 6 章の復旧表の行に当たり、Recover が片付ける。
 func (c *Core) Pull(ctx context.Context, plan Plan, opts PullOptions) error {
+	if err := checkNotDeleted(plan); err != nil {
+		return fmt.Errorf("pull %s: %w", plan.GameID, err)
+	}
 	if err := checkDecision(plan, opts.Overwrite, DecisionPull); err != nil {
 		return fmt.Errorf("pull %s: %w", plan.GameID, err)
 	}
@@ -129,7 +132,7 @@ func (c *Core) prepareStage(ctx context.Context, plan Plan, game GameLocal, stag
 	if err := ensureLocalUnchanged(ctx, game.SaveFolderPath, plan); err != nil {
 		return err
 	}
-	return c.ensureHeadUnchanged(ctx, plan)
+	return c.ensureRemoteUnchanged(ctx, plan)
 }
 
 // abortPull は stage を削除してからジャーナルを削除する。stage を削除できなければ、ジャーナルを残して Recover に任せる。

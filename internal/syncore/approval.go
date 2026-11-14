@@ -23,8 +23,10 @@ func ensureLocalUnchanged(ctx context.Context, folder string, plan Plan) error {
 	return nil
 }
 
-// ensureHeadUnchanged は、Push（5-P5）・Pull（6-L6）・上書きで同じとき（7-O5）が、承認の後に HEAD が変わっていないかを確かめる。
-func (c *Core) ensureHeadUnchanged(ctx context.Context, plan Plan) error {
+// ensureRemoteUnchanged は、Push（5-P5）・Pull（6-L6）・上書きで同じとき（7-O5）が、承認の後に HEAD が変わっておらず、
+// ゲームの tombstone もないことを確かめる（8-T7）。7-O5 は 8-T7 に挙がっていないが、削除済みのゲームに base だけを記録して
+// 成功と伝えないよう、同じく読み直す。
+func (c *Core) ensureRemoteUnchanged(ctx context.Context, plan Plan) error {
 	head, err := c.readHead(ctx, plan.GameID)
 	if err != nil {
 		return err
@@ -32,5 +34,5 @@ func (c *Core) ensureHeadUnchanged(ctx context.Context, plan Plan) error {
 	if head != plan.Remote.Generation {
 		return fmt.Errorf("HEAD changed from %q to %q after approval: %w", plan.Remote.Generation, head, ErrPlanStale)
 	}
-	return nil
+	return c.ensureNotDeleted(ctx, plan.GameID)
 }

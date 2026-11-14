@@ -134,9 +134,9 @@ func TestHandleTombstone(t *testing.T) {
 	tombstoneKey := remoteGameKey(testGameID, "deleted.json")
 	// afterCleanup は、putGameData と deleted.json を置いた後に掃除したときに残るキー
 	afterCleanup := []string{
+		tombstoneKey,
 		remoteGameKey(remoteGameA, "HEAD"),
 		remoteGameKey(remoteGameA, "game.json"),
-		tombstoneKey,
 	}
 
 	t.Run("8-T1 deleted.json がなければ、削除されていないと返し、何も削除しない", func(t *testing.T) {

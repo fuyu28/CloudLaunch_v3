@@ -54,6 +54,9 @@ type Config struct {
 	Locker Locker
 	// Processes は、Push・Pull がゲームの実行中を拒否するために使う（仕様書 7 章）
 	Processes ProcessChecker
+	// ReadTombstone は、何も書かずにゲームの tombstone を確かめ、なければ false を返す。DB に記録があれば記録を返す（仕様書 8-T8）。
+	// Status が判定の前に、Push・Pull が承認の後に HEAD を読み直すときに呼ぶ。nil なら Status・Push・Pull はエラーにする
+	ReadTombstone func(ctx context.Context, gameID string) (Tombstone, bool, error)
 	// Rename は、リネームをディスクへ書き出してから戻り、移す先があれば失敗する（仕様書 3 章「ディスクへの書き出し」）。
 	// os.Rename はどちらも満たさないので既定にせず、nil なら Pull と Recover は何も変える前にエラーにする
 	Rename func(oldpath, newpath string) error

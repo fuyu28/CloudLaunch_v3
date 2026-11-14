@@ -126,7 +126,7 @@ func (c *Core) readRemoteGame(ctx context.Context, gameID string) (GameInfo, err
 	body, err := c.getLimited(ctx, tombstoneKey(gameID), maxTombstoneSize)
 	switch {
 	case err == nil:
-		if err := validateTombstone(body); err != nil {
+		if _, err := validateTombstone(body); err != nil {
 			return GameInfo{}, fmt.Errorf("%w: invalid deleted.json: %w", errUnimportable, err)
 		}
 		return GameInfo{}, errRemoteDeleted

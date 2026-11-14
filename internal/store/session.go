@@ -100,13 +100,3 @@ func (s *Store) ImportSessions(ctx context.Context, gameID string, sessions []me
 	}
 	return res, nil
 }
-
-func (s *Store) RemoteDeleted(ctx context.Context, gameID string) (bool, error) {
-	var deleted bool
-	if err := s.db.QueryRowContext(ctx,
-		`SELECT remote_deleted_at IS NOT NULL FROM game_locals WHERE game_id = ?`, gameID,
-	).Scan(&deleted); err != nil {
-		return false, fmt.Errorf("select game_locals: %w", err)
-	}
-	return deleted, nil
-}
