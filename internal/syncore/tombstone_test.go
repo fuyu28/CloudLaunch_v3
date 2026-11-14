@@ -134,6 +134,26 @@ func TestPushPullTombstone(t *testing.T) {
 		}
 	})
 
+	t.Run("8章/tombstone/ReadTombstone がなければ、Push・Pull は何も変える前にエラーを返す", func(t *testing.T) {
+		e := newEnv(t)
+		writeFiles(t, e.saveDir, map[string]string{"slot1.sav": "local"})
+		plan := e.planWant(t, syncore.DecisionPush)
+		core := e.coreWithout(func(cfg *syncore.Config) { cfg.ReadTombstone = nil })
+
+		if err := core.Push(t.Context(), plan, syncore.PushOptions{}); err == nil {
+			t.Error("Push がエラーを返さなかった")
+		}
+		if err := core.Pull(t.Context(), plan, syncore.PullOptions{Overwrite: true}); err == nil {
+			t.Error("Pull がエラーを返さなかった")
+		}
+		if keys := e.keys(t, "games/"); len(keys) != 0 {
+			t.Errorf("リモートに書いた: %v", keys)
+		}
+		if acquired, _ := e.lock.state(); acquired != 0 {
+			t.Errorf("同期ロックを %d 回取った", acquired)
+		}
+	})
+
 	t.Run("8-T8 記録のあるゲームは、上書きでも Push・Pull を拒否する", func(t *testing.T) {
 		e := newEnv(t)
 		writeFiles(t, e.saveDir, map[string]string{"slot1.sav": "local"})

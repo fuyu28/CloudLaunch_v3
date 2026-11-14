@@ -45,10 +45,14 @@ func (c *Core) ensureNotDeleted(ctx context.Context, gameID string) error {
 	return nil
 }
 
-// checkNotDeleted は、Status が tombstone を見つけた plan を、上書きでも拒否する（仕様書 8-T8）。
-func checkNotDeleted(plan Plan) error {
+// checkNotDeleted は、Status が tombstone を見つけた plan を、上書きでも拒否する（仕様書 8-T8）。ReadTombstone がなければ、
+// 承認の後の読み直しまで進んでから止まらないよう、何も変える前にエラーにする。
+func (c *Core) checkNotDeleted(plan Plan) error {
 	if plan.RemoteDeleted != nil {
 		return ErrRemoteDeleted
+	}
+	if c.cfg.ReadTombstone == nil {
+		return errReadTombstoneNotSet
 	}
 	return nil
 }

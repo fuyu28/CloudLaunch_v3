@@ -20,7 +20,7 @@ import (
 // Push は、上書き（opts.Overwrite）でなければ、判定が Push の plan だけを受け付ける。手順 8（古い世代の削除と GC）の
 // 失敗とキャンセルは、ログに出すだけで、Push の結果には含めない。
 func (c *Core) Push(ctx context.Context, plan Plan, opts PushOptions) error {
-	if err := checkNotDeleted(plan); err != nil {
+	if err := c.checkNotDeleted(plan); err != nil {
 		return fmt.Errorf("push %s: %w", plan.GameID, err)
 	}
 	if err := checkDecision(plan, opts.Overwrite, DecisionPush); err != nil {

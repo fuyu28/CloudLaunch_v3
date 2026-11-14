@@ -222,11 +222,9 @@ func transfer(ctx context.Context, args []string, stdout io.Writer, cmd transfer
 		// 確かめた後にゲームが削除されると、セーブの同期は 8-T7 のほか、削除で消えた object を取得できずにも失敗する。
 		// どちらでも、メタ情報を同期する前に tombstone を確かめ直す。確かめずに同期すると、削除したデータをリモートに戻す。
 		// 確かめ直しに失敗したときも、メタ情報は同期しない
+		// 元のエラーも返す。8-T7 で止まった Pull は、stage やジャーナルを削除できなかったことも含みうる
 		if herr := handleTombstone(ctx, c, stdout); herr != nil {
-			if errors.Is(err, syncore.ErrRemoteDeleted) {
-				return herr
-			}
-			return errors.Join(err, herr)
+			return errors.Join(herr, err)
 		}
 		if errors.Is(err, syncore.ErrRemoteDeleted) {
 			return err
