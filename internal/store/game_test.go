@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -67,16 +69,18 @@ func TestDeleteGame(t *testing.T) {
 	const otherGameID = "0192d4e8-0000-7000-8000-000000000002"
 	playedAt := time.Date(2026, 11, 2, 0, 0, 0, 0, time.UTC)
 
-	// setup は、testGameID とほかのゲームを登録し、それぞれにセッションを 1 件ずつ入れる。
-	setup := func(t *testing.T) *Store {
+	// setup は、セーブフォルダを saveDir にした testGameID と、ほかのゲームを登録し、それぞれにセッションを 1 件ずつ入れる。
+	setup := func(t *testing.T, saveDir string) *Store {
 		t.Helper()
 		s, _ := openTemp(t)
 		ctx := context.Background()
-		createTestGame(t, s)
-		if err := s.CreateGame(ctx, NewGame{
-			ID: otherGameID, Title: "Other", SaveFolderPath: "/other", ExePath: "/other.exe", CreatedAt: playedAt,
-		}); err != nil {
-			t.Fatalf("CreateGame: %v", err)
+		for _, g := range []NewGame{
+			{ID: testGameID, Title: "Game", SaveFolderPath: saveDir, ExePath: "/game.exe", CreatedAt: playedAt},
+			{ID: otherGameID, Title: "Other", SaveFolderPath: "/other", ExePath: "/other.exe", CreatedAt: playedAt},
+		} {
+			if err := s.CreateGame(ctx, g); err != nil {
+				t.Fatalf("CreateGame: %v", err)
+			}
 		}
 		for i, gameID := range []string{testGameID, otherGameID} {
 			if err := s.CreateSession(ctx, metasync.Session{
@@ -95,58 +99,62 @@ func TestDeleteGame(t *testing.T) {
 		}
 		return n
 	}
-	assertUnregistered := func(t *testing.T, s *Store) {
-		t.Helper()
-		for _, q := range []string{
-			`SELECT count(*) FROM games WHERE id = ?`,
-			`SELECT count(*) FROM game_locals WHERE game_id = ?`,
-			`SELECT count(*) FROM play_sessions WHERE game_id = ?`,
-		} {
-			if n := count(t, s, q); n != 0 {
-				t.Errorf("%s = %d, want 0", q, n)
+	unregisterCases := []struct {
+		name    string
+		prepare func(t *testing.T, s *Store)
+	}{
+		{"8-X1 ゲーム情報・ローカル情報・プレイ履歴を消し、ほかのゲームとセーブフォルダは残す", func(*testing.T, *Store) {}},
+		{"8-U1 ゲームの tombstone の記録があるゲームも同じく解除し、セーブフォルダは残す", func(t *testing.T, s *Store) {
+			if err := s.RecordRemoteDeleted(context.Background(), testGameID, metasync.Tombstone{DeletedAt: playedAt, DeviceName: "Laptop"}); err != nil {
+				t.Fatalf("RecordRemoteDeleted: %v", err)
 			}
-		}
+		}},
+	}
+	for _, tc := range unregisterCases {
+		t.Run(tc.name, func(t *testing.T) {
+			saveDir := t.TempDir()
+			savePath := filepath.Join(saveDir, "slot1.sav")
+			if err := os.WriteFile(savePath, []byte("save"), 0o600); err != nil {
+				t.Fatalf("write save: %v", err)
+			}
+			s := setup(t, saveDir)
+			ctx := context.Background()
+			tc.prepare(t, s)
+
+			if err := s.DeleteGame(ctx, testGameID); err != nil {
+				t.Fatalf("DeleteGame: %v", err)
+			}
+			for _, q := range []string{
+				`SELECT count(*) FROM games WHERE id = ?`,
+				`SELECT count(*) FROM game_locals WHERE game_id = ?`,
+				`SELECT count(*) FROM play_sessions WHERE game_id = ?`,
+			} {
+				if n := count(t, s, q); n != 0 {
+					t.Errorf("%s = %d, want 0", q, n)
+				}
+			}
+			ids, err := s.GameIDs(ctx)
+			if err != nil {
+				t.Fatalf("GameIDs: %v", err)
+			}
+			if diff := cmp.Diff([]string{otherGameID}, ids); diff != "" {
+				t.Errorf("GameIDs (-want +got):\n%s", diff)
+			}
+			sessions, err := s.Sessions(ctx, otherGameID)
+			if err != nil {
+				t.Fatalf("Sessions: %v", err)
+			}
+			if len(sessions) != 1 {
+				t.Errorf("ほかのゲームのセッション = %v, want 1 件", sessions)
+			}
+			if b, err := os.ReadFile(savePath); err != nil || string(b) != "save" {
+				t.Errorf("セーブ = %q, %v, want 変わらずに残る", b, err)
+			}
+		})
 	}
 
-	t.Run("8-X1 ゲーム情報・ローカル情報・プレイ履歴を消し、ほかのゲームは残す", func(t *testing.T) {
-		s := setup(t)
-		ctx := context.Background()
-
-		if err := s.DeleteGame(ctx, testGameID); err != nil {
-			t.Fatalf("DeleteGame: %v", err)
-		}
-		assertUnregistered(t, s)
-		ids, err := s.GameIDs(ctx)
-		if err != nil {
-			t.Fatalf("GameIDs: %v", err)
-		}
-		if diff := cmp.Diff([]string{otherGameID}, ids); diff != "" {
-			t.Errorf("GameIDs (-want +got):\n%s", diff)
-		}
-		sessions, err := s.Sessions(ctx, otherGameID)
-		if err != nil {
-			t.Fatalf("Sessions: %v", err)
-		}
-		if len(sessions) != 1 {
-			t.Errorf("ほかのゲームのセッション = %v, want 1 件", sessions)
-		}
-	})
-
-	t.Run("8-U1 ゲームの tombstone の記録があるゲームも、登録を解除できる", func(t *testing.T) {
-		s := setup(t)
-		ctx := context.Background()
-		if err := s.RecordRemoteDeleted(ctx, testGameID, metasync.Tombstone{DeletedAt: playedAt, DeviceName: "Laptop"}); err != nil {
-			t.Fatalf("RecordRemoteDeleted: %v", err)
-		}
-
-		if err := s.DeleteGame(ctx, testGameID); err != nil {
-			t.Fatalf("DeleteGame: %v", err)
-		}
-		assertUnregistered(t, s)
-	})
-
 	t.Run("3章/Pull ジャーナル/ジャーナルが残るゲームの登録の解除は ErrPullInProgress で拒否する", func(t *testing.T) {
-		s := setup(t)
+		s := setup(t, "/save")
 		ctx := context.Background()
 		if err := s.InsertPullOperation(ctx, "0192d4e8-0000-7000-8000-0000000000d1", testGameID,
 			"/save", "/.cloudlaunch-stage-x", "/.cloudlaunch-old-x", playedAt); err != nil {
