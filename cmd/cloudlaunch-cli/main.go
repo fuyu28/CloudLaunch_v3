@@ -334,7 +334,6 @@ type cores struct {
 	logger     *slog.Logger
 	gameID     string
 	deviceName string
-	backupsDir string
 	close      func()
 }
 
@@ -388,7 +387,6 @@ func connectCores(ctx context.Context, gameID, dataDir string) (cores, error) {
 		logger:     cfg.Logger,
 		gameID:     gameID,
 		deviceName: host,
-		backupsDir: cfg.BackupsDir,
 		close:      func() { _ = s.Close() },
 	}, nil
 }
@@ -541,17 +539,17 @@ func gameDelete(ctx context.Context, args []string, stdout io.Writer) error {
 		return fmt.Errorf("--confirm-title がゲームのタイトル %q と一致しないので、削除しません", info.Title)
 	}
 
-	remoteDone := false
-	err = c.sync.DeleteGame(ctx, c.gameID, func(ctx context.Context) error {
-		err := c.meta.DeleteRemoteGame(ctx, c.gameID, metasync.Tombstone{DeletedAt: time.Now(), DeviceName: c.deviceName})
-		remoteDone = err == nil
-		return err
+	res, err := c.sync.DeleteGame(ctx, c.gameID, func(ctx context.Context) error {
+		return c.meta.DeleteRemoteGame(ctx, c.gameID, metasync.Tombstone{DeletedAt: time.Now(), DeviceName: c.deviceName})
 	})
 	if err != nil {
-		return explainDeleteError(err, c.gameID, remoteDone)
+		return explainDeleteError(err, c.gameID)
 	}
-	_, err = fmt.Fprintf(stdout, "リモートのデータを削除し、この PC の登録を解除しました（セーブフォルダはそのままです。バックアップは %s にあります）\n",
-		filepath.Join(c.backupsDir, c.gameID))
+	backup := "セーブフォルダがないので、バックアップは作っていません"
+	if res.BackupPath != "" {
+		backup = "バックアップは " + res.BackupPath + " にあります"
+	}
+	_, err = fmt.Fprintf(stdout, "リモートのデータを削除し、この PC の登録を解除しました（セーブフォルダはそのままです。%s）\n", backup)
 	return err
 }
 
@@ -562,18 +560,17 @@ func unregisterGame(ctx context.Context, gameID, dataDir string, stdout io.Write
 	}
 	defer func() { _ = s.Close() }()
 	if err := s.DeleteGame(ctx, gameID); err != nil {
-		return explainDeleteError(err, gameID, false)
+		return explainDeleteError(err, gameID)
 	}
 	_, err = fmt.Fprintln(stdout, "この PC の登録を解除しました（セーブフォルダとリモートはそのままです）")
 	return err
 }
 
-// explainDeleteError は、ゲームの削除が止まった場所（仕様書 8-X8〜8-X10）ごとに、利用者がすることを添える。remoteDone は、
-// リモートの削除を終えた後に登録の解除で止まったことを表す。
-func explainDeleteError(err error, gameID string, remoteDone bool) error {
+// explainDeleteError は、ゲームの削除が止まった場所（仕様書 8-X8〜8-X10）ごとに、利用者がすることを添える。
+func explainDeleteError(err error, gameID string) error {
 	unregister := "cloudlaunch-cli game delete --game " + gameID
 	switch {
-	case remoteDone:
+	case errors.Is(err, syncore.ErrUnregisterFailed):
 		return fmt.Errorf("リモートのデータは削除しましたが、この PC の登録を解除できませんでした。%s で解除してください: %w", unregister, err)
 	case errors.Is(err, metasync.ErrDeleteIncomplete):
 		return fmt.Errorf("リモートでは削除済みになりましたが、途中で止まりました。消し残りは次の push・pull で削除されます。この PC の登録は残っているので、%s で解除してください: %w", unregister, err)

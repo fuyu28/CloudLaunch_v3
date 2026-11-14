@@ -89,7 +89,13 @@ func (c *Core) copyToBackup(ctx context.Context, dir, src, name string) error {
 		return fmt.Errorf("copy to backup: %w", err)
 	}
 	if err := c.cfg.Rename(partial, filepath.Join(dir, name)); err != nil {
-		return fmt.Errorf("rename partial backup: %w", err)
+		// 削除のバックアップは呼ぶたびに名前を振るので、残すと次の呼び出しでも消されない。リネームが済んでから書き出しに
+		// 失敗したときは partial がもうないので、消しても最終の名前のコピーは残る
+		err = fmt.Errorf("rename partial backup: %w", err)
+		if rmErr := os.RemoveAll(partial); rmErr != nil {
+			err = errors.Join(err, fmt.Errorf("remove partial backup: %w", rmErr))
+		}
+		return err
 	}
 	return nil
 }
