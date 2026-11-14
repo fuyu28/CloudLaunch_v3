@@ -154,7 +154,7 @@ func (s *Store) ReuploadGame(ctx context.Context, oldID string, g metasync.GameI
 	if n, err := res.RowsAffected(); err != nil {
 		return fmt.Errorf("insert game_locals: %w", err)
 	} else if n == 0 {
-		return fmt.Errorf("game %s: %w", oldID, metasync.ErrNotRemoteDeleted)
+		return fmt.Errorf("game %s: %w", oldID, syncore.ErrNotRemoteDeleted)
 	}
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE play_sessions SET game_id = ? WHERE game_id = ?`, g.ID, oldID); err != nil {

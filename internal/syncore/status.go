@@ -70,7 +70,7 @@ func (c *Core) Status(ctx context.Context, gameID string) (Plan, error) {
 	if err != nil {
 		return Plan{}, fmt.Errorf("read game %s: %w", gameID, err)
 	}
-	tomb, deleted, err := c.readTombstone(ctx, gameID)
+	tomb, deleted, err := c.CheckTombstone(ctx, gameID)
 	if err != nil {
 		return Plan{}, err
 	}

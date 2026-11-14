@@ -40,8 +40,8 @@ Go（同期コア + CLI）と Wails（UI）で作る。
 
 ```
 cmd/cloudlaunch-cli/   CLI のエントリポイント。各パッケージを組み合わせる配線だけを書く
-internal/syncore/      セーブ同期のコア（仕様書 2・4〜7 章）
-internal/metasync/     メタ情報の同期（仕様書 8 章）。ゲームの tombstone の確認と掃除もここが持つ
+internal/syncore/      セーブ同期のコア（仕様書 2・4〜7 章）。ゲームの tombstone とゲームの削除（8 章）もここが持つ
+internal/metasync/     メタ情報の同期（仕様書 8 章）
 internal/legacy/       旧版からのプレイ履歴の取り込み（仕様書 9 章）
 internal/store/        SQLite（goose の migration を含む）
 internal/objstore/     S3 互換オブジェクトストアのクライアント

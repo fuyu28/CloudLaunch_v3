@@ -181,17 +181,6 @@ func TestReuploadGame(t *testing.T) {
 		}
 	})
 
-	t.Run("8章/上げ直し/ゲームの tombstone の記録がなければ、何も変えずに拒否する", func(t *testing.T) {
-		e := newBareEnv(t)
-		e.addSession(t, sessionA, 60)
-		e.addSession(t, sessionB, 120)
-
-		if _, err := e.reupload(t); !errors.Is(err, metasync.ErrNotRemoteDeleted) {
-			t.Fatalf("ReuploadGame error = %v, want ErrNotRemoteDeleted", err)
-		}
-		assertNotReuploaded(t, e)
-	})
-
 	t.Run("8章/上げ直し/新しい gameId が UUIDv7 でなければ、何も変えずに拒否する", func(t *testing.T) {
 		e := newReuploadEnv(t)
 

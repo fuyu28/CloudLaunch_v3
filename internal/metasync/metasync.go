@@ -4,6 +4,7 @@ package metasync
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -46,11 +47,8 @@ type Session struct {
 
 type LocalStore interface {
 	Sessions(ctx context.Context, gameID string) ([]Session, error)
-	// RemoteDeleted は、ゲームの tombstone の記録（仕様書 8-T2）があれば、その値と true を返す。登録していないゲームは
-	// エラーにする
-	RemoteDeleted(ctx context.Context, gameID string) (Tombstone, bool, error)
-	// RecordRemoteDeleted は、ゲームの tombstone の記録を書く。登録していないゲームはエラーにする
-	RecordRemoteDeleted(ctx context.Context, gameID string, t Tombstone) error
+	// IsRemoteDeleted は、ゲームの tombstone の記録（仕様書 8-T2）があれば true を返す。登録していないゲームはエラーにする
+	IsRemoteDeleted(ctx context.Context, gameID string) (bool, error)
 	// ImportSessions は、sessions を 1 つのトランザクションで gameID のセッションとして入れる。同じゲームに同じ ID が
 	// あれば飛ばし、別のゲームに同じ ID があれば入れずに ImportResult.OtherGame で返す（仕様書 8-S5）
 	ImportSessions(ctx context.Context, gameID string, sessions []Session) (ImportResult, error)
@@ -64,7 +62,7 @@ type LocalStore interface {
 	RegisterGame(ctx context.Context, g GameInfo, saveFolderPath, exePath string) error
 	// ReuploadGame は、1 つのトランザクションで、g で新しいゲーム情報を作り、oldID のプレイ履歴とローカル情報（base と
 	// ゲームの tombstone の記録を除く）を g.ID に移し、oldID のゲーム情報を消す（仕様書 8-U4）。oldID にゲームの tombstone の
-	// 記録がなければ、何も変えずに ErrNotRemoteDeleted で包んだエラーを返す
+	// 記録がなければ、何も変えずにエラーを返す
 	ReuploadGame(ctx context.Context, oldID string, g GameInfo) error
 }
 
@@ -110,10 +108,23 @@ type ImportResult struct {
 	OtherGame []string
 }
 
+// ErrInvalidTombstone は、TombstoneReader が、ゲームの tombstone が不正（仕様書 8-T4〜8-T6）なことを表すために包んで返す。
+var ErrInvalidTombstone = errors.New("invalid game tombstone")
+
+// TombstoneReader は、ゲームの tombstone をリモートから読む。tombstone の検証と扱いは syncore が持つので、metasync は結果だけを
+// 受け取る。
+type TombstoneReader interface {
+	// RemoteTombstoneExists は、DB の記録を見ずに deleted.json だけを読み、なければ false を返す。不正なら
+	// ErrInvalidTombstone で包んだエラーを、読めなければそれ以外のエラーを返す
+	RemoteTombstoneExists(ctx context.Context, gameID string) (bool, error)
+}
+
 type Config struct {
 	Remote ObjectStore
 	Local  LocalStore
-	Logger *slog.Logger
+	// Tombstones は、取り込み（RemoteGames・ImportGame）が使う。nil なら、取り込みはリモートを読まずにエラーにする
+	Tombstones TombstoneReader
+	Logger     *slog.Logger
 	// ImageDir は、画像のキャッシュのフォルダ。なければ作る
 	ImageDir string
 }
@@ -137,7 +148,7 @@ type Result struct {
 // ゲーム情報の同期が失敗したら、プレイ履歴は同期せずにエラーを返す。不正な game.json は失敗に数えない。
 // ゲームの tombstone の記録があれば、リモートに触れずにゼロ値を返す（仕様書 8-M4）。
 func (c *Core) Sync(ctx context.Context, gameID string) (Result, error) {
-	_, deleted, err := c.cfg.Local.RemoteDeleted(ctx, gameID)
+	deleted, err := c.cfg.Local.IsRemoteDeleted(ctx, gameID)
 	if err != nil {
 		return Result{}, fmt.Errorf("read remote deleted: %w", err)
 	}

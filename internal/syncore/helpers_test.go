@@ -50,7 +50,6 @@ type env struct {
 	ops   *opLog
 	lock  *fakeLocker
 	procs *fakeProcesses
-	tombs *fakeTombstones
 	// exePath は、登録したゲームの実行ファイルのパス
 	exePath string
 }
@@ -172,31 +171,71 @@ func (p *fakeProcesses) asked() []string {
 	return append([]string(nil), p.paths...)
 }
 
-// fakeTombstones は、ゲームの tombstone の確認の偽物。deletedFrom が 0 でなければ、その回目以降の呼び出しで tombstone を
-// 返す（2 なら、Status の 1 回目は通り、承認の後の読み直しの 2 回目で見つかる）。err が nil でなければ、それを返す。
-type fakeTombstones struct {
-	mu          sync.Mutex
-	deletedFrom int
-	err         error
-	calls       int
-}
+// testTombstoneJSON は、ほかの PC がゲームの削除で書いた deleted.json。testTombstone はその値で、DB に書く記録とも比べる。
+const testTombstoneJSON = `{"deletedAt":"2026-11-03T00:00:00.000Z","deviceName":"Laptop"}`
 
 var testTombstone = syncore.Tombstone{DeletedAt: time.Date(2026, 11, 3, 0, 0, 0, 0, time.UTC), DeviceName: "Laptop"}
 
-func (f *fakeTombstones) read(_ context.Context, gameID string) (syncore.Tombstone, bool, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.calls++
-	if gameID != testGameID {
-		return syncore.Tombstone{}, false, fmt.Errorf("unexpected game %s", gameID)
+func tombstoneKey() string { return "games/" + testGameID + "/deleted.json" }
+
+func (e env) putTombstone(t *testing.T) {
+	t.Helper()
+	e.putObject(t, tombstoneKey(), testTombstoneJSON)
+}
+
+// putTombstoneOnGet は、deleted.json の n 回目の GET の直前に deleted.json を置く。2 なら、Status の確認は通り、承認の後の
+// 読み直しで見つかる。それまでの Before は続けて呼ぶので、failOn などで Before を差し替えた後に呼ぶ。自分で置く PUT は、
+// コアの PUT として数えられないよう、それまでの Before に渡さない。
+func (e env) putTombstoneOnGet(n int) {
+	prev := e.remote.Before
+	var mu sync.Mutex
+	calls := 0
+	placing := false
+	e.remote.Before = func(op memstore.Op, key string) error {
+		mu.Lock()
+		if placing && op == memstore.OpPut && key == tombstoneKey() {
+			mu.Unlock()
+			return nil
+		}
+		hit := false
+		if op == memstore.OpGet && key == tombstoneKey() {
+			calls++
+			hit = calls == n
+		}
+		placing = hit
+		mu.Unlock()
+		if hit {
+			err := e.remote.Put(context.Background(), key, strings.NewReader(testTombstoneJSON), int64(len(testTombstoneJSON)))
+			mu.Lock()
+			placing = false
+			mu.Unlock()
+			if err != nil {
+				return fmt.Errorf("put deleted.json: %w", err)
+			}
+		}
+		if prev != nil {
+			return prev(op, key)
+		}
+		return nil
 	}
-	if f.err != nil {
-		return syncore.Tombstone{}, false, f.err
+}
+
+// recordTombstone は、DB にゲームの tombstone の記録（8-T2）を書く。リモートの deleted.json とは別に、記録だけがある状態を作る。
+func (e env) recordTombstone(t *testing.T, ts syncore.Tombstone) {
+	t.Helper()
+	if err := e.store.RecordRemoteDeleted(context.Background(), testGameID, ts); err != nil {
+		t.Fatalf("RecordRemoteDeleted: %v", err)
 	}
-	if f.deletedFrom > 0 && f.calls >= f.deletedFrom {
-		return testTombstone, true, nil
+}
+
+// recorded は、DB のゲームの tombstone の記録を返す。
+func (e env) recorded(t *testing.T) (syncore.Tombstone, bool) {
+	t.Helper()
+	ts, ok, err := e.store.RemoteDeleted(context.Background(), testGameID)
+	if err != nil {
+		t.Fatalf("RemoteDeleted: %v", err)
 	}
-	return syncore.Tombstone{}, false, nil
+	return ts, ok
 }
 
 // newEnv は、セーブフォルダを持つゲームを 1 つ登録した DB と、空のリモートを用意する。
@@ -240,9 +279,7 @@ func newEnvWithRemote(t *testing.T, remote *memstore.Store) env {
 	ops := &opLog{}
 	lock := &fakeLocker{}
 	procs := &fakeProcesses{}
-	tombs := &fakeTombstones{}
 	cfg := syncore.Config{
-		ReadTombstone: tombs.read,
 		Remote:        remote,
 		Local:         st,
 		Logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -266,7 +303,7 @@ func newEnvWithRemote(t *testing.T, remote *memstore.Store) env {
 		},
 		SyncFile: ops.sync,
 	}
-	return env{core: syncore.New(cfg), cfg: cfg, store: st, remote: remote, saveDir: saveDir, dbPath: dbPath, backupsDir: backupsDir, rename: hook, ops: ops, lock: lock, procs: procs, tombs: tombs, exePath: exePath}
+	return env{core: syncore.New(cfg), cfg: cfg, store: st, remote: remote, saveDir: saveDir, dbPath: dbPath, backupsDir: backupsDir, rename: hook, ops: ops, lock: lock, procs: procs, exePath: exePath}
 }
 
 // coreWithout は、e のコアと同じ設定から edit で 1 項目だけ外したコアを作る。必須の項目がないときの確認で、

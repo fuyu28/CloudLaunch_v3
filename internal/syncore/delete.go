@@ -1,9 +1,10 @@
-// ゲームのリモートの削除の手順（仕様書 8 章「ゲームの削除」の 8-X2〜8-X13）。tombstone の PUT と配下の削除は、呼び出し側が
-// deleteRemote として渡す。
+// ゲームのリモートの削除の手順（仕様書 8 章「ゲームの削除」の 8-X2〜8-X13）。
 package syncore
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -17,9 +18,13 @@ import (
 var (
 	// ErrPullPending は、Pull ジャーナルが残っていて、ゲームを削除できないことを表す。復旧（Recover）で片付けてから削除する
 	ErrPullPending = errors.New("pull journal remains for the game")
-	// ErrRemoteDeletionFailed は、DeleteGame に渡した deleteRemote が失敗したことを表す。それより前の手順で止まったときは
-	// 何も消えていないが、これで止まったときは、リモートで削除されたかどうかは deleteRemote のエラーによる
+	// ErrRemoteDeletionFailed は、リモートの削除（tombstone の PUT・DB への記録・配下の削除）で止まったことを表す。それより
+	// 前の手順で止まったときは何も消えていない。PUT で止まったときは、PUT が届いたかは分からない（8-X9）。PUT の後で止まった
+	// ときは、ErrDeleteIncomplete でも包む
 	ErrRemoteDeletionFailed = errors.New("remote deletion failed")
+	// ErrDeleteIncomplete は、deleted.json の PUT に成功した後で止まったことを表す。リモートでは削除済みに見え、記録と
+	// 消し残りは次の HandleTombstone が片付ける（仕様書 8-X10）
+	ErrDeleteIncomplete = errors.New("game is deleted on remote but the deletion is incomplete")
 	// ErrUnregisterFailed は、リモートの削除を終えた後で、この PC の登録の解除に失敗したことを表す。登録だけを解除し直す
 	ErrUnregisterFailed = errors.New("remote data is deleted but the game is still registered")
 )
@@ -30,11 +35,11 @@ type DeleteResult struct {
 }
 
 // DeleteGame は、同期ロックを握ったまま、Pull ジャーナルと tombstone を確かめ、実行中でなければセーブをバックアップへコピーし、
-// deleteRemote（tombstone の PUT・DB への記録・配下の削除）を呼んでから、登録を解除する（仕様書 8-X2〜8-X7）。
-// 呼び出し側は、強い確認（8-X4）を取ってから呼ぶ。deleteRemote が失敗したら、登録を残して ErrRemoteDeletionFailed で包んだ
-// エラーを返す。
-func (c *Core) DeleteGame(ctx context.Context, gameID string, deleteRemote func(ctx context.Context) error) (DeleteResult, error) {
-	if err := c.checkDeleteConfig(deleteRemote); err != nil {
+// tombstone を PUT して DB に記録し、配下を削除してから、登録を解除する（仕様書 8-X2〜8-X7）。tombstone の deletedAt は
+// Config.Now、deviceName は Config.DeviceName にする。呼び出し側は、強い確認（8-X4）を取ってから呼ぶ。リモートの削除が
+// 失敗したら、登録を残して ErrRemoteDeletionFailed で包んだエラーを返す。
+func (c *Core) DeleteGame(ctx context.Context, gameID string) (DeleteResult, error) {
+	if err := c.checkDeleteConfig(); err != nil {
 		return DeleteResult{}, fmt.Errorf("delete game %s: %w", gameID, err)
 	}
 	release, err := c.acquire(ctx)
@@ -73,7 +78,7 @@ func (c *Core) DeleteGame(ctx context.Context, gameID string, deleteRemote func(
 		return res, fmt.Errorf("delete game %s: %w", gameID, err)
 	}
 
-	if err := deleteRemote(ctx); err != nil {
+	if err := c.deleteRemote(ctx, gameID); err != nil {
 		return res, fmt.Errorf("delete game %s: %w: %w", gameID, ErrRemoteDeletionFailed, err)
 	}
 	if err := c.cfg.Local.DeleteGame(ctx, gameID); err != nil {
@@ -82,8 +87,28 @@ func (c *Core) DeleteGame(ctx context.Context, gameID string, deleteRemote func(
 	return res, nil
 }
 
+// deleteRemote は、tombstone を PUT し、DB に記録してから、配下の deleted.json 以外を削除する（仕様書 8-X5・8-X6）。PUT の
+// 後の失敗は ErrDeleteIncomplete で包む。既に tombstone があるかは確かめないので、呼び出し側が先に確かめる（8-X11）。
+func (c *Core) deleteRemote(ctx context.Context, gameID string) error {
+	t := Tombstone{DeletedAt: c.cfg.Now(), DeviceName: c.cfg.DeviceName}
+	body, err := json.Marshal(tombstoneJSON{DeletedAt: t.DeletedAt.UTC().Format(timeLayout), DeviceName: t.DeviceName})
+	if err != nil {
+		return fmt.Errorf("encode deleted.json: %w", err)
+	}
+	if err := c.cfg.Remote.Put(ctx, tombstoneKey(gameID), bytes.NewReader(body), int64(len(body))); err != nil {
+		return fmt.Errorf("put deleted.json: %w", err)
+	}
+	if err := c.cfg.Local.RecordRemoteDeleted(ctx, gameID, t); err != nil {
+		return fmt.Errorf("record remote deleted: %w: %w", ErrDeleteIncomplete, err)
+	}
+	if err := c.deleteGameData(ctx, gameID); err != nil {
+		return fmt.Errorf("%w: %w", ErrDeleteIncomplete, err)
+	}
+	return nil
+}
+
 func (c *Core) ensureNotDeletedBeforeDelete(ctx context.Context, gameID string) error {
-	t, deleted, err := c.readTombstone(ctx, gameID)
+	t, deleted, err := c.CheckTombstone(ctx, gameID)
 	if err != nil {
 		return err
 	}
@@ -94,12 +119,13 @@ func (c *Core) ensureNotDeletedBeforeDelete(ctx context.Context, gameID string) 
 }
 
 // checkDeleteConfig は、ロックだけを取って何もせずに終わらないよう、手順で使う設定をロックの前に確かめる。
-func (c *Core) checkDeleteConfig(deleteRemote func(ctx context.Context) error) error {
+// DeviceName が空のまま tombstone を書くと 8-T5 に当たり、どの PC もそのゲームを確かめられなくなるので、空なら止める。
+func (c *Core) checkDeleteConfig() error {
 	switch {
-	case deleteRemote == nil:
-		return errors.New("remote deletion is not given")
-	case c.cfg.ReadTombstone == nil:
-		return errReadTombstoneNotSet
+	case c.cfg.Remote == nil:
+		return errors.New("remote is not configured")
+	case c.cfg.DeviceName == "":
+		return errors.New("device name is not configured")
 	case c.cfg.Processes == nil:
 		return errors.New("process checker is not configured")
 	case c.cfg.BackupsDir == "":

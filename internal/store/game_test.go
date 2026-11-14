@@ -105,7 +105,7 @@ func TestDeleteGame(t *testing.T) {
 	}{
 		{"8-X1 ゲーム情報・ローカル情報・プレイ履歴を消し、ほかのゲームとセーブフォルダは残す", func(*testing.T, *Store) {}},
 		{"8-U1 ゲームの tombstone の記録があるゲームも同じく解除し、セーブフォルダは残す", func(t *testing.T, s *Store) {
-			if err := s.RecordRemoteDeleted(context.Background(), testGameID, metasync.Tombstone{DeletedAt: playedAt, DeviceName: "Laptop"}); err != nil {
+			if err := s.RecordRemoteDeleted(context.Background(), testGameID, syncore.Tombstone{DeletedAt: playedAt, DeviceName: "Laptop"}); err != nil {
 				t.Fatalf("RecordRemoteDeleted: %v", err)
 			}
 		}},
@@ -224,7 +224,7 @@ func TestReuploadGame(t *testing.T) {
 			t.Fatalf("SetBase: %v", err)
 		}
 		if recordDeleted {
-			if err := s.RecordRemoteDeleted(ctx, testGameID, metasync.Tombstone{DeletedAt: now, DeviceName: "Laptop"}); err != nil {
+			if err := s.RecordRemoteDeleted(ctx, testGameID, syncore.Tombstone{DeletedAt: now, DeviceName: "Laptop"}); err != nil {
 				t.Fatalf("RecordRemoteDeleted: %v", err)
 			}
 		}
@@ -268,7 +268,7 @@ func TestReuploadGame(t *testing.T) {
 		s := setup(t, false)
 		before := snapshot(t, s)
 
-		if err := s.ReuploadGame(context.Background(), testGameID, newGame); !errors.Is(err, metasync.ErrNotRemoteDeleted) {
+		if err := s.ReuploadGame(context.Background(), testGameID, newGame); !errors.Is(err, syncore.ErrNotRemoteDeleted) {
 			t.Fatalf("ReuploadGame error = %v, want ErrNotRemoteDeleted", err)
 		}
 		if diff := cmp.Diff(before, snapshot(t, s)); diff != "" {
