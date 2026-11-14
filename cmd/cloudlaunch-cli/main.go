@@ -128,10 +128,38 @@ func status(ctx context.Context, args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
+	// status は表示だけを行い、記録も削除もしない（仕様書 8-T2）
+	if plan.RemoteDeleted != nil {
+		_, err := fmt.Fprintln(stdout, remoteDeletedLabel(metasync.Tombstone(*plan.RemoteDeleted)))
+		return err
+	}
 	if err := printPlan(stdout, plan); err != nil {
 		return err
 	}
 	return recordBaseIfNeeded(ctx, c.sync, plan, stdout)
+}
+
+func remoteDeletedLabel(t metasync.Tombstone) string {
+	return fmt.Sprintf("リモートで削除されました（deviceName: %q, deletedAt: %s）", t.DeviceName, t.DeletedAt.Format(time.RFC3339Nano))
+}
+
+// errRemoteDeleted は、push・pull がゲームの tombstone で止まったことを表す。頼まれた同期をしていないので、エラーで終わる。
+var errRemoteDeleted = errors.New("リモートで削除されたゲームなので、同期しませんでした")
+
+// handleTombstone は、ゲームの tombstone を確かめ、あれば DB に記録して配下を削除し（仕様書 8-T2）、表示して
+// errRemoteDeleted を返す。なければ nil を返す。
+func handleTombstone(ctx context.Context, c cores, stdout io.Writer) error {
+	t, deleted, err := c.meta.HandleTombstone(ctx, c.gameID)
+	if err != nil {
+		return err
+	}
+	if !deleted {
+		return nil
+	}
+	if _, err := fmt.Fprintln(stdout, remoteDeletedLabel(t)); err != nil {
+		return err
+	}
+	return errRemoteDeleted
 }
 
 // recordBaseIfNeeded は、データを転送しないので確認を取らない（仕様書 4 章）。
@@ -178,8 +206,9 @@ var (
 )
 
 // transfer は push と pull を行う。コマンドの実行を承認とみなして確認を出さない（仕様書 7 章の確認は GUI が出す）。
-// --overwrite を付けると、判定によらず上書きする。セーブの同期が見送り・失敗で終わっても、そのあとにメタ情報を同期する
-// （仕様書 8-M2）。メタ情報の同期の失敗は、返すエラーに含めない（8-M3）。
+// --overwrite を付けると、判定によらず上書きする。最初にゲームの tombstone を確かめ、あればどちらも同期しない（仕様書 8-M1）。
+// セーブの同期が見送り・失敗で終わっても、そのあとにメタ情報を同期する（8-M2）。メタ情報の同期の失敗は、返すエラーに
+// 含めない（8-M3）。
 func transfer(ctx context.Context, args []string, stdout io.Writer, cmd transferCommand) error {
 	var overwrite bool
 	c, err := openCore(ctx, cmd.name, args, &overwrite)
@@ -188,7 +217,18 @@ func transfer(ctx context.Context, args []string, stdout io.Writer, cmd transfer
 	}
 	defer c.close()
 
+	if err := handleTombstone(ctx, c, stdout); err != nil {
+		return err
+	}
 	err = syncSave(ctx, c.sync, c.gameID, stdout, cmd, overwrite)
+	if errors.Is(err, syncore.ErrRemoteDeleted) {
+		// 確かめた後に tombstone が書かれた（8-T7）。メタ情報は同期しない。記録に失敗していると、Sync が 8-M4 の確認を
+		// 通り、削除したデータをリモートに戻すため
+		if herr := handleTombstone(ctx, c, stdout); herr != nil {
+			return herr
+		}
+		return err
+	}
 	return errors.Join(err, syncMeta(ctx, c, stdout))
 }
 
@@ -243,6 +283,9 @@ func syncSave(ctx context.Context, core *syncore.Core, gameID string, stdout io.
 	plan, err := core.Status(ctx, gameID)
 	if err != nil {
 		return err
+	}
+	if plan.RemoteDeleted != nil {
+		return syncore.ErrRemoteDeleted
 	}
 	if err := printPlan(stdout, plan); err != nil {
 		return err
@@ -314,12 +357,17 @@ func openCore(ctx context.Context, name string, args []string, overwrite *bool) 
 	}
 
 	cfg := localConfig(s, dir)
+	meta := newMeta(remote, s, cfg.Logger, dir)
 	cfg.Remote = remote
 	cfg.DeviceName = host
 	cfg.Processes = platform.Processes{}
+	cfg.ReadTombstone = func(ctx context.Context, gameID string) (syncore.Tombstone, bool, error) {
+		t, ok, err := meta.CheckTombstone(ctx, gameID)
+		return syncore.Tombstone(t), ok, err
+	}
 	return cores{
 		sync:   syncore.New(cfg),
-		meta:   newMeta(remote, s, cfg.Logger, dir),
+		meta:   meta,
 		logger: cfg.Logger,
 		gameID: *game,
 		close:  func() { _ = s.Close() },
