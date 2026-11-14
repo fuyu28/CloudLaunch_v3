@@ -4,8 +4,10 @@ package metasync
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"regexp"
 	"time"
 )
@@ -42,19 +44,23 @@ func sessionKey(gameID, sessionID string) string {
 	return sessionsPrefix(gameID) + sessionID + ".json"
 }
 
-// getLimited は、キーがなければ fs.ErrNotExist で包んだエラーを返す。limit を超える本文は、limit の 1 バイト先までしか
-// 読まないので、呼び出し側は長さで超えたことを判定できる。Get のエラーはキーを含むので、包まずに返す。
-func (c *Core) getLimited(ctx context.Context, key string, limit int64) ([]byte, error) {
+// getLimited は、キーがなければ found を false にして返す。「ない」を戻り値で分けるのは、本文の読み込みの失敗が
+// fs.ErrNotExist を包んでいても、ないものとして扱わないため。limit を超える本文は、limit の 1 バイト先までしか読まない
+// ので、呼び出し側は長さで超えたことを判定できる。Get のエラーはキーを含むので、包まずに返す。
+func (c *Core) getLimited(ctx context.Context, key string, limit int64) (body []byte, found bool, err error) {
 	r, err := c.cfg.Remote.Get(ctx, key)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, false, nil
+	}
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	defer func() { _ = r.Close() }()
-	body, err := io.ReadAll(io.LimitReader(r, limit+1))
+	body, err = io.ReadAll(io.LimitReader(r, limit+1))
 	if err != nil {
-		return nil, fmt.Errorf("read %s: %w", key, err)
+		return nil, false, fmt.Errorf("read %s: %w", key, err)
 	}
-	return body, nil
+	return body, true, nil
 }
 
 // parseTimestamp は、3 章の日時の形の JSON 文字列だけを受け入れる。ない項目・null・文字列でない値は通さない。

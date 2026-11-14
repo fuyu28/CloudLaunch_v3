@@ -6,7 +6,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io/fs"
 	"slices"
 	"strings"
 
@@ -135,12 +134,12 @@ func (c *Core) readRemoteGame(ctx context.Context, gameID string) (GameInfo, err
 	case deleted:
 		return GameInfo{}, errRemoteDeleted
 	}
-	body, err := c.getLimited(ctx, gameKey(gameID), maxMetaJSONSize)
+	body, found, err := c.getLimited(ctx, gameKey(gameID), maxMetaJSONSize)
 	switch {
-	case errors.Is(err, fs.ErrNotExist):
-		return GameInfo{}, fmt.Errorf("%w: %w", errUnimportable, err)
 	case err != nil:
 		return GameInfo{}, err
+	case !found:
+		return GameInfo{}, fmt.Errorf("%w: game.json is missing", errUnimportable)
 	}
 	g, err := parseGameInfo(body, gameID)
 	if err != nil {

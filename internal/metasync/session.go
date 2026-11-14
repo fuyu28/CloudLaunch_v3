@@ -5,9 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"io/fs"
 	"regexp"
 	"sort"
 	"strconv"
@@ -166,13 +164,13 @@ func (c *Core) downloadSessions(ctx context.Context, gameID string, local []Sess
 
 // getSession は、取り込めるセッションを返す。不正なものと、一覧の後に消えていたものは、ログに残して nil を返す。
 func (c *Core) getSession(ctx context.Context, gameID, id string) (*Session, error) {
-	body, err := c.getLimited(ctx, sessionKey(gameID, id), maxMetaJSONSize)
-	if errors.Is(err, fs.ErrNotExist) {
-		c.cfg.Logger.Info("skip remote session removed after listing", "gameId", gameID, "sessionId", id)
-		return nil, nil
-	}
+	body, found, err := c.getLimited(ctx, sessionKey(gameID, id), maxMetaJSONSize)
 	if err != nil {
 		return nil, err
+	}
+	if !found {
+		c.cfg.Logger.Info("skip remote session removed after listing", "gameId", gameID, "sessionId", id)
+		return nil, nil
 	}
 	s, err := parseSession(body, gameID, id)
 	if err != nil {

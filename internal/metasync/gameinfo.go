@@ -5,9 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"io/fs"
 	"regexp"
 	"time"
 )
@@ -41,12 +39,12 @@ func (c *Core) syncGameInfo(ctx context.Context, gameID string) (GameInfoOutcome
 	var outcome GameInfoOutcome
 	current := local
 	upload := false
-	body, err := c.getLimited(ctx, gameKey(gameID), maxMetaJSONSize)
+	body, found, err := c.getLimited(ctx, gameKey(gameID), maxMetaJSONSize)
 	switch {
-	case errors.Is(err, fs.ErrNotExist): // 8-G1
-		upload = true
 	case err != nil:
 		return 0, 0, err
+	case !found: // 8-G1
+		upload = true
 	default:
 		remote, err := parseGameInfo(body, gameID)
 		if err != nil {

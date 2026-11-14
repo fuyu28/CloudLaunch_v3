@@ -167,13 +167,13 @@ func (c *Core) cacheRemoteImage(ctx context.Context, gameID, sha string) (ImageO
 	} else if !errors.Is(err, fs.ErrNotExist) {
 		return 0, fmt.Errorf("stat cached image: %w", err)
 	}
-	body, err := c.getLimited(ctx, imagesPrefix(gameID)+sha, maxImageSize)
-	if errors.Is(err, fs.ErrNotExist) {
-		c.cfg.Logger.Warn("skip image missing in remote", "gameId", gameID, "imageSha256", sha)
-		return ImageMissing, nil
-	}
+	body, found, err := c.getLimited(ctx, imagesPrefix(gameID)+sha, maxImageSize)
 	if err != nil {
 		return 0, err
+	}
+	if !found {
+		c.cfg.Logger.Warn("skip image missing in remote", "gameId", gameID, "imageSha256", sha)
+		return ImageMissing, nil
 	}
 	if err := validateRemoteImage(body, sha); err != nil {
 		c.cfg.Logger.Warn("skip invalid remote image", "gameId", gameID, "imageSha256", sha, "err", err)
