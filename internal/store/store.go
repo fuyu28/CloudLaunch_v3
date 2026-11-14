@@ -74,11 +74,16 @@ func parseTime(s string) (time.Time, error) {
 	return time.Parse(timeLayout, s)
 }
 
-// checkAffected は、Exec の結果を受け、1 行も変わらなければ sql.ErrNoRows を返す。op はエラーの先頭に付ける操作の名前、
-// target は対象の行を表す文言（例: "game {id}"）。
-func checkAffected(res sql.Result, execErr error, op, target string) error {
-	if execErr != nil {
-		return fmt.Errorf("%s: %w", op, execErr)
+type execer interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+}
+
+// execAffected は、1 行も変わらなければ sql.ErrNoRows を返す。op はエラーの先頭に付ける操作の名前、target は対象の行を
+// 表す文言（例: "game {id}"）。
+func execAffected(ctx context.Context, ex execer, op, target, query string, args ...any) error {
+	res, err := ex.ExecContext(ctx, query, args...)
+	if err != nil {
+		return fmt.Errorf("%s: %w", op, err)
 	}
 	n, err := res.RowsAffected()
 	if err != nil {

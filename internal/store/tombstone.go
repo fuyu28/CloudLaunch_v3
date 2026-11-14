@@ -39,8 +39,7 @@ func (s *Store) RecordRemoteDeleted(ctx context.Context, gameID string, t syncor
 	if err != nil {
 		return fmt.Errorf("game %s: remote_deleted_at: %w", gameID, err)
 	}
-	res, err := s.db.ExecContext(ctx,
+	return execAffected(ctx, s.db, "update remote deleted", "game "+gameID,
 		`UPDATE game_locals SET remote_deleted_at = ?, remote_deleted_by = ? WHERE game_id = ?`,
 		deletedAt, t.DeviceName, gameID)
-	return checkAffected(res, err, "update remote deleted", "game "+gameID)
 }

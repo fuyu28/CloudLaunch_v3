@@ -31,13 +31,17 @@ func (s *Store) CreateGame(ctx context.Context, g NewGame) error {
 // RegisterGame は、リモートから取り込むゲームを登録する（仕様書 8-N3・8-N4）。CreateGame と違い、createdAt・updatedAt と
 // imageSha256 も g のものをそのまま書く。base は書かない。
 func (s *Store) RegisterGame(ctx context.Context, g metasync.GameInfo, saveFolderPath, exePath string) error {
+	r, err := newGameRow(g)
+	if err != nil {
+		return err
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	if err := insertGameInfo(ctx, tx, g); err != nil {
+	if err := r.insert(ctx, tx); err != nil {
 		return err
 	}
 	if _, err := tx.ExecContext(ctx,
@@ -51,25 +55,9 @@ func (s *Store) RegisterGame(ctx context.Context, g metasync.GameInfo, saveFolde
 	return nil
 }
 
-func insertGameInfo(ctx context.Context, tx *sql.Tx, g metasync.GameInfo) error {
-	if err := validateGameInfo(g); err != nil {
-		return err
-	}
-	createdAt, updatedAt, err := formatGameTimes(g)
-	if err != nil {
-		return err
-	}
-	if _, err := tx.ExecContext(ctx,
-		`INSERT INTO games (id, title, brand, image_sha256, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
-		g.ID, g.Title, nullIfEmpty(g.Brand), nullIfEmpty(g.ImageSha256), createdAt, updatedAt,
-	); err != nil {
-		return fmt.Errorf("insert games: %w", err)
-	}
-	return nil
-}
-
 // ensureNoPullOperation は、ON DELETE RESTRICT の制約違反の代わりに ErrPullInProgress を返す。制約違反のエラーでは、
-// 呼び出し側が復旧を案内できないため。
+// 呼び出し側が復旧を案内できないため。間に入った InsertPullOperation を見逃さないよう、games の行を消す前に、同じ
+// トランザクションの中で呼ぶ。
 func ensureNoPullOperation(ctx context.Context, tx *sql.Tx, gameID string) error {
 	var pulls int
 	if err := tx.QueryRowContext(ctx,
@@ -97,8 +85,7 @@ func (s *Store) DeleteGame(ctx context.Context, gameID string) error {
 	if err := ensureNoPullOperation(ctx, tx, gameID); err != nil {
 		return fmt.Errorf("delete game %s: %w", gameID, err)
 	}
-	res, err := tx.ExecContext(ctx, `DELETE FROM games WHERE id = ?`, gameID)
-	if err := checkAffected(res, err, "delete games", "game "+gameID); err != nil {
+	if err := execAffected(ctx, tx, "delete games", "game "+gameID, `DELETE FROM games WHERE id = ?`, gameID); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {
@@ -111,6 +98,10 @@ func (s *Store) DeleteGame(ctx context.Context, gameID string) error {
 // 消すので、どこで失敗してもロールバックで上げ直す前に戻る。Pull ジャーナルが残っていれば ErrPullInProgress を返す。
 // ゲームの tombstone の記録もトランザクションの中で確かめ、ロックを握らない登録の解除と重なっても、消えた行を移さない。
 func (s *Store) ReuploadGame(ctx context.Context, oldID string, g metasync.GameInfo) error {
+	r, err := newGameRow(g)
+	if err != nil {
+		return err
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin: %w", err)
@@ -120,7 +111,7 @@ func (s *Store) ReuploadGame(ctx context.Context, oldID string, g metasync.GameI
 	if err := ensureNoPullOperation(ctx, tx, oldID); err != nil {
 		return fmt.Errorf("reupload game %s: %w", oldID, err)
 	}
-	if err := insertGameInfo(ctx, tx, g); err != nil {
+	if err := r.insert(ctx, tx); err != nil {
 		return err
 	}
 	res, err := tx.ExecContext(ctx,
@@ -155,8 +146,10 @@ func (s *Store) GameIDs(ctx context.Context) ([]string, error) {
 	}
 	ids, err := scanAll(rows, func(rows *sql.Rows) (string, error) {
 		var id string
-		err := rows.Scan(&id)
-		return id, err
+		if err := rows.Scan(&id); err != nil {
+			return "", fmt.Errorf("scan: %w", err)
+		}
+		return id, nil
 	})
 	if err != nil {
 		return nil, fmt.Errorf("select games: %w", err)
@@ -178,7 +171,6 @@ func (s *Store) GameLocal(ctx context.Context, gameID string) (syncore.GameLocal
 }
 
 func (s *Store) SetBase(ctx context.Context, gameID, manifestHash string) error {
-	res, err := s.db.ExecContext(ctx,
+	return execAffected(ctx, s.db, "update base", "game "+gameID,
 		`UPDATE game_locals SET base_manifest_hash = ? WHERE game_id = ?`, manifestHash, gameID)
-	return checkAffected(res, err, "update base", "game "+gameID)
 }

@@ -51,6 +51,5 @@ func (s *Store) ListPullOperations(ctx context.Context) ([]syncore.PullOperation
 
 // DeletePullOperation は、opID の行がなければ sql.ErrNoRows を返す。
 func (s *Store) DeletePullOperation(ctx context.Context, opID string) error {
-	res, err := s.db.ExecContext(ctx, `DELETE FROM pull_operations WHERE op_id = ?`, opID)
-	return checkAffected(res, err, "delete pull_operations", "op "+opID)
+	return execAffected(ctx, s.db, "delete pull_operations", "op "+opID, `DELETE FROM pull_operations WHERE op_id = ?`, opID)
 }
