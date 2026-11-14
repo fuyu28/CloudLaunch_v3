@@ -3,8 +3,8 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
-	"time"
 
 	"github.com/fuyu28/CloudLaunch_v3/internal/metasync"
 )
@@ -34,21 +34,19 @@ func (s *Store) Sessions(ctx context.Context, gameID string) ([]metasync.Session
 	if err != nil {
 		return nil, fmt.Errorf("select play_sessions: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
-
-	var sessions []metasync.Session
-	for rows.Next() {
+	sessions, err := scanAll(rows, func(rows *sql.Rows) (metasync.Session, error) {
 		sess := metasync.Session{GameID: gameID}
 		var playedAt string
 		if err := rows.Scan(&sess.ID, &playedAt, &sess.DurationSec); err != nil {
-			return nil, fmt.Errorf("scan play_sessions: %w", err)
+			return sess, fmt.Errorf("scan: %w", err)
 		}
-		if sess.PlayedAt, err = time.Parse(timeLayout, playedAt); err != nil {
-			return nil, fmt.Errorf("parse played_at of session %s: %w", sess.ID, err)
+		var err error
+		if sess.PlayedAt, err = parseTime(playedAt); err != nil {
+			return sess, fmt.Errorf("parse played_at of session %s: %w", sess.ID, err)
 		}
-		sessions = append(sessions, sess)
-	}
-	if err := rows.Err(); err != nil {
+		return sess, nil
+	})
+	if err != nil {
 		return nil, fmt.Errorf("select play_sessions: %w", err)
 	}
 	return sessions, nil
@@ -73,13 +71,18 @@ func (s *Store) ImportSessions(ctx context.Context, gameID string, sessions []me
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	insert, err := tx.PrepareContext(ctx,
+		`INSERT INTO play_sessions (id, game_id, played_at, duration_sec) VALUES (?, ?, ?, ?) ON CONFLICT (id) DO NOTHING`)
+	if err != nil {
+		return metasync.ImportResult{}, fmt.Errorf("prepare insert play_sessions: %w", err)
+	}
+	defer func() { _ = insert.Close() }()
+
 	var res metasync.ImportResult
 	for i, sess := range sessions {
 		// 先に SELECT で確かめてから INSERT すると、読んだ後に別の接続が書いたとき、WAL では書き込みへの格上げが
 		// busy_timeout を待たずに失敗する。最初に書き込みを行い、入らなかったときだけ持ち主を読む
-		r, err := tx.ExecContext(ctx,
-			`INSERT INTO play_sessions (id, game_id, played_at, duration_sec) VALUES (?, ?, ?, ?) ON CONFLICT (id) DO NOTHING`,
-			sess.ID, gameID, playedAt[i], sess.DurationSec)
+		r, err := insert.ExecContext(ctx, sess.ID, gameID, playedAt[i], sess.DurationSec)
 		if err != nil {
 			return metasync.ImportResult{}, fmt.Errorf("insert play_sessions: %w", err)
 		}

@@ -29,10 +29,10 @@ func (s *Store) GameInfo(ctx context.Context, gameID string) (metasync.GameInfo,
 	}
 	g.Brand, g.ImageSha256 = brand.String, image.String
 	var err error
-	if g.CreatedAt, err = time.Parse(timeLayout, createdAt); err != nil {
+	if g.CreatedAt, err = parseTime(createdAt); err != nil {
 		return metasync.GameInfo{}, fmt.Errorf("parse created_at of game %s: %w", gameID, err)
 	}
-	if g.UpdatedAt, err = time.Parse(timeLayout, updatedAt); err != nil {
+	if g.UpdatedAt, err = parseTime(updatedAt); err != nil {
 		return metasync.GameInfo{}, fmt.Errorf("parse updated_at of game %s: %w", gameID, err)
 	}
 	return g, nil
@@ -42,16 +42,13 @@ func (s *Store) GameInfo(ctx context.Context, gameID string) (metasync.GameInfo,
 // 日時は固定長の形で持つので、文字列の大小が日時の前後と一致する（仕様書 3 章）。title・imageSha256・日時の形が
 // 合わなければ、何も書かずにエラーを返す。
 func (s *Store) ReplaceGameInfo(ctx context.Context, g metasync.GameInfo) (bool, error) {
-	if err := validateGameInfo(g); err != nil {
-		return false, err
-	}
-	createdAt, updatedAt, err := formatGameTimes(g)
+	r, err := newGameRow(g)
 	if err != nil {
 		return false, err
 	}
 	res, err := s.db.ExecContext(ctx,
 		`UPDATE games SET title = ?, brand = ?, image_sha256 = ?, created_at = ?, updated_at = ? WHERE id = ? AND updated_at < ?`,
-		g.Title, nullIfEmpty(g.Brand), nullIfEmpty(g.ImageSha256), createdAt, updatedAt, g.ID, updatedAt)
+		r.title, r.brand, r.imageSha256, r.createdAt, r.updatedAt, r.id, r.updatedAt)
 	if err != nil {
 		return false, fmt.Errorf("update games: %w", err)
 	}
@@ -88,7 +85,7 @@ func (s *Store) EditGame(ctx context.Context, gameID string, edit GameEdit, now 
 			return fmt.Errorf("invalid image sha256: %q", image)
 		}
 	}
-	res, err := s.db.ExecContext(ctx,
+	return execAffected(ctx, s.db, "update games", "game "+gameID,
 		`UPDATE games SET
 		   title = COALESCE(?, title),
 		   brand = CASE WHEN ? THEN NULLIF(?, '') ELSE brand END,
@@ -96,38 +93,45 @@ func (s *Store) EditGame(ctx context.Context, gameID string, edit GameEdit, now 
 		   updated_at = max(?, COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', updated_at, '+0.001 seconds'), updated_at))
 		 WHERE id = ?`,
 		title, edit.Brand != nil, brand, edit.ImageSha256 != nil, image, nowStr, gameID)
-	if err != nil {
-		return fmt.Errorf("update games: %w", err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("update games: %w", err)
-	}
-	if n == 0 {
-		return fmt.Errorf("update games: game %s: %w", gameID, sql.ErrNoRows)
-	}
-	return nil
 }
 
-// validateGameInfo は、リモートから受け取ったゲーム情報を書く前に、DB の CHECK 制約より分かりやすいエラーで弾く。
-func validateGameInfo(g metasync.GameInfo) error {
+// gameRow は、games の 1 行に書く値。newGameRow で作り、トランザクションを始める前に入力を確かめ終える。
+type gameRow struct {
+	id, title            string
+	brand, imageSha256   sql.NullString
+	createdAt, updatedAt string
+}
+
+// newGameRow は、title・imageSha256 を DB の CHECK 制約より分かりやすいエラーで弾く。
+func newGameRow(g metasync.GameInfo) (gameRow, error) {
 	if g.Title == "" {
-		return errors.New("empty title")
+		return gameRow{}, errors.New("empty title")
 	}
 	if g.ImageSha256 != "" && !metasync.ValidSHA256(g.ImageSha256) {
-		return fmt.Errorf("invalid image sha256: %q", g.ImageSha256)
+		return gameRow{}, fmt.Errorf("invalid image sha256: %q", g.ImageSha256)
 	}
-	return nil
+	createdAt, err := formatTime(g.CreatedAt)
+	if err != nil {
+		return gameRow{}, fmt.Errorf("game %s: created_at: %w", g.ID, err)
+	}
+	updatedAt, err := formatTime(g.UpdatedAt)
+	if err != nil {
+		return gameRow{}, fmt.Errorf("game %s: updated_at: %w", g.ID, err)
+	}
+	return gameRow{
+		id: g.ID, title: g.Title, brand: nullIfEmpty(g.Brand), imageSha256: nullIfEmpty(g.ImageSha256),
+		createdAt: createdAt, updatedAt: updatedAt,
+	}, nil
 }
 
-func formatGameTimes(g metasync.GameInfo) (createdAt, updatedAt string, err error) {
-	if createdAt, err = formatTime(g.CreatedAt); err != nil {
-		return "", "", fmt.Errorf("game %s: created_at: %w", g.ID, err)
+func (r gameRow) insert(ctx context.Context, tx *sql.Tx) error {
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO games (id, title, brand, image_sha256, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
+		r.id, r.title, r.brand, r.imageSha256, r.createdAt, r.updatedAt,
+	); err != nil {
+		return fmt.Errorf("insert games: %w", err)
 	}
-	if updatedAt, err = formatTime(g.UpdatedAt); err != nil {
-		return "", "", fmt.Errorf("game %s: updated_at: %w", g.ID, err)
-	}
-	return createdAt, updatedAt, nil
+	return nil
 }
 
 func nullIfEmpty(s string) sql.NullString {

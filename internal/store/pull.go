@@ -31,21 +31,19 @@ func (s *Store) ListPullOperations(ctx context.Context) ([]syncore.PullOperation
 	if err != nil {
 		return nil, fmt.Errorf("select pull_operations: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
-
-	var ops []syncore.PullOperation
-	for rows.Next() {
+	ops, err := scanAll(rows, func(rows *sql.Rows) (syncore.PullOperation, error) {
 		var op syncore.PullOperation
 		var createdAt string
 		if err := rows.Scan(&op.OpID, &op.GameID, &op.LivePath, &op.StagePath, &op.OldPath, &createdAt); err != nil {
-			return nil, fmt.Errorf("scan pull_operations: %w", err)
+			return op, fmt.Errorf("scan: %w", err)
 		}
-		if op.CreatedAt, err = time.Parse(timeLayout, createdAt); err != nil {
-			return nil, fmt.Errorf("parse created_at of pull operation %s: %w", op.OpID, err)
+		var err error
+		if op.CreatedAt, err = parseTime(createdAt); err != nil {
+			return op, fmt.Errorf("parse created_at of pull operation %s: %w", op.OpID, err)
 		}
-		ops = append(ops, op)
-	}
-	if err := rows.Err(); err != nil {
+		return op, nil
+	})
+	if err != nil {
 		return nil, fmt.Errorf("select pull_operations: %w", err)
 	}
 	return ops, nil
@@ -53,16 +51,5 @@ func (s *Store) ListPullOperations(ctx context.Context) ([]syncore.PullOperation
 
 // DeletePullOperation は、opID の行がなければ sql.ErrNoRows を返す。
 func (s *Store) DeletePullOperation(ctx context.Context, opID string) error {
-	res, err := s.db.ExecContext(ctx, `DELETE FROM pull_operations WHERE op_id = ?`, opID)
-	if err != nil {
-		return fmt.Errorf("delete pull_operations: %w", err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("delete pull_operations: %w", err)
-	}
-	if n == 0 {
-		return fmt.Errorf("delete pull_operations %s: %w", opID, sql.ErrNoRows)
-	}
-	return nil
+	return execAffected(ctx, s.db, "delete pull_operations", "op "+opID, `DELETE FROM pull_operations WHERE op_id = ?`, opID)
 }
