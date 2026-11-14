@@ -44,12 +44,15 @@
 
   function close() {
     dlg.close()
-    onclose()
   }
 </script>
 
-<!-- Esc で閉じないのは、転送中に閉じると進捗もキャンセルの手段も見えなくなるため -->
-<dialog bind:this={dlg} oncancel={(e) => e.preventDefault()}>
+<!--
+  Esc の 1 回目は取り消して閉じないようにする。転送中に閉じると、進捗もキャンセルの手段も見えなくなるため。
+  ただし Chromium（WebView2）は、操作をはさまずに Esc を続けて押すと取り消しを無視して閉じる（CloseWatcher）。
+  なので閉じたときは、閉じ方によらず close イベントで親に知らせ、状態を片付ける
+-->
+<dialog bind:this={dlg} oncancel={(e) => e.preventDefault()} onclose={onclose}>
   {#if progress}
     <h2>{progress.heading}</h2>
     <progress max="100" value={progress.percent}></progress>
