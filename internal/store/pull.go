@@ -14,7 +14,7 @@ import (
 func (s *Store) InsertPullOperation(ctx context.Context, opID, gameID, livePath, stagePath, oldPath string, createdAt time.Time) error {
 	created, err := formatTime(createdAt)
 	if err != nil {
-		return err
+		return fmt.Errorf("pull operation %s: created_at: %w", opID, err)
 	}
 	if _, err := s.db.ExecContext(ctx,
 		`INSERT INTO pull_operations (op_id, game_id, live_path, stage_path, old_path, created_at) VALUES (?, ?, ?, ?, ?, ?)`,

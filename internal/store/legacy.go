@@ -19,7 +19,7 @@ func (s *Store) AddLegacySessions(ctx context.Context, sessions []legacy.Session
 		}
 		var err error
 		if playedAt[i], err = formatTime(sess.PlayedAt); err != nil {
-			return 0, err
+			return 0, fmt.Errorf("legacy session %s: played_at: %w", sess.ID, err)
 		}
 	}
 	tx, err := s.db.BeginTx(ctx, nil)

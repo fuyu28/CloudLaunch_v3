@@ -72,7 +72,7 @@ func (s *Store) EditGame(ctx context.Context, gameID string, edit GameEdit, now 
 	}
 	nowStr, err := formatTime(now)
 	if err != nil {
-		return err
+		return fmt.Errorf("game %s: updated_at: %w", gameID, err)
 	}
 	var title sql.NullString
 	if edit.Title != nil {
@@ -122,10 +122,10 @@ func validateGameInfo(g metasync.GameInfo) error {
 
 func formatGameTimes(g metasync.GameInfo) (createdAt, updatedAt string, err error) {
 	if createdAt, err = formatTime(g.CreatedAt); err != nil {
-		return "", "", err
+		return "", "", fmt.Errorf("game %s: created_at: %w", g.ID, err)
 	}
 	if updatedAt, err = formatTime(g.UpdatedAt); err != nil {
-		return "", "", err
+		return "", "", fmt.Errorf("game %s: updated_at: %w", g.ID, err)
 	}
 	return createdAt, updatedAt, nil
 }

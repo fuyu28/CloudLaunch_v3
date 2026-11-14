@@ -26,7 +26,7 @@ type NewGame struct {
 func (s *Store) CreateGame(ctx context.Context, g NewGame) error {
 	createdAt, err := formatTime(g.CreatedAt)
 	if err != nil {
-		return err
+		return fmt.Errorf("game %s: created_at: %w", g.ID, err)
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {

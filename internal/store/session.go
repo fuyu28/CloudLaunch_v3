@@ -12,12 +12,12 @@ import (
 // CreateSession は、PlayedAt を UTC のミリ秒に切り捨てて書く（仕様書 3 章の日時の形）。ID が仕様書 8-S6 に合わないときは
 // 書かない。
 func (s *Store) CreateSession(ctx context.Context, sess metasync.Session) error {
-	if err := validateSession(sess); err != nil {
-		return err
+	if !metasync.ValidSessionID(sess.ID) {
+		return fmt.Errorf("invalid session id: %q", sess.ID)
 	}
 	playedAt, err := formatTime(sess.PlayedAt)
 	if err != nil {
-		return err
+		return fmt.Errorf("session %s: played_at: %w", sess.ID, err)
 	}
 	if _, err := s.db.ExecContext(ctx,
 		`INSERT INTO play_sessions (id, game_id, played_at, duration_sec) VALUES (?, ?, ?, ?)`,
@@ -54,24 +54,17 @@ func (s *Store) Sessions(ctx context.Context, gameID string) ([]metasync.Session
 	return sessions, nil
 }
 
-func validateSession(sess metasync.Session) error {
-	if !metasync.ValidSessionID(sess.ID) {
-		return fmt.Errorf("invalid session id: %q", sess.ID)
-	}
-	return nil
-}
-
 // ImportSessions は、sessions の GameID を見ずに gameID のセッションとして書く。ID と日時を CreateSession と同じく検証し、
 // 1 件でも当たれば何も書かない。
 func (s *Store) ImportSessions(ctx context.Context, gameID string, sessions []metasync.Session) (metasync.ImportResult, error) {
 	playedAt := make([]string, len(sessions))
 	for i, sess := range sessions {
-		if err := validateSession(sess); err != nil {
-			return metasync.ImportResult{}, err
+		if !metasync.ValidSessionID(sess.ID) {
+			return metasync.ImportResult{}, fmt.Errorf("invalid session id: %q", sess.ID)
 		}
 		var err error
 		if playedAt[i], err = formatTime(sess.PlayedAt); err != nil {
-			return metasync.ImportResult{}, err
+			return metasync.ImportResult{}, fmt.Errorf("session %s: played_at: %w", sess.ID, err)
 		}
 	}
 	tx, err := s.db.BeginTx(ctx, nil)

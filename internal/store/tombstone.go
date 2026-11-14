@@ -38,7 +38,7 @@ func (s *Store) IsRemoteDeleted(ctx context.Context, gameID string) (bool, error
 func (s *Store) RecordRemoteDeleted(ctx context.Context, gameID string, t syncore.Tombstone) error {
 	deletedAt, err := formatTime(t.DeletedAt)
 	if err != nil {
-		return err
+		return fmt.Errorf("game %s: remote_deleted_at: %w", gameID, err)
 	}
 	res, err := s.db.ExecContext(ctx,
 		`UPDATE game_locals SET remote_deleted_at = ?, remote_deleted_by = ? WHERE game_id = ?`,
