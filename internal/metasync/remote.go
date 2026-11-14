@@ -43,11 +43,11 @@ func sessionKey(gameID, sessionID string) string {
 }
 
 // getLimited は、キーがなければ fs.ErrNotExist で包んだエラーを返す。limit を超える本文は、limit の 1 バイト先までしか
-// 読まないので、呼び出し側は長さで超えたことを判定できる。
+// 読まないので、呼び出し側は長さで超えたことを判定できる。Get のエラーはキーを含むので、包まずに返す。
 func (c *Core) getLimited(ctx context.Context, key string, limit int64) ([]byte, error) {
 	r, err := c.cfg.Remote.Get(ctx, key)
 	if err != nil {
-		return nil, fmt.Errorf("get %s: %w", key, err)
+		return nil, err
 	}
 	defer func() { _ = r.Close() }()
 	body, err := io.ReadAll(io.LimitReader(r, limit+1))

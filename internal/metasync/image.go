@@ -133,7 +133,10 @@ func (c *Core) uploadImage(ctx context.Context, g GameInfo) (ImageOutcome, error
 type cacheState int
 
 const (
-	cacheMissing cacheState = iota
+	// cacheUnknown は、読めなかったときに返す。ゼロ値を cacheMissing にすると、err を見ずに state だけを見た呼び出し側が、
+	// 読めないキャッシュを「ない」と扱うため
+	cacheUnknown cacheState = iota
+	cacheMissing
 	cacheCorrupted
 	cacheValid
 )
@@ -145,7 +148,7 @@ func (c *Core) readCachedImage(sha string) ([]byte, cacheState, error) {
 		return nil, cacheMissing, nil
 	}
 	if err != nil {
-		return nil, 0, fmt.Errorf("read cached image: %w", err)
+		return nil, cacheUnknown, fmt.Errorf("read cached image: %w", err)
 	}
 	if sha256Hex(body) != sha {
 		return nil, cacheCorrupted, nil

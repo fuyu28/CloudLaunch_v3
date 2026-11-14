@@ -87,6 +87,7 @@ func (c *Core) RemoteGames(ctx context.Context) (RemoteGames, error) {
 		switch {
 		case r.err == nil:
 			res.Games = append(res.Games, r.info)
+		case errors.Is(r.err, errRemoteDeleted): // 8-N7: 数えずに除く
 		case errors.Is(r.err, errUnimportable):
 			c.cfg.Logger.Warn("skip remote game that cannot be imported", "gameId", candidates[i], "err", r.err)
 			res.Skipped++
@@ -134,7 +135,7 @@ func (c *Core) readRemoteGame(ctx context.Context, gameID string) (GameInfo, err
 	case deleted:
 		return GameInfo{}, errRemoteDeleted
 	}
-	body, err := c.getGameJSON(ctx, gameID)
+	body, err := c.getLimited(ctx, gameKey(gameID), maxMetaJSONSize)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
 		return GameInfo{}, fmt.Errorf("%w: %w", errUnimportable, err)

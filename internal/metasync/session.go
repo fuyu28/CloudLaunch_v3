@@ -175,9 +175,6 @@ func (c *Core) getSession(ctx context.Context, gameID, id string) (*Session, err
 		return nil, err
 	}
 	s, err := parseSession(body, gameID, id)
-	if len(body) > maxMetaJSONSize {
-		err = fmt.Errorf("8-V1: body exceeds %d bytes", maxMetaJSONSize)
-	}
 	if err != nil {
 		c.cfg.Logger.Warn("skip invalid remote session", "gameId", gameID, "sessionId", id, "err", err)
 		return nil, nil
@@ -192,6 +189,9 @@ var durationPattern = regexp.MustCompile(`^(?:0|[1-9][0-9]*)$`)
 // 構造体に Unmarshal しないのは、encoding/json が項目名を大文字小文字を区別せずに当て、仕様書の項目名を持たない本文が
 // 8-V2 を通るため。項目ごとに読むので、型の違う値も、その項目の ID（8-V3〜8-V6）で不正になる。
 func parseSession(body []byte, gameID, id string) (Session, error) {
+	if len(body) > maxMetaJSONSize {
+		return Session{}, fmt.Errorf("8-V1: body exceeds %d bytes", maxMetaJSONSize)
+	}
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(body, &fields); err != nil {
 		return Session{}, fmt.Errorf("8-V1: %w", err)

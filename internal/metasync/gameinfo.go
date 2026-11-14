@@ -41,7 +41,7 @@ func (c *Core) syncGameInfo(ctx context.Context, gameID string) (GameInfoOutcome
 	var outcome GameInfoOutcome
 	current := local
 	upload := false
-	body, err := c.getGameJSON(ctx, gameID)
+	body, err := c.getLimited(ctx, gameKey(gameID), maxMetaJSONSize)
 	switch {
 	case errors.Is(err, fs.ErrNotExist): // 8-G1
 		upload = true
@@ -77,8 +77,8 @@ func (c *Core) syncGameInfo(ctx context.Context, gameID string) (GameInfoOutcome
 			return 0, 0, err
 		}
 		outcome = GameInfoUploaded
-		// PUT した画像はキャッシュから送ったものなので、取得し直さない。ImageMissing（8-I4）は、画像がどこにもないので、
-		// 取得も試さない
+		// PUT するのは 8-G1・8-G2 のときだけで、current は local のままなので、PUT した画像が最後に確かめる画像である。
+		// キャッシュから送ったものなので、取得し直さない。ImageMissing（8-I4）は、画像がどこにもないので、取得も試さない
 		if uploaded == ImageUploaded || uploaded == ImageMissing {
 			return outcome, uploaded, nil
 		}
@@ -99,10 +99,6 @@ func (c *Core) uploadGameInfo(ctx context.Context, g GameInfo) (ImageOutcome, er
 		return 0, err
 	}
 	return img, nil
-}
-
-func (c *Core) getGameJSON(ctx context.Context, gameID string) ([]byte, error) {
-	return c.getLimited(ctx, gameKey(gameID), maxMetaJSONSize)
 }
 
 func (c *Core) putGameInfo(ctx context.Context, g GameInfo) error {
