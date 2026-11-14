@@ -2,6 +2,8 @@ package syncore_test
 
 import (
 	"errors"
+	"fmt"
+	"io/fs"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -90,6 +92,28 @@ func TestPushPullTombstone(t *testing.T) {
 		}
 		if n := e.journalCount(t); n != 0 {
 			t.Errorf("ジャーナルが %d 行残った", n)
+		}
+	})
+
+	t.Run("8-T7 承認後の削除で HEAD も消えたら、状況の変化ではなく削除として止める", func(t *testing.T) {
+		e := newEnv(t)
+		local := map[string]string{"slot1.sav": "local"}
+		writeFiles(t, e.saveDir, local)
+		e.setBase(t, syncore.ManifestHash(entriesOf(local)))
+		e.putRemoteFiles(t, map[string]string{"slot1.sav": "remote"})
+		plan := e.planWant(t, syncore.DecisionPull)
+		e.tombs.deletedFrom = 2
+		// ゲームの削除（8-X6）は、object を取得した後に HEAD を消す
+		e.remote.Before = func(op memstore.Op, key string) error {
+			if op == memstore.OpGet && key == headKey() {
+				return fmt.Errorf("get %q: %w", key, fs.ErrNotExist)
+			}
+			return nil
+		}
+
+		err := e.core.Pull(t.Context(), plan, syncore.PullOptions{})
+		if !errors.Is(err, syncore.ErrRemoteDeleted) {
+			t.Fatalf("err = %v, want ErrRemoteDeleted", err)
 		}
 	})
 

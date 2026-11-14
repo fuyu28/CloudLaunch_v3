@@ -147,19 +147,16 @@ func remoteDeletedLabel(t metasync.Tombstone) string {
 var errRemoteDeleted = errors.New("リモートで削除されたゲームなので、同期しませんでした")
 
 // handleTombstone は、ゲームの tombstone を確かめ、あれば DB に記録して配下を削除し（仕様書 8-T2）、表示して
-// errRemoteDeleted を返す。なければ nil を返す。
+// errRemoteDeleted を返す。配下の削除に失敗しても、記録はしたので表示する。なければ nil を返す。
 func handleTombstone(ctx context.Context, c cores, stdout io.Writer) error {
 	t, deleted, err := c.meta.HandleTombstone(ctx, c.gameID)
-	if err != nil {
-		return err
-	}
 	if !deleted {
-		return nil
-	}
-	if _, err := fmt.Fprintln(stdout, remoteDeletedLabel(t)); err != nil {
 		return err
 	}
-	return errRemoteDeleted
+	if _, werr := fmt.Fprintln(stdout, remoteDeletedLabel(t)); werr != nil {
+		return errors.Join(err, werr)
+	}
+	return errors.Join(errRemoteDeleted, err)
 }
 
 // recordBaseIfNeeded は、データを転送しないので確認を取らない（仕様書 4 章）。
@@ -221,13 +218,19 @@ func transfer(ctx context.Context, args []string, stdout io.Writer, cmd transfer
 		return err
 	}
 	err = syncSave(ctx, c.sync, c.gameID, stdout, cmd, overwrite)
-	if errors.Is(err, syncore.ErrRemoteDeleted) {
-		// 確かめた後に tombstone が書かれた（8-T7）。メタ情報は同期しない。記録に失敗していると、Sync が 8-M4 の確認を
-		// 通り、削除したデータをリモートに戻すため
+	if err != nil {
+		// 確かめた後にゲームが削除されると、セーブの同期は 8-T7 のほか、削除で消えた object を取得できずにも失敗する。
+		// どちらでも、メタ情報を同期する前に tombstone を確かめ直す。確かめずに同期すると、削除したデータをリモートに戻す。
+		// 確かめ直しに失敗したときも、メタ情報は同期しない
 		if herr := handleTombstone(ctx, c, stdout); herr != nil {
-			return herr
+			if errors.Is(err, syncore.ErrRemoteDeleted) {
+				return herr
+			}
+			return errors.Join(err, herr)
 		}
-		return err
+		if errors.Is(err, syncore.ErrRemoteDeleted) {
+			return err
+		}
 	}
 	return errors.Join(err, syncMeta(ctx, c, stdout))
 }

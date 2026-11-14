@@ -48,9 +48,10 @@ AGENTS.md の構成では、tombstone の確認と掃除は metasync が持ち�
 - 決定内容:
   - `ErrRemoteDeleted` をセンチネルエラーとして公開する
   - `Push`・`Pull` は、`plan.RemoteDeleted` があれば、上書きでも、ロックを取る前に `ErrRemoteDeleted` を返す
-  - 承認の後に HEAD を読み直す 3 か所（5-P5・6-L6・上書きで同じとき 7-O5）で、HEAD に続けて `ReadTombstone` を呼び、あれば `ErrRemoteDeleted` を返す。Push は HEAD を書かずに止まり、PUT 済みの object と manifest は残る（5-I1）。Pull は 6-A1 のとおり stage とジャーナルを削除して止まる
+  - 承認の後に HEAD を読み直す 3 か所（5-P5・6-L6・上書きで同じとき 7-O5）で、HEAD より先に `ReadTombstone` を呼び、あれば `ErrRemoteDeleted` を返す。Push は HEAD を書かずに止まり、PUT 済みの object と manifest は残る（5-I1）。Pull は 6-A1 のとおり stage とジャーナルを削除して止まる
   - DB の記録とリモートの掃除は syncore では行わず、`ErrRemoteDeleted` を受けた呼び出し側が metasync の掃除を呼ぶ
-- 判断理由: CLI と GUI は、tombstone で止まったときに掃除と「リモートで削除されました」の表示に分かれるので、センチネルエラーにする。7-O5 は 8-T7 に挙がっていないが、HEAD を読み直す同じ確認の中にあり、削除済みのゲームに base だけを記録して成功と伝えるのを防ぐので、揃えて読み直す。`ReadTombstone` は DB の記録を先に見る（後述）ので、承認の後に記録されたゲーム（8-T8）も同じ読み直しで止まる。掃除を syncore に持たせると、syncore が metasync を呼ぶことになり、依存の向きに反する
+  - 承認の後に DB に記録されたゲームでも、Push・Pull はロックを取った直後には確かめず、転送の後の読み直しで止まる
+- 判断理由: CLI と GUI は、tombstone で止まったときに掃除と「リモートで削除されました」の表示に分かれるので、センチネルエラーにする。tombstone を HEAD より先に読むのは、ゲームの削除（8-X6）が HEAD も消すためである。HEAD を先に比べると、削除されたのに `ErrPlanStale` で止まり、呼び出し側が掃除せず、「もう一度実行してください」と表示する。7-O5 は 8-T7 に挙がっていないが、HEAD を読み直す同じ確認の中にあり、削除済みのゲームに base だけを記録して成功と伝えるのを防ぐので、揃えて読み直す。`ReadTombstone` は DB の記録を先に見る（後述）ので、承認の後に記録されたゲーム（8-T8）も同じ読み直しで止まる。ロックを取った直後にも確かめる案は、記録がなければリモートの GET が Push・Pull のたびに 1 回増える。承認の後に同じ PC で削除するときにしか起きず、止まるまでに上げた object は次の掃除で消えるので、採らない。掃除を syncore に持たせると、syncore が metasync を呼ぶことになり、依存の向きに反する
 
 ### 掃除の手順と、記録済みのゲームの扱い
 
@@ -58,12 +59,12 @@ AGENTS.md の構成では、tombstone の確認と掃除は metasync が持ち�
 - 決定内容: metasync に、読み取りだけの `CheckTombstone` と、記録と掃除をする `HandleTombstone` を置く
   - `CheckTombstone`（`status` と syncore の `ReadTombstone` が使う）: DB に記録があれば、リモートを読まずに記録を返す（8-T8）。なければ `deleted.json` を読み、ない（8-T1）・ある・読めない（8-T3）・不正（8-T4〜8-T6）を返す。何も書かない
   - `HandleTombstone`（CLI の `push`・`pull`、GUI の状態の確認が使う）: DB の記録の有無によらず、`deleted.json` を読む
-    1. 読めない・不正なら、エラーを返し、記録も削除もしない
-    2. あれば、DB に記録がなければ記録し、`games/{gameId}/` を一覧して、`deleted.json` 以外を `DeleteMany` で削除する。DB に記録があれば、記録は書き換えない
-    3. なく、DB に記録もなければ、削除されていないと返す
-    4. ないのに DB に記録があれば、何も削除せず、Warn のログを残して、記録の tombstone を返す
-  - 削除に失敗したら、エラーを返す。記録は残るので、次の `HandleTombstone` で同じ手順をやり直し、消し残りを削除する
-- 判断理由: 8-X10 は、記録のあるゲームでも、tombstone を確かめたときに消し残りを削除するとしているので、`HandleTombstone` は記録があっても `deleted.json` を読む。記録だけを信じて掃除する案は、リモートで tombstone を見ないまま配下を消す道を作るので採らない。記録と `deleted.json` が食い違っても、配下を消すのは tombstone が見えるときだけになる。増えるのは、削除済みのゲームでの GET 1 回だけである。記録があり `deleted.json` がないときは、仕様書のどの手順でも起きない（8-X5 は PUT に成功してから記録する）。そのときに配下を消さず、8-T8 のとおり Push・Pull を止めたままにするのは、どちらに倒しても取り返しのつく側だからである。記録を先に書くのは 8-T2 の順のとおりで、掃除の途中で止まっても、この PC の Push・Pull とメタ情報の同期が止まったままになる。一覧の結果が 1000 件を超えても、objstore の `List` と `DeleteMany` が全件を扱う
+    1. DB に記録がなく、`deleted.json` を読めない・不正なら、エラーを返し、記録も削除もしない
+    2. DB に記録がなく、`deleted.json` もなければ、削除されていないと返す
+    3. `deleted.json` があれば、DB に記録がなければ記録し、`games/{gameId}/` を一覧して、`deleted.json` 以外を `DeleteMany` で削除する。DB に記録があれば、記録は書き換えず、記録の値を返す
+    4. DB に記録があり、`deleted.json` がない・読めない・不正なら、何も削除せず、エラーにもせず、Warn のログを残して記録の値を返す
+  - 削除に失敗したら、tombstone と「削除されている」を、エラーとともに返す。記録は残るので、次の `HandleTombstone` で同じ手順をやり直し、消し残りを削除する
+- 判断理由: 8-X10 は、記録のあるゲームでも、tombstone を確かめたときに消し残りを削除するとしているので、`HandleTombstone` は記録があっても `deleted.json` を読む。記録だけを信じて掃除する案は、リモートで tombstone を見ないまま配下を消す道を作るので採らない。記録と `deleted.json` が食い違っても、配下を消すのは tombstone が見えるときだけになる。増えるのは、削除済みのゲームでの GET 1 回だけである。記録があり `deleted.json` がないときは、仕様書のどの手順でも起きない（8-X5 は PUT に成功してから記録する）。そのときに配下を消さず、8-T8 のとおり Push・Pull を止めたままにするのは、どちらに倒しても取り返しのつく側だからである。記録があるときに読めない・不正をエラーにしないのは、8-T8 が記録だけで Push・Pull を止めるとしているためで、エラーにすると、オフラインの `push` が「リモートで削除されました」ではなく接続のエラーを出す。記録があるときに記録の値を返すのは、`CheckTombstone`（`status`）と同じ値を表示するためで、8-X9 の後に削除をやり直すと、リモートの値が記録と違うことがある。削除に失敗しても「削除されている」を返すのは、記録を書いた以上、この PC の Push・Pull とメタ情報の同期は止まるので、そのことを表示させるためである。記録を先に書くのは 8-T2 の順のとおりで、掃除の途中で止まっても、この PC の Push・Pull とメタ情報の同期が止まったままになる。一覧の結果が 1000 件を超えても、objstore の `List` と `DeleteMany` が全件を扱う
 
 ### API の形
 
@@ -80,9 +81,9 @@ AGENTS.md の構成では、tombstone の確認と掃除は metasync が持ち�
 - 事項: `status`・`push`・`pull` が tombstone をどう扱い、何を出すか
 - 決定内容:
   - `status`: `plan.RemoteDeleted` があれば「リモートで削除されました（deviceName: …, deletedAt: …）」と出し、正常に終わる。base の記録はしない
-  - `push`・`pull`: 最初に `HandleTombstone` を呼ぶ（8-M1）。tombstone があれば、同じ表示を出し、セーブとメタ情報を同期せずに、エラー（終了コード 1）で終わる。`HandleTombstone` が失敗したら、どちらも同期せずにエラーで終わる
-  - `push`・`pull` のセーブの同期が `ErrRemoteDeleted` で止まったとき（8-T7）と、`Status` が `RemoteDeleted` の plan を返したときは、`HandleTombstone` を呼んでから同じ表示とエラーで終わり、メタ情報は同期しない
-- 判断理由: `push`・`pull` は頼まれた同期をしていないので、スクリプトから失敗として見分けられるよう、エラーで終わる。判定が合わずに見送ったとき（終了コード 0）とは違い、もう一度実行しても同期できる見込みがない。8-T7 の後にメタ情報を同期しないのは、`HandleTombstone` の記録が失敗していると、`Sync` が 8-M4 の確認を通ってしまい、削除したデータをリモートに戻すためである。`status` は表示だけを行う（8-T2）ので、tombstone があることは失敗ではない
+  - `push`・`pull`: 最初に `HandleTombstone` を呼ぶ（8-M1）。tombstone があれば、同じ表示を出し、セーブとメタ情報を同期せずに、エラー（終了コード 1）で終わる。配下の削除に失敗したときも、表示を出してから、削除のエラーとともにエラーで終わる。`HandleTombstone` が失敗したら、どちらも同期せずにエラーで終わる
+  - `push`・`pull` のセーブの同期が失敗したときは、理由によらず、メタ情報を同期する前に `HandleTombstone` を呼び直す。tombstone があるか、呼び直しが失敗すれば、メタ情報は同期せずにエラーで終わる。`Status` が `RemoteDeleted` の plan を返したときも、セーブの同期の失敗（`ErrRemoteDeleted`）として同じく扱う
+- 判断理由: `push`・`pull` は頼まれた同期をしていないので、スクリプトから失敗として見分けられるよう、エラーで終わる。判定が合わずに見送ったとき（終了コード 0）とは違い、もう一度実行しても同期できる見込みがない。セーブの同期が失敗したときに確かめ直すのは、確かめた後にゲームが削除されると、セーブの同期は 8-T7 のほか、削除で消えた object を取得できないことでも失敗するためである。確かめずにメタ情報を同期すると、DB に記録がないので `Sync` が 8-M4 の確認を通り、削除したデータをリモートに戻す。成功したときに確かめ直さないのは、確かめた後の削除と重なった書き込みは、仕様書 1 章で保証しないとしているためで、GET を毎回増やさない。`status` は表示だけを行う（8-T2）ので、tombstone があることは失敗ではない
 
 ### テスト
 
@@ -90,8 +91,8 @@ AGENTS.md の構成では、tombstone の確認と掃除は metasync が持ち�
 - 決定内容:
   - metasync は `package metasync_test` で、本物の SQLite と memstore を使い、8-T1〜8-T6・8-T8 を `CheckTombstone` と `HandleTombstone` の両方で書く。8-T2 は、記録・削除するキーと残すキー（`deleted.json`、ほかのゲームのキー）を確かめる。消し残りの削除は、`DeleteMany` に失敗を仕込んだ後に、もう一度 `HandleTombstone` を呼んで確かめる。記録があり `deleted.json` がないときは、何も削除しないことを確かめる
   - syncore は `package syncore_test` で、`ReadTombstone` を偽物（指定した回目の呼び出しから tombstone を返す）にして、8-T2（判定しない）・8-T3（エラー）・8-T7（Push・Pull それぞれ）・8-T8（上書きでも拒否）と、nil のときのエラーを書く
-  - store の `RecordRemoteDeleted` と `RemoteDeleted` は、metasync のテストで本物の SQLite を通して確かめる。cmd の配線にはテストを書かない
-- 判断理由: AGENTS.md のテストの方針に従う。syncore のテストで metasync を組み立てないのは、syncore が受け取るのは `ReadTombstone` の結果だけで、確認の中身は metasync のテストが確かめるためである
+  - store の `RecordRemoteDeleted` と `RemoteDeleted` は、metasync のテストで本物の SQLite を通すほか、日時を UTC のミリ秒に揃えて読み戻すことと、登録していないゲームのエラーを、store の `tombstone_test.go` で確かめる。cmd の配線にはテストを書かない
+- 判断理由: AGENTS.md のテストの方針に従う。syncore のテストで metasync を組み立てないのは、syncore が受け取るのは `ReadTombstone` の結果だけで、確認の中身は metasync のテストが確かめるためである。store の既存の `RemoteDeleted` のテストは store にあり、返す値を広げたので、同じ場所で書き直す
 
 ### PR の大きさ
 
@@ -106,3 +107,4 @@ AGENTS.md の構成では、tombstone の確認と掃除は metasync が持ち�
 ## 更新履歴
 
 - 2026-11-14 19:07 作成
+- 2026-11-14 19:24 レビュー指摘の反映。承認の後の読み直しで tombstone を HEAD より先に読むことにした。削除は HEAD も消すので、HEAD を先に比べると削除を状況の変化として扱い、掃除せずにメタ情報を戻すため。`HandleTombstone` は、記録があれば記録の値を返し、読めない・不正でもエラーにせず、削除に失敗しても「削除されている」を返すことにした。`status` と表示を揃え、記録だけで止まる 8-T8 に合わせ、削除の失敗でも削除済みを伝えるため。CLI は、セーブの同期が理由によらず失敗したら、メタ情報の前に tombstone を確かめ直すことにした。削除で object が消えた失敗でも、メタ情報が削除したデータを戻すため。store のテストの置き場所を足した

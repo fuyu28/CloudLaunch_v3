@@ -180,29 +180,34 @@ func TestHandleTombstone(t *testing.T) {
 		record := e.remote.Before
 		e.failOn(memstore.OpDelete, remoteGameKey(testGameID, "game.json"))
 
-		if _, _, err := e.core.HandleTombstone(ctx, testGameID); err == nil {
+		got, ok, err := e.core.HandleTombstone(ctx, testGameID)
+		if err == nil {
 			t.Fatal("エラーを返さなかった")
+		}
+		// 削除に失敗しても、記録したので「リモートで削除されました」と表示させる
+		if !ok || got != remoteTombstone {
+			t.Errorf("tombstone = %+v, %v, want %+v, true", got, ok, remoteTombstone)
 		}
 		if _, rec := e.recorded(t); !rec {
 			t.Error("削除の前に DB に記録しなかった")
 		}
 
 		e.remote.Before = record
-		got, ok, err := e.core.HandleTombstone(ctx, testGameID)
+		got, ok, err = e.core.HandleTombstone(ctx, testGameID)
 		assertTombstone(t, got, ok, err, remoteTombstone, true)
 		if diff := cmp.Diff(afterCleanup, e.remoteKeys(t)); diff != "" {
 			t.Errorf("残ったキー (-want +got):\n%s", diff)
 		}
 	})
 
-	t.Run("8-T2 記録のあるゲームでも、消し残りを削除し、記録は書き換えない（8-X10）", func(t *testing.T) {
+	t.Run("8-T2 記録のあるゲームでも、消し残りを削除し、記録は書き換えずに記録を返す（8-X10）", func(t *testing.T) {
 		e := newBareEnv(t)
 		e.putGameData(t)
 		e.putRemote(t, tombstoneKey, deletedJSON)
 		markRemoteDeleted(t, e.dbPath)
 
 		got, ok, err := e.core.HandleTombstone(ctx, testGameID)
-		assertTombstone(t, got, ok, err, remoteTombstone, true)
+		assertTombstone(t, got, ok, err, recordedTombstone, true)
 		rec, _ := e.recorded(t)
 		if diff := cmp.Diff(recordedTombstone, rec); diff != "" {
 			t.Errorf("記録 (-want +got):\n%s", diff)
@@ -249,16 +254,32 @@ func TestHandleTombstone(t *testing.T) {
 		})
 	}
 
-	t.Run("8-T8 記録があり deleted.json がなければ、何も削除せずに記録を返す", func(t *testing.T) {
-		e := newBareEnv(t)
-		e.putGameData(t)
-		markRemoteDeleted(t, e.dbPath)
-		before := e.remoteKeys(t)
+	recordedCases := []struct {
+		name    string
+		prepare func(t *testing.T, e *env)
+	}{
+		{"8-T8 記録があり deleted.json がなければ、何も削除せずに記録を返す", func(*testing.T, *env) {}},
+		{"8-T8 記録があれば、deleted.json を読めなくても、エラーにせず何も削除せずに記録を返す", func(t *testing.T, e *env) {
+			e.putRemote(t, tombstoneKey, deletedJSON)
+			e.failOn(memstore.OpGet, tombstoneKey)
+		}},
+		{"8-T8 記録があれば、deleted.json が不正でも、エラーにせず何も削除せずに記録を返す", func(t *testing.T, e *env) {
+			e.putRemote(t, tombstoneKey, `{`)
+		}},
+	}
+	for _, tc := range recordedCases {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newBareEnv(t)
+			e.putGameData(t)
+			markRemoteDeleted(t, e.dbPath)
+			tc.prepare(t, e)
+			before := e.remoteKeys(t)
 
-		got, ok, err := e.core.HandleTombstone(ctx, testGameID)
-		assertTombstone(t, got, ok, err, recordedTombstone, true)
-		if diff := cmp.Diff(before, e.remoteKeys(t)); diff != "" {
-			t.Errorf("リモートのキーが変わった (-before +after):\n%s", diff)
-		}
-	})
+			got, ok, err := e.core.HandleTombstone(ctx, testGameID)
+			assertTombstone(t, got, ok, err, recordedTombstone, true)
+			if diff := cmp.Diff(before, e.remoteKeys(t)); diff != "" {
+				t.Errorf("リモートのキーが変わった (-before +after):\n%s", diff)
+			}
+		})
+	}
 }

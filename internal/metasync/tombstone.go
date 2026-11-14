@@ -76,35 +76,32 @@ func (c *Core) CheckTombstone(ctx context.Context, gameID string) (Tombstone, bo
 }
 
 // HandleTombstone は、DB の記録の有無によらず deleted.json を読み、あれば DB に記録してから、配下の deleted.json 以外を
-// 削除する（8-T2）。DB に記録があれば、記録は書き換えない。削除が途中で失敗しても記録は残るので、次の呼び出しで消し残りを
-// 削除する（8-X10）。
+// 削除する（8-T2）。DB に記録があれば、記録は書き換えずに記録を返し、CheckTombstone と同じ値を表示させる。削除に失敗したら、
+// tombstone と true とともにエラーを返す。記録は残るので、次の呼び出しで消し残りを削除する（8-X10）。
 //
-// 記録があるのに deleted.json がなければ、何も削除せずに記録を返す。リモートで tombstone が見えないまま配下を消すと、
-// 取り返しがつかないため。
+// 記録があれば、deleted.json がない・読めない・不正なときも、何も削除せず、エラーにもせずに記録を返す（8-T8）。リモートで
+// tombstone が見えないまま配下を消すと取り返しがつかず、記録のあるゲームは、オフラインでも削除済みとして止めるため。
 func (c *Core) HandleTombstone(ctx context.Context, gameID string) (Tombstone, bool, error) {
 	recorded, isRecorded, err := c.cfg.Local.RemoteDeleted(ctx, gameID)
 	if err != nil {
 		return Tombstone{}, false, fmt.Errorf("read remote deleted: %w", err)
 	}
 	remote, ok, err := c.readTombstone(ctx, gameID)
-	if err != nil {
+	if isRecorded && (err != nil || !ok) {
+		c.cfg.Logger.Warn("game is recorded as deleted but deleted.json is not usable; keep remote data", "gameId", gameID, "err", err)
+		return recorded, true, nil
+	}
+	if err != nil || !ok {
 		return Tombstone{}, false, err
 	}
-	if !ok {
-		if isRecorded {
-			c.cfg.Logger.Warn("game is recorded as deleted but deleted.json is missing; keep remote data", "gameId", gameID)
-		}
-		return recorded, isRecorded, nil
-	}
+	t := recorded
 	if !isRecorded {
 		if err := c.cfg.Local.RecordRemoteDeleted(ctx, gameID, remote); err != nil {
 			return Tombstone{}, false, fmt.Errorf("record remote deleted: %w", err)
 		}
+		t = remote
 	}
-	if err := c.deleteGameData(ctx, gameID); err != nil {
-		return Tombstone{}, false, err
-	}
-	return remote, true, nil
+	return t, true, c.deleteGameData(ctx, gameID)
 }
 
 // deleteGameData は、`games/{gameId}/` 配下の deleted.json 以外を削除する。
