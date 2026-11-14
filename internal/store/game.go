@@ -116,9 +116,9 @@ func (s *Store) DeleteGame(ctx context.Context, gameID string) error {
 }
 
 // ReuploadGame は、リモートで削除されたゲームを g.ID のゲームとして上げ直す（仕様書 8-U4）。新しい行を作ってから古い行を
-// 消すので、どこで失敗してもロールバックで上げ直す前に戻る。Pull ジャーナルの行があれば、古い行の削除を
-// pull_operations の ON DELETE RESTRICT が止める。ゲームの tombstone の記録はトランザクションの中で確かめ、ロックを
-// 握らない登録の解除と重なっても、消えた行を移さない。
+// 消すので、どこで失敗してもロールバックで上げ直す前に戻る。Pull ジャーナルが残っていれば ErrPullInProgress を返す。
+// DeleteGame と同じく、ON DELETE RESTRICT の制約違反では呼び出し側が復旧を案内できないので、先に確かめる。ゲームの
+// tombstone の記録もトランザクションの中で確かめ、ロックを握らない登録の解除と重なっても、消えた行を移さない。
 func (s *Store) ReuploadGame(ctx context.Context, oldID string, g metasync.GameInfo) error {
 	if err := validateGameInfo(g); err != nil {
 		return err
@@ -128,6 +128,15 @@ func (s *Store) ReuploadGame(ctx context.Context, oldID string, g metasync.GameI
 		return fmt.Errorf("begin: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+
+	var pulls int
+	if err := tx.QueryRowContext(ctx,
+		`SELECT count(*) FROM pull_operations WHERE game_id = ?`, oldID).Scan(&pulls); err != nil {
+		return fmt.Errorf("select pull_operations: %w", err)
+	}
+	if pulls > 0 {
+		return fmt.Errorf("reupload game %s: %w", oldID, ErrPullInProgress)
+	}
 
 	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO games (id, title, brand, image_sha256, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,

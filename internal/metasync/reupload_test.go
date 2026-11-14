@@ -135,6 +135,22 @@ func TestReuploadGame(t *testing.T) {
 		}
 	})
 
+	t.Run("8-U5 画像がキャッシュにあれば、imageSha256 を引き継ぐ", func(t *testing.T) {
+		e := newReuploadEnv(t)
+
+		res, err := e.reupload(t)
+		if err != nil {
+			t.Fatalf("ReuploadGame: %v", err)
+		}
+		info, err := e.store.GameInfo(ctx, reuploadedGameID)
+		if err != nil {
+			t.Fatalf("GameInfo: %v", err)
+		}
+		if res.ImageDropped || info.ImageSha256 != testImage {
+			t.Errorf("ImageDropped = %v・imageSha256 = %q, want false・%q", res.ImageDropped, info.ImageSha256, testImage)
+		}
+	})
+
 	t.Run("8-U5 画像がキャッシュになければ、imageSha256 を引き継がない", func(t *testing.T) {
 		e := newReuploadEnv(t)
 		if err := os.Remove(filepath.Join(e.imageDir, testImage)); err != nil {

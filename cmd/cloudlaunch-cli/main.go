@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"flag"
 	"fmt"
@@ -166,6 +167,11 @@ func handleTombstone(ctx context.Context, c cores, stdout io.Writer) error {
 		return err
 	}
 	if _, werr := fmt.Fprintln(stdout, remoteDeletedLabel(t)); werr != nil {
+		return errors.Join(err, werr)
+	}
+	// 仕様書 8 章「リモートで削除されたゲーム」は、登録の解除か上げ直しを利用者に選ばせる。記録はしたので、どちらも実行できる
+	if _, werr := fmt.Fprintf(stdout, "この PC の登録を解除するときは cloudlaunch-cli game delete%[1]s --game %[2]s、新しいゲームとして上げ直すときは cloudlaunch-cli game reupload%[1]s --game %[2]s を実行してください\n",
+		dataDirFlag(c.dataDir), c.gameID); werr != nil {
 		return errors.Join(err, werr)
 	}
 	return errors.Join(errRemoteDeleted, err)
@@ -332,11 +338,13 @@ func printTransferred(w io.Writer, plan syncore.Plan, overwrite bool, done strin
 
 // cores は、リモートと DB につないだ同期コアとメタ情報の同期。close は呼び出し側が必ず呼ぶ。
 type cores struct {
-	sync       *syncore.Core
-	meta       *metasync.Core
-	store      *store.Store
-	logger     *slog.Logger
-	gameID     string
+	sync   *syncore.Core
+	meta   *metasync.Core
+	store  *store.Store
+	logger *slog.Logger
+	gameID string
+	// dataDir は --data-dir に渡された値。案内するコマンドに引き継ぐので、空なら既定の場所に置き換えずに空のまま持つ
+	dataDir    string
 	deviceName string
 	close      func()
 }
@@ -389,6 +397,7 @@ func connectCores(ctx context.Context, gameID, dataDir string) (cores, error) {
 		store:      s,
 		logger:     cfg.Logger,
 		gameID:     gameID,
+		dataDir:    dataDir,
 		deviceName: host,
 		close:      func() { _ = s.Close() },
 	}, nil
@@ -636,9 +645,11 @@ func explainReuploadError(err error, gameID, dataDir string) error {
 	case errors.Is(err, metasync.ErrNotRemoteDeleted):
 		return fmt.Errorf("このゲームはリモートで削除された記録がないので、上げ直しません。cloudlaunch-cli status%s --game %s で確かめ、削除されていれば push か pull で記録してから、もう一度実行してください: %w",
 			dataDirFlag(dataDir), gameID, err)
-	case errors.Is(err, syncore.ErrPullPending):
+	case errors.Is(err, syncore.ErrPullPending), errors.Is(err, store.ErrPullInProgress):
 		return fmt.Errorf("途中で止まった Pull が残っています。cloudlaunch-cli recover%s を実行してから、もう一度実行してください: %w",
 			dataDirFlag(dataDir), err)
+	case errors.Is(err, sql.ErrNoRows):
+		return fmt.Errorf("ゲーム %s は登録されていません: %w", gameID, err)
 	}
 	return explainSyncError(err)
 }

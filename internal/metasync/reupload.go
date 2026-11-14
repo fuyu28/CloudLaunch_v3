@@ -26,6 +26,13 @@ func (c *Core) ReuploadGame(ctx context.Context, gameID, newGameID string, now t
 	if !gameIDPattern.MatchString(newGameID) {
 		return ReuploadResult{}, fmt.Errorf("new game id is not a UUIDv7: %q", newGameID)
 	}
+	// 記録は store がトランザクションの中でも確かめる。ここで先に確かめるのは、記録のないゲームで画像を読みに行き、
+	// 読めないときに ErrNotRemoteDeleted ではないエラーを返さないため
+	if _, deleted, err := c.cfg.Local.RemoteDeleted(ctx, gameID); err != nil {
+		return ReuploadResult{}, fmt.Errorf("read remote deleted: %w", err)
+	} else if !deleted {
+		return ReuploadResult{}, fmt.Errorf("game %s: %w", gameID, ErrNotRemoteDeleted)
+	}
 	old, err := c.cfg.Local.GameInfo(ctx, gameID)
 	if err != nil {
 		return ReuploadResult{}, fmt.Errorf("read game info: %w", err)
