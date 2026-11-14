@@ -3,13 +3,19 @@ package store
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"io/fs"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/pressly/goose/v3"
+
+	"github.com/fuyu28/CloudLaunch_v3/internal/legacy"
+	"github.com/fuyu28/CloudLaunch_v3/internal/metasync"
+	"github.com/fuyu28/CloudLaunch_v3/internal/syncore"
 )
 
 func openTemp(t *testing.T) (*Store, string) {
@@ -166,4 +172,181 @@ func TestOpen(t *testing.T) {
 			}
 		}
 	})
+}
+
+// dumpTables は、goose の管理表を除くすべての表の行を、表の名前ごとに返す。
+func dumpTables(t *testing.T, s *Store) map[string][][]any {
+	t.Helper()
+	ctx := context.Background()
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name <> 'goose_db_version'`)
+	if err != nil {
+		t.Fatalf("select sqlite_master: %v", err)
+	}
+	var names []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		names = append(names, name)
+	}
+	if err := rows.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	tables := map[string][][]any{}
+	for _, name := range names {
+		r, err := s.db.QueryContext(ctx, fmt.Sprintf(`SELECT * FROM %q ORDER BY 1`, name))
+		if err != nil {
+			t.Fatalf("select %s: %v", name, err)
+		}
+		cols, err := r.Columns()
+		if err != nil {
+			t.Fatalf("columns %s: %v", name, err)
+		}
+		for r.Next() {
+			vals := make([]any, len(cols))
+			ptrs := make([]any, len(cols))
+			for i := range vals {
+				ptrs[i] = &vals[i]
+			}
+			if err := r.Scan(ptrs...); err != nil {
+				t.Fatalf("scan %s: %v", name, err)
+			}
+			tables[name] = append(tables[name], vals)
+		}
+		if err := r.Close(); err != nil {
+			t.Fatalf("close %s: %v", name, err)
+		}
+	}
+	return tables
+}
+
+func TestTimeOutOfRange(t *testing.T) {
+	ctx := context.Background()
+	const (
+		otherGameID = "0192d4e8-0000-7000-8000-000000000002"
+		sessionA    = "0192d4e8-0000-7000-8000-0000000000c1"
+		sessionB    = "0192d4e8-0000-7000-8000-0000000000c2"
+	)
+	valid := time.Date(2026, 11, 15, 0, 0, 0, 0, time.UTC)
+	gameInfo := func(id string, at time.Time) metasync.GameInfo {
+		return metasync.GameInfo{ID: id, Title: "Remote", CreatedAt: at, UpdatedAt: at}
+	}
+	legacySession := func(id string, at time.Time) legacy.Session {
+		return legacy.Session{ID: id, GameID: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1", GameTitle: "ゲーム", PlayedAt: at, DurationSec: 1}
+	}
+	title := "New"
+
+	tests := []struct {
+		op    string
+		setup func(t *testing.T, s *Store)
+		write func(s *Store, at time.Time) error
+	}{
+		{
+			op: "CreateGame",
+			write: func(s *Store, at time.Time) error {
+				return s.CreateGame(ctx, NewGame{ID: testGameID, Title: "Game", SaveFolderPath: "/save", ExePath: "/game.exe", CreatedAt: at})
+			},
+		},
+		{
+			op: "RegisterGame",
+			write: func(s *Store, at time.Time) error {
+				return s.RegisterGame(ctx, gameInfo(testGameID, at), "/save", "/game.exe")
+			},
+		},
+		{
+			op: "ReuploadGame",
+			setup: func(t *testing.T, s *Store) {
+				createTestGame(t, s)
+				if err := s.RecordRemoteDeleted(ctx, testGameID, syncore.Tombstone{DeletedAt: valid, DeviceName: "Laptop"}); err != nil {
+					t.Fatalf("RecordRemoteDeleted: %v", err)
+				}
+			},
+			write: func(s *Store, at time.Time) error {
+				return s.ReuploadGame(ctx, testGameID, gameInfo(otherGameID, at))
+			},
+		},
+		{
+			op:    "InsertPullOperation",
+			setup: createTestGame,
+			write: func(s *Store, at time.Time) error {
+				return s.InsertPullOperation(ctx, "0192d4e8-0000-7000-8000-0000000000f1", testGameID, "/save", "/stage", "/old", at)
+			},
+		},
+		{
+			op:    "RecordRemoteDeleted",
+			setup: createTestGame,
+			write: func(s *Store, at time.Time) error {
+				return s.RecordRemoteDeleted(ctx, testGameID, syncore.Tombstone{DeletedAt: at, DeviceName: "Laptop"})
+			},
+		},
+		{
+			op:    "CreateSession",
+			setup: createTestGame,
+			write: func(s *Store, at time.Time) error {
+				return s.CreateSession(ctx, metasync.Session{ID: sessionA, GameID: testGameID, PlayedAt: at, DurationSec: 1})
+			},
+		},
+		{
+			op:    "ImportSessions",
+			setup: createTestGame,
+			write: func(s *Store, at time.Time) error {
+				_, err := s.ImportSessions(ctx, testGameID, []metasync.Session{
+					{ID: sessionA, PlayedAt: valid, DurationSec: 1},
+					{ID: sessionB, PlayedAt: at, DurationSec: 1},
+				})
+				return err
+			},
+		},
+		{
+			op:    "ReplaceGameInfo",
+			setup: createTestGame,
+			write: func(s *Store, at time.Time) error {
+				_, err := s.ReplaceGameInfo(ctx, gameInfo(testGameID, at))
+				return err
+			},
+		},
+		{
+			op:    "EditGame",
+			setup: createTestGame,
+			write: func(s *Store, at time.Time) error {
+				return s.EditGame(ctx, testGameID, GameEdit{Title: &title}, at)
+			},
+		},
+		{
+			op: "AddLegacySessions",
+			write: func(s *Store, at time.Time) error {
+				_, err := s.AddLegacySessions(ctx, []legacy.Session{
+					legacySession("0123456789abcdef0123456789abcd01", valid),
+					legacySession("0123456789abcdef0123456789abcd02", at),
+				})
+				return err
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run("3章/日時の形/年が 4 桁に収まらない日時は書かない（"+tt.op+"）", func(t *testing.T) {
+			for _, at := range []time.Time{
+				time.Date(10000, 1, 1, 0, 0, 0, 0, time.UTC),
+				time.Date(-1, 12, 31, 23, 59, 59, 0, time.UTC),
+			} {
+				t.Run(fmt.Sprintf("%d 年", at.Year()), func(t *testing.T) {
+					s, _ := openTemp(t)
+					if tt.setup != nil {
+						tt.setup(t, s)
+					}
+					before := dumpTables(t, s)
+
+					if err := tt.write(s, at); err == nil {
+						t.Errorf("%s がエラーを返さなかった", tt.op)
+					}
+					if diff := cmp.Diff(before, dumpTables(t, s)); diff != "" {
+						t.Errorf("DB の行が変わった (-before +after):\n%s", diff)
+					}
+				})
+			}
+		})
+	}
 }

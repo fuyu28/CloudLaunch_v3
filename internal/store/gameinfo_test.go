@@ -74,8 +74,6 @@ func TestReplaceGameInfo(t *testing.T) {
 			g.ImageSha256 = "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF"
 		}},
 		{"imageSha256 の長さが違う", func(g *metasync.GameInfo) { g.ImageSha256 = "0123" }},
-		{"updatedAt の年が 4 桁を超える", func(g *metasync.GameInfo) { g.UpdatedAt = time.Date(10000, 1, 1, 0, 0, 0, 0, time.UTC) }},
-		{"createdAt の年が負", func(g *metasync.GameInfo) { g.CreatedAt = time.Date(-1, 1, 1, 0, 0, 0, 0, time.UTC) }},
 	}
 	for _, tt := range invalid {
 		t.Run("store/ReplaceGameInfo は形の合わない値があれば何も書かない（"+tt.name+"）", func(t *testing.T) {

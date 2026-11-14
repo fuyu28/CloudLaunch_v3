@@ -59,19 +59,6 @@ func TestSessions(t *testing.T) {
 		}
 	})
 
-	t.Run("store/CreateSession は UTC の年が 4 桁に収まらない日時を書かない", func(t *testing.T) {
-		s, _ := openTemp(t)
-		createTestGame(t, s)
-
-		played := time.Date(9999, 12, 31, 23, 0, 0, 0, time.FixedZone("", -5*60*60))
-		err := s.CreateSession(context.Background(), metasync.Session{
-			ID: "0192d4e8-0000-7000-8000-0000000000c1", GameID: testGameID, PlayedAt: played,
-		})
-		if err == nil {
-			t.Error("CreateSession がエラーを返さなかった")
-		}
-	})
-
 	t.Run("store/CreateSession は登録していないゲームのセッションを書かない", func(t *testing.T) {
 		s, _ := openTemp(t)
 
