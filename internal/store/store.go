@@ -69,3 +69,40 @@ func formatTime(t time.Time) (string, error) {
 	}
 	return u.Format(timeLayout), nil
 }
+
+func parseTime(s string) (time.Time, error) {
+	return time.Parse(timeLayout, s)
+}
+
+// checkAffected は、Exec の結果を受け、1 行も変わらなければ sql.ErrNoRows を返す。op はエラーの先頭に付ける操作の名前、
+// target は対象の行を表す文言（例: "game {id}"）。
+func checkAffected(res sql.Result, execErr error, op, target string) error {
+	if execErr != nil {
+		return fmt.Errorf("%s: %w", op, execErr)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+	if n == 0 {
+		return fmt.Errorf("%s: %s: %w", op, target, sql.ErrNoRows)
+	}
+	return nil
+}
+
+// scanAll は rows を閉じる。scan のエラーはそのまま、rows.Err は包まずに返すので、呼び出し側で文脈を付ける。
+func scanAll[T any](rows *sql.Rows, scan func(*sql.Rows) (T, error)) ([]T, error) {
+	defer func() { _ = rows.Close() }()
+	var out []T
+	for rows.Next() {
+		v, err := scan(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, v)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}

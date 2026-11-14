@@ -29,10 +29,10 @@ func (s *Store) GameInfo(ctx context.Context, gameID string) (metasync.GameInfo,
 	}
 	g.Brand, g.ImageSha256 = brand.String, image.String
 	var err error
-	if g.CreatedAt, err = time.Parse(timeLayout, createdAt); err != nil {
+	if g.CreatedAt, err = parseTime(createdAt); err != nil {
 		return metasync.GameInfo{}, fmt.Errorf("parse created_at of game %s: %w", gameID, err)
 	}
-	if g.UpdatedAt, err = time.Parse(timeLayout, updatedAt); err != nil {
+	if g.UpdatedAt, err = parseTime(updatedAt); err != nil {
 		return metasync.GameInfo{}, fmt.Errorf("parse updated_at of game %s: %w", gameID, err)
 	}
 	return g, nil
@@ -96,17 +96,7 @@ func (s *Store) EditGame(ctx context.Context, gameID string, edit GameEdit, now 
 		   updated_at = max(?, COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', updated_at, '+0.001 seconds'), updated_at))
 		 WHERE id = ?`,
 		title, edit.Brand != nil, brand, edit.ImageSha256 != nil, image, nowStr, gameID)
-	if err != nil {
-		return fmt.Errorf("update games: %w", err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("update games: %w", err)
-	}
-	if n == 0 {
-		return fmt.Errorf("update games: game %s: %w", gameID, sql.ErrNoRows)
-	}
-	return nil
+	return checkAffected(res, err, "update games", "game "+gameID)
 }
 
 // validateGameInfo は、リモートから受け取ったゲーム情報を書く前に、DB の CHECK 制約より分かりやすいエラーで弾く。

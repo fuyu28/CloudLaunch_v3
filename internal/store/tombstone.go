@@ -5,7 +5,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"time"
 
 	"github.com/fuyu28/CloudLaunch_v3/internal/syncore"
 )
@@ -20,7 +19,7 @@ func (s *Store) RemoteDeleted(ctx context.Context, gameID string) (syncore.Tombs
 	if !deletedAt.Valid {
 		return syncore.Tombstone{}, false, nil
 	}
-	t, err := time.Parse(timeLayout, deletedAt.String)
+	t, err := parseTime(deletedAt.String)
 	if err != nil {
 		return syncore.Tombstone{}, false, fmt.Errorf("parse remote_deleted_at of game %s: %w", gameID, err)
 	}
@@ -43,15 +42,5 @@ func (s *Store) RecordRemoteDeleted(ctx context.Context, gameID string, t syncor
 	res, err := s.db.ExecContext(ctx,
 		`UPDATE game_locals SET remote_deleted_at = ?, remote_deleted_by = ? WHERE game_id = ?`,
 		deletedAt, t.DeviceName, gameID)
-	if err != nil {
-		return fmt.Errorf("update remote deleted: %w", err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("update remote deleted: %w", err)
-	}
-	if n == 0 {
-		return fmt.Errorf("update remote deleted: game %s: %w", gameID, sql.ErrNoRows)
-	}
-	return nil
+	return checkAffected(res, err, "update remote deleted", "game "+gameID)
 }

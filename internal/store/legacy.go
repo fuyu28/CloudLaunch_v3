@@ -5,7 +5,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"time"
 
 	"github.com/fuyu28/CloudLaunch_v3/internal/legacy"
 )
@@ -28,15 +27,20 @@ func (s *Store) AddLegacySessions(ctx context.Context, sessions []legacy.Session
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	// 先に SELECT で確かめてから INSERT すると、WAL では書き込みへの格上げが busy_timeout を待たずに失敗しうる
+	// （ImportSessions と同じ）。play_sessions に同じ ID があるかは、INSERT の中で確かめる
+	insert, err := tx.PrepareContext(ctx,
+		`INSERT INTO legacy_sessions (id, legacy_game_id, legacy_game_title, played_at, duration_sec)
+		 SELECT ?, ?, ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM play_sessions WHERE id = ?)
+		 ON CONFLICT (id) DO NOTHING`)
+	if err != nil {
+		return 0, fmt.Errorf("prepare insert legacy_sessions: %w", err)
+	}
+	defer func() { _ = insert.Close() }()
+
 	added := 0
 	for i, sess := range sessions {
-		// 先に SELECT で確かめてから INSERT すると、WAL では書き込みへの格上げが busy_timeout を待たずに失敗しうる
-		// （ImportSessions と同じ）。play_sessions に同じ ID があるかは、INSERT の中で確かめる
-		r, err := tx.ExecContext(ctx,
-			`INSERT INTO legacy_sessions (id, legacy_game_id, legacy_game_title, played_at, duration_sec)
-			 SELECT ?, ?, ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM play_sessions WHERE id = ?)
-			 ON CONFLICT (id) DO NOTHING`,
-			sess.ID, sess.GameID, sess.GameTitle, playedAt[i], sess.DurationSec, sess.ID)
+		r, err := insert.ExecContext(ctx, sess.ID, sess.GameID, sess.GameTitle, playedAt[i], sess.DurationSec, sess.ID)
 		if err != nil {
 			return 0, fmt.Errorf("insert legacy_sessions: %w", err)
 		}
@@ -66,21 +70,19 @@ func (s *Store) LegacyGames(ctx context.Context) ([]legacy.Game, error) {
 	if err != nil {
 		return nil, fmt.Errorf("select legacy_sessions: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
-
-	var games []legacy.Game
-	for rows.Next() {
+	games, err := scanAll(rows, func(rows *sql.Rows) (legacy.Game, error) {
 		var g legacy.Game
 		var lastPlayedAt string
 		if err := rows.Scan(&g.ID, &g.Title, &g.Sessions, &g.TotalSec, &lastPlayedAt); err != nil {
-			return nil, fmt.Errorf("scan legacy_sessions: %w", err)
+			return g, fmt.Errorf("scan: %w", err)
 		}
-		if g.LastPlayedAt, err = time.Parse(timeLayout, lastPlayedAt); err != nil {
-			return nil, fmt.Errorf("parse played_at of legacy game %s: %w", g.ID, err)
+		var err error
+		if g.LastPlayedAt, err = parseTime(lastPlayedAt); err != nil {
+			return g, fmt.Errorf("parse played_at of legacy game %s: %w", g.ID, err)
 		}
-		games = append(games, g)
-	}
-	if err := rows.Err(); err != nil {
+		return g, nil
+	})
+	if err != nil {
 		return nil, fmt.Errorf("select legacy_sessions: %w", err)
 	}
 	return games, nil
@@ -146,21 +148,19 @@ func (s *Store) LegacySessions(ctx context.Context) ([]legacy.Session, error) {
 	if err != nil {
 		return nil, fmt.Errorf("select legacy_sessions: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
-
-	var sessions []legacy.Session
-	for rows.Next() {
+	sessions, err := scanAll(rows, func(rows *sql.Rows) (legacy.Session, error) {
 		var sess legacy.Session
 		var playedAt string
 		if err := rows.Scan(&sess.ID, &sess.GameID, &sess.GameTitle, &playedAt, &sess.DurationSec); err != nil {
-			return nil, fmt.Errorf("scan legacy_sessions: %w", err)
+			return sess, fmt.Errorf("scan: %w", err)
 		}
-		if sess.PlayedAt, err = time.Parse(timeLayout, playedAt); err != nil {
-			return nil, fmt.Errorf("parse played_at of legacy session %s: %w", sess.ID, err)
+		var err error
+		if sess.PlayedAt, err = parseTime(playedAt); err != nil {
+			return sess, fmt.Errorf("parse played_at of legacy session %s: %w", sess.ID, err)
 		}
-		sessions = append(sessions, sess)
-	}
-	if err := rows.Err(); err != nil {
+		return sess, nil
+	})
+	if err != nil {
 		return nil, fmt.Errorf("select legacy_sessions: %w", err)
 	}
 	return sessions, nil
