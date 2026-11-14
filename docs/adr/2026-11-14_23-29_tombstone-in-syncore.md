@@ -1,0 +1,90 @@
+# tombstone-in-syncore
+
+- 日時: 2026-11-14 23:29 (JST)
+
+## 当初の要求 / 背景
+
+ゲームの tombstone（`games/{gameId}/deleted.json`、仕様書 8 章）の扱いが、metasync・syncore・cmd に散っている。
+
+- metasync: 検証（8-T4〜8-T6）、`CheckTombstone`・`HandleTombstone`（8-T1〜8-T8）、ゲームの削除での PUT（`DeleteRemoteGame`、8-X5・8-X6）、2 台目の PC での取り込みの確認（8-N7・8-N8・8-N12）、上げ直しの前提の確認（記録がなければ `ErrNotRemoteDeleted`）
+- syncore: `Tombstone` 型の二重定義、`Config.ReadTombstone` の閉包と、閉包がないときの `errReadTombstoneNotSet`、`DeleteGame` の `deleteRemote` の閉包
+- cmd: 閉包の組み立てと、`syncore.Tombstone(t)`・`metasync.Tombstone(...)` の型の詰め替え
+
+この分け方は、2026-11-14_19-07_game-tombstone-check.md の「syncore と metasync の分担」で、tombstone の確認と掃除を metasync に置いたことから来ている。その後、ゲームの削除（2026-11-14_20-30_game-delete.md）はローカル側を syncore に、リモート側を metasync に置き、上げ直し（2026-11-14_22-38_game-reupload.md）もロックとジャーナルを syncore に、前提の確認と DB の更新を metasync に置いた。tombstone を使う手順のうち、ロック・ジャーナル・base・判定といった syncore の概念に触れるものが増え、そのたびに閉包が増えた。
+
+syncore と metasync は互いに import しない（2026-10-23_00-30_package-structure.md）。この制約は保つ。
+
+## 仕様
+
+- tombstone の扱いをどこに置くか
+- metasync が tombstone を知る方法
+- 上げ直しの前提の確認の置き場所
+- メタ情報の同期の 8-M4 の扱い
+- API の形
+- 文書の変更
+- テスト
+- PR の大きさ
+
+## 決定事項
+
+### tombstone の扱いの置き場所
+
+- 事項: tombstone の型・キー・検証・確認・記録・配下の削除・PUT をどのパッケージに置くか
+- 決定内容: すべて syncore に置く。型・キー・検証（8-T4〜8-T6）、確認（リモートと DB の記録、8-T1〜8-T8）、記録と配下の削除（8-T2・8-X10）、ゲームの削除での PUT と記録（8-X5・8-X6）を syncore に移す。配下の削除は、`games/{gameId}/` を一覧して `deleted.json` 以外を消す形のまま移す。metasync の tombstone.go はなくなる
+- 判断理由: 配下の削除は一覧と削除だけで、metasync のキー（game.json・sessions・images）を知らなくてよい。キーの形（仕様書 2 章）はもともと syncore が持つ。syncore に置けば、閉包（`ReadTombstone`・`deleteRemote`）と型の二重定義が消え、確認がリモートと DB の両方を 1 か所で見る。却下した案は次の 2 つ
+  - 新しいパッケージ（`internal/tombstone` など）に寄せる案: 移せるのは型・キー・検証だけで、記録と削除は syncore か metasync に残るので、扱いが 2 か所に分かれたままになる。syncore と metasync の両方が import する、仕様の概念のパッケージという新しい種類の層ができ、`domain` のような何でも入る置き場に育ちやすい
+  - syncore と metasync を 1 つのパッケージにまとめる案: 仕様書 8 章冒頭の「メタ情報は確認なしで同期する」と、セーブの同期の「確認を取る」という性質の違いを、パッケージの境界が表している。まとめると 1 つの `Core` が両方の依存を持ち、どの操作がどの依存を要るかが型から読めなくなる
+
+### metasync が tombstone を知る方法
+
+- 事項: 取り込み（8-N7・8-N8・8-N12）が tombstone を確かめる方法
+- 決定内容: metasync が、副作用なしで「ない・ある・不正」の 3 つの状態を返すインターフェースを定義し、`Config` で受け取る。cmd の小さなアダプタが `*syncore.Core` を包んで実装する。syncore は、不正な tombstone を新しいセンチネルエラー `syncore.ErrInvalidTombstone` で包んで返し、アダプタがそれを metasync の状態に詰め替える
+- 判断理由: 依存の向き（コアが必要な操作のインターフェースを定義し、外が実装する）の形をそのまま使える。metasync は syncore を import できないので、状態の型は metasync が持ち、詰め替えは配線の側に置く。8-N8 は不正な tombstone を「除いてログに残す」ので、読めないとき（8-N11）と区別できる必要があり、真偽値とエラーだけでは足りない
+
+### 上げ直しの前提の確認
+
+- 事項: 「tombstone の記録がなければ上げ直さない」確認と `ErrNotRemoteDeleted` の置き場所
+- 決定内容: syncore の `ReuploadGame` に移す。ロックを取り、Pull ジャーナルを確かめた（8-U3）後、閉包を呼ぶ前に確かめる。センチネルエラーは `syncore.ErrNotRemoteDeleted` にする。記録の削除そのものは、8-U4 のトランザクション（store の `ReuploadGame`）に残し、store もトランザクションの中で記録を確かめ続ける
+- 判断理由: tombstone の DB の記録を見るのは syncore、という分担がそろう。確かめる順（ジャーナル → 記録）は今と変わらない。記録の削除は、ゲーム情報とプレイ履歴の移動と同じトランザクションで行う要求（8-U4）があるので動かさない
+
+### メタ情報の同期の 8-M4
+
+- 事項: `metasync.Sync` が DB の記録を見て同期しない処理（8-M4）を、この作業で移すか
+- 決定内容: 移さない。metasync の store のインターフェースの `RemoteDeleted` は、8-M4 のためだけに残す。`RecordRemoteDeleted` は metasync から外す
+- 判断理由: この作業は振る舞いを変えない。8-M4 を syncore に尋ねる形にするには、リモートの tombstone も読む「扱いまで」の操作が要り、それは仕様書 8-M5（#137）の振る舞いの変更になる。8-M5 の作業で `RemoteDeleted` を外す
+
+### API の形
+
+- 事項: 移した後の公開 API
+- 決定内容:
+  - syncore: `CheckTombstone(ctx, gameID string) (Tombstone, bool, error)` と `HandleTombstone(ctx, gameID string) (Tombstone, bool, error)` を `*Core` に置く。振る舞いは今の metasync のものと同じにする
+  - syncore: `DeleteGame(ctx, gameID string) (DeleteResult, error)` にし、`deleteRemote` の引数をなくす。tombstone の `deletedAt` は `Config.Now()`、`deviceName` は `Config.DeviceName` から作る。metasync の `ErrDeleteIncomplete` は `syncore.ErrDeleteIncomplete` にする
+  - syncore: `Config.ReadTombstone` と `errReadTombstoneNotSet` をなくす。`Local` のインターフェースに `RemoteDeleted` と `RecordRemoteDeleted` を足す
+  - metasync: `CheckTombstone`・`HandleTombstone`・`DeleteRemoteGame`・`Tombstone`・`ErrDeleteIncomplete`・`ErrNotRemoteDeleted` をなくす
+- 判断理由: 公開する名前と振る舞いは今の metasync のものを引き継ぎ、cmd と GUI から見た使い方を変えない。削除の時刻と deviceName は、今は cmd が `time.Now()` と設定から作っているが、syncore は既に両方を `Config` で受け取っている
+
+### 文書の変更
+
+- 事項: AGENTS.md と過去の ADR
+- 決定内容: AGENTS.md の「構成」の syncore の行に「ゲームの tombstone とゲームの削除（8 章）」を足し、metasync の行から「ゲームの tombstone の確認と掃除もここが持つ」を消す。2026-10-23_00-30_package-structure.md の「依存の向き」のうち tombstone の問い合わせの部分と、2026-11-14_19-07_game-tombstone-check.md の「syncore と metasync の分担」を、この ADR で置き換える。それぞれの更新履歴に追記し、本文は書き換えない
+- 判断理由: docs/adr/README.md の「過去の決定を覆すとき」に従う
+
+### テスト
+
+- 事項: 移すテストと書き直すテスト
+- 決定内容: metasync の tombstone_test.go の 8-T・8-X のケースを、syncore の外部テストパッケージに移す。ケース名は変えない。metasync の取り込みのテスト（8-N7・8-N8・8-N12）は、状態を返す偽物のインターフェースで書き直す。上げ直しの前提の確認のテストは、syncore の reupload のテストに移す
+- 判断理由: 検査する仕様書の行は変わらず、ケースの置き場所だけが変わる。metasync の側は、tombstone の読み方ではなく、状態ごとの取り込みの振る舞いを検査すればよい
+
+### PR の大きさ
+
+- 事項: PR の分け方
+- 決定内容: 1 つの PR にする。見込みは約 900 行で、うち約 550 行はテストとコードの移動（テスト約 450、syncore 約 200、metasync 約 50、cmd 約 60、store 約 10、ADR・AGENTS.md 約 130）
+- 判断理由: 確認・記録・削除・PUT は同じ関数（記録と配下の削除）を共有しているので、途中で分けると、両方のパッケージに同じ処理が一時的に並ぶ。移動の部分は、移す前と後を並べて読める
+
+## 結果 / 影響
+
+（作業が終わったら書く）
+
+## 更新履歴
+
+- 2026-11-14 23:29 作成
