@@ -95,14 +95,8 @@ func TestDeleteGame(t *testing.T) {
 		}
 		return n
 	}
-
-	t.Run("8-X1 ゲーム情報・ローカル情報・プレイ履歴を消し、ほかのゲームは残す", func(t *testing.T) {
-		s := setup(t)
-		ctx := context.Background()
-
-		if err := s.DeleteGame(ctx, testGameID); err != nil {
-			t.Fatalf("DeleteGame: %v", err)
-		}
+	assertUnregistered := func(t *testing.T, s *Store) {
+		t.Helper()
 		for _, q := range []string{
 			`SELECT count(*) FROM games WHERE id = ?`,
 			`SELECT count(*) FROM game_locals WHERE game_id = ?`,
@@ -112,6 +106,16 @@ func TestDeleteGame(t *testing.T) {
 				t.Errorf("%s = %d, want 0", q, n)
 			}
 		}
+	}
+
+	t.Run("8-X1 ゲーム情報・ローカル情報・プレイ履歴を消し、ほかのゲームは残す", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+
+		if err := s.DeleteGame(ctx, testGameID); err != nil {
+			t.Fatalf("DeleteGame: %v", err)
+		}
+		assertUnregistered(t, s)
 		ids, err := s.GameIDs(ctx)
 		if err != nil {
 			t.Fatalf("GameIDs: %v", err)
@@ -126,6 +130,19 @@ func TestDeleteGame(t *testing.T) {
 		if len(sessions) != 1 {
 			t.Errorf("ほかのゲームのセッション = %v, want 1 件", sessions)
 		}
+	})
+
+	t.Run("8-U1 ゲームの tombstone の記録があるゲームも、登録を解除できる", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		if err := s.RecordRemoteDeleted(ctx, testGameID, metasync.Tombstone{DeletedAt: playedAt, DeviceName: "Laptop"}); err != nil {
+			t.Fatalf("RecordRemoteDeleted: %v", err)
+		}
+
+		if err := s.DeleteGame(ctx, testGameID); err != nil {
+			t.Fatalf("DeleteGame: %v", err)
+		}
+		assertUnregistered(t, s)
 	})
 
 	t.Run("3章/Pull ジャーナル/ジャーナルが残るゲームの登録の解除は ErrPullInProgress で拒否する", func(t *testing.T) {
