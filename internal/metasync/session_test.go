@@ -572,7 +572,7 @@ func TestDownloadSessions(t *testing.T) {
 	})
 }
 
-// markRemoteDeleted は、ゲームの tombstone の記録（8-T2）を DB に直接書く。記録を書く操作は #100 で作る。
+// markRemoteDeleted は、ゲームの tombstone の記録（8-T2）を、リモートの deleted.json と違う値で DB に直接書く。
 func markRemoteDeleted(t *testing.T, dbPath string) {
 	t.Helper()
 	execDB(t, dbPath, `UPDATE game_locals SET remote_deleted_at = ?, remote_deleted_by = ? WHERE game_id = ?`,
