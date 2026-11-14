@@ -59,7 +59,7 @@ syncore と metasync は互いに import しない（2026-10-23_00-30_package-st
 - 決定内容:
   - syncore: `CheckTombstone(ctx, gameID string) (Tombstone, bool, error)` と `HandleTombstone(ctx, gameID string) (Tombstone, bool, error)` を `*Core` に置く。振る舞いは今の metasync のものと同じにする
   - syncore: DB を見ずに deleted.json だけを読む `ReadRemoteTombstone(ctx, gameID string) (Tombstone, bool, error)` を置く。不正なら `ErrInvalidTombstone` で包んで返す。`CheckTombstone` と `HandleTombstone` も、不正なら同じく包む
-  - syncore: `DeleteGame(ctx, gameID string) (DeleteResult, error)` にし、`deleteRemote` の引数をなくす。tombstone の `deletedAt` は `Config.Now()`、`deviceName` は `Config.DeviceName` から作る。`Config.DeviceName` が空なら、ロックを取る前にエラーにする。metasync の `ErrDeleteIncomplete` は `syncore.ErrDeleteIncomplete` にする
+  - syncore: `DeleteGame(ctx, gameID string) (DeleteResult, error)` にし、`deleteRemote` の引数をなくす。tombstone の `deletedAt` は `Config.Now()`、`deviceName` は `Config.DeviceName` から作る。`Config.DeviceName` が空か `Config.Remote` がなければ、ロックを取る前にエラーにする。metasync の `ErrDeleteIncomplete` は `syncore.ErrDeleteIncomplete` にする
   - syncore: `Config.ReadTombstone` と `errReadTombstoneNotSet` をなくす。`LocalStore` に `RemoteDeleted` と `RecordRemoteDeleted` を足す
   - metasync: `CheckTombstone`・`HandleTombstone`・`DeleteRemoteGame`・`Tombstone`・`ErrDeleteIncomplete`・`ErrNotRemoteDeleted` をなくす
 - 判断理由: 公開する名前と振る舞いは今の metasync のものを引き継ぎ、cmd と GUI から見た使い方を変えない。削除の時刻と deviceName は、今は cmd が `time.Now()` と設定から作っているが、syncore は既に両方を `Config` で受け取っている。deviceName が空のまま tombstone を書くと 8-T5 に当たり、どの PC もそのゲームを確かめられなくなる。今は cmd が必ずホスト名を渡すが、`Config` で受け取る以上、空を拒む場所が syncore に要る
