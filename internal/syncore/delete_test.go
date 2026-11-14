@@ -10,29 +10,45 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 
+	"github.com/fuyu28/CloudLaunch_v3/internal/objstore/memstore"
 	"github.com/fuyu28/CloudLaunch_v3/internal/store"
 	"github.com/fuyu28/CloudLaunch_v3/internal/syncore"
 )
 
-// fakeRemoteDeletion は、DeleteGame に渡す deleteRemote の偽物。呼ばれた回数を数え、check があれば呼ばれた時点の状態を
-// 確かめさせる。
-type fakeRemoteDeletion struct {
+// deletedByTest は、テストのコアがゲームの削除で書く deleted.json と、DB に書く記録（Config.Now と DeviceName から作る）。
+const deletedByTest = `{"deletedAt":"2026-11-03T01:02:03.004Z","deviceName":"Desktop"}`
+
+var deletedByTestTombstone = syncore.Tombstone{DeletedAt: testNow, DeviceName: testDeviceName}
+
+// remoteDeletion は、DeleteGame が deleted.json を PUT しようとした回数を数える。check があれば、PUT の前に呼び、その時点の
+// 状態を確かめさせる。
+type remoteDeletion struct {
 	calls int
-	err   error
 	check func()
 }
 
-func (f *fakeRemoteDeletion) run(context.Context) error {
-	f.calls++
-	if f.check != nil {
-		f.check()
+// watchDeletion は、それまでの Before を続けて呼ぶので、failOn などで Before を差し替えた後に呼ぶ。
+func (e env) watchDeletion() *remoteDeletion {
+	d := &remoteDeletion{}
+	prev := e.remote.Before
+	e.remote.Before = func(op memstore.Op, key string) error {
+		if op == memstore.OpPut && key == tombstoneKey() {
+			d.calls++
+			if d.check != nil {
+				d.check()
+			}
+		}
+		if prev != nil {
+			return prev(op, key)
+		}
+		return nil
 	}
-	return f.err
+	return d
 }
 
-func (e env) deleteGame(t *testing.T, del *fakeRemoteDeletion) error {
+func (e env) deleteGame(t *testing.T) error {
 	t.Helper()
-	_, err := e.core.DeleteGame(t.Context(), testGameID, del.run)
+	_, err := e.core.DeleteGame(t.Context(), testGameID)
 	return err
 }
 
@@ -60,12 +76,12 @@ func assertLockReleased(t *testing.T, e env) {
 	}
 }
 
-// assertNotDeleted は、DeleteGame が何も変えずに止まったこと（リモートの削除を呼ばず、バックアップを作らず、登録が残る）を
+// assertNotDeleted は、DeleteGame が何も変えずに止まったこと（deleted.json を PUT せず、バックアップを作らず、登録が残る）を
 // 確かめる。
-func assertNotDeleted(t *testing.T, e env, del *fakeRemoteDeletion) {
+func assertNotDeleted(t *testing.T, e env, del *remoteDeletion) {
 	t.Helper()
 	if del.calls != 0 {
-		t.Errorf("リモートの削除を %d 回呼んだ", del.calls)
+		t.Errorf("deleted.json を %d 回 PUT した", del.calls)
 	}
 	if names := e.gameBackups(t); len(names) != 0 {
 		t.Errorf("バックアップを作った: %v", names)
@@ -83,9 +99,9 @@ func TestDeleteGame(t *testing.T) {
 		e := newEnv(t)
 		writeFiles(t, e.saveDir, files)
 		e.procs.runningFrom = 1
-		del := &fakeRemoteDeletion{}
+		del := e.watchDeletion()
 
-		if err := e.deleteGame(t, del); !errors.Is(err, syncore.ErrGameRunning) {
+		if err := e.deleteGame(t); !errors.Is(err, syncore.ErrGameRunning) {
 			t.Fatalf("DeleteGame error = %v, want ErrGameRunning", err)
 		}
 		if diff := cmp.Diff([]string{e.exePath}, e.procs.asked()); diff != "" {
@@ -98,14 +114,14 @@ func TestDeleteGame(t *testing.T) {
 		e := newEnv(t)
 		writeFiles(t, e.saveDir, files)
 		e.procs.runningFrom = 2
-		del := &fakeRemoteDeletion{}
+		del := e.watchDeletion()
 
-		if err := e.deleteGame(t, del); !errors.Is(err, syncore.ErrGameRunning) {
+		if err := e.deleteGame(t); !errors.Is(err, syncore.ErrGameRunning) {
 			t.Fatalf("DeleteGame error = %v, want ErrGameRunning", err)
 		}
 		// バックアップは残り、8-X8 と同じ状態になる
 		if del.calls != 0 || !e.registered(t) || len(e.gameBackups(t)) != 1 {
-			t.Errorf("リモートの削除 %d 回・登録 %v・バックアップ %v, want 0 回・残る・1 つ", del.calls, e.registered(t), e.gameBackups(t))
+			t.Errorf("deleted.json の PUT %d 回・登録 %v・バックアップ %v, want 0 回・残る・1 つ", del.calls, e.registered(t), e.gameBackups(t))
 		}
 		assertLockReleased(t, e)
 	})
@@ -114,9 +130,9 @@ func TestDeleteGame(t *testing.T) {
 		e := newEnv(t)
 		writeFiles(t, e.saveDir, files)
 		e.lock.deny = true
-		del := &fakeRemoteDeletion{}
+		del := e.watchDeletion()
 
-		if err := e.deleteGame(t, del); !errors.Is(err, syncore.ErrSyncInProgress) {
+		if err := e.deleteGame(t); !errors.Is(err, syncore.ErrSyncInProgress) {
 			t.Fatalf("DeleteGame error = %v, want ErrSyncInProgress", err)
 		}
 		assertNotDeleted(t, e, del)
@@ -130,9 +146,9 @@ func TestDeleteGame(t *testing.T) {
 			e.saveDir, filepath.Join(dir, ".cloudlaunch-stage-x"), filepath.Join(dir, ".cloudlaunch-old-x"), testNow); err != nil {
 			t.Fatalf("InsertPullOperation: %v", err)
 		}
-		del := &fakeRemoteDeletion{}
+		del := e.watchDeletion()
 
-		if err := e.deleteGame(t, del); !errors.Is(err, syncore.ErrPullPending) {
+		if err := e.deleteGame(t); !errors.Is(err, syncore.ErrPullPending) {
 			t.Fatalf("DeleteGame error = %v, want ErrPullPending", err)
 		}
 		assertNotDeleted(t, e, del)
@@ -141,9 +157,8 @@ func TestDeleteGame(t *testing.T) {
 	t.Run("8-X4 セーブをバックアップへコピーし、セーブフォルダを残す", func(t *testing.T) {
 		e := newEnv(t)
 		writeFiles(t, e.saveDir, files)
-		del := &fakeRemoteDeletion{}
 
-		res, err := e.core.DeleteGame(t.Context(), testGameID, del.run)
+		res, err := e.core.DeleteGame(t.Context(), testGameID)
 		if err != nil {
 			t.Fatalf("DeleteGame: %v", err)
 		}
@@ -174,9 +189,8 @@ func TestDeleteGame(t *testing.T) {
 			"20261203T000000.000Z-0192d4e8-0000-7000-8000-000000000104",
 		}
 		mkdirBackups(t, e, append([]string{older}, newer...)...)
-		del := &fakeRemoteDeletion{}
 
-		if err := e.deleteGame(t, del); err != nil {
+		if err := e.deleteGame(t); err != nil {
 			t.Fatalf("DeleteGame: %v", err)
 		}
 		names := e.gameBackups(t)
@@ -188,10 +202,51 @@ func TestDeleteGame(t *testing.T) {
 		}
 	})
 
+	t.Run("8-X5 deleted.json を PUT し、DB にゲームの tombstone を記録する", func(t *testing.T) {
+		e := newEnv(t)
+		writeFiles(t, e.saveDir, files)
+		e.putGameData(t)
+		del := e.watchDeletion()
+		var recordedAtPut bool
+		del.check = func() { _, recordedAtPut = e.recorded(t) }
+		// 登録を解除すると記録も消えるので、解除に失敗させて記録を読めるようにする
+		core := e.coreWithout(func(cfg *syncore.Config) { cfg.Local = failingUnregister{e.store} })
+
+		if _, err := core.DeleteGame(t.Context(), testGameID); !errors.Is(err, syncore.ErrUnregisterFailed) {
+			t.Fatalf("DeleteGame error = %v, want ErrUnregisterFailed", err)
+		}
+		if body, _ := e.getObject(t, tombstoneKey()); body != deletedByTest {
+			t.Errorf("deleted.json = %s, want %s", body, deletedByTest)
+		}
+		if recordedAtPut {
+			t.Error("deleted.json の PUT より先に DB に記録した")
+		}
+		rec, recOK := e.recorded(t)
+		if !recOK {
+			t.Fatal("DB に記録しなかった")
+		}
+		if diff := cmp.Diff(deletedByTestTombstone, rec); diff != "" {
+			t.Errorf("記録 (-want +got):\n%s", diff)
+		}
+	})
+
+	t.Run("8-X6 配下のゲームの tombstone 以外を削除し、ほかのゲームのキーは残す", func(t *testing.T) {
+		e := newEnv(t)
+		writeFiles(t, e.saveDir, files)
+		e.putGameData(t)
+
+		if err := e.deleteGame(t); err != nil {
+			t.Fatalf("DeleteGame: %v", err)
+		}
+		if diff := cmp.Diff(afterCleanup(), e.keys(t, "games/")); diff != "" {
+			t.Errorf("残ったキー (-want +got):\n%s", diff)
+		}
+	})
+
 	t.Run("8-X7 バックアップ → リモートの削除 → 登録の解除、の順で行う", func(t *testing.T) {
 		e := newEnv(t)
 		writeFiles(t, e.saveDir, files)
-		del := &fakeRemoteDeletion{}
+		del := e.watchDeletion()
 		del.check = func() {
 			if names := e.gameBackups(t); len(names) != 1 {
 				t.Errorf("リモートの削除の時点のバックアップ = %v, want 1 つ", names)
@@ -204,11 +259,11 @@ func TestDeleteGame(t *testing.T) {
 			}
 		}
 
-		if err := e.deleteGame(t, del); err != nil {
+		if err := e.deleteGame(t); err != nil {
 			t.Fatalf("DeleteGame: %v", err)
 		}
 		if del.calls != 1 {
-			t.Errorf("リモートの削除を %d 回呼んだ, want 1", del.calls)
+			t.Errorf("deleted.json を %d 回 PUT した, want 1", del.calls)
 		}
 		if e.registered(t) {
 			t.Error("登録を解除していない")
@@ -224,9 +279,9 @@ func TestDeleteGame(t *testing.T) {
 		e := newEnv(t)
 		writeFiles(t, e.saveDir, files)
 		core := e.coreWithout(func(cfg *syncore.Config) { cfg.Local = failingUnregister{e.store} })
-		del := &fakeRemoteDeletion{}
+		del := e.watchDeletion()
 
-		_, err := core.DeleteGame(t.Context(), testGameID, del.run)
+		_, err := core.DeleteGame(t.Context(), testGameID)
 		if !errors.Is(err, syncore.ErrUnregisterFailed) || !errors.Is(err, errUnregister) {
 			t.Fatalf("DeleteGame error = %v, want ErrUnregisterFailed で包んだ元のエラー", err)
 		}
@@ -234,7 +289,7 @@ func TestDeleteGame(t *testing.T) {
 			t.Error("リモートの削除の失敗として返した")
 		}
 		if del.calls != 1 {
-			t.Errorf("リモートの削除を %d 回呼んだ, want 1", del.calls)
+			t.Errorf("deleted.json を %d 回 PUT した, want 1", del.calls)
 		}
 		assertLockReleased(t, e)
 	})
@@ -245,9 +300,9 @@ func TestDeleteGame(t *testing.T) {
 		// 中断した削除が作ったバックアップだけが残り、リモートも登録も変わっていない
 		const interrupted = "20261102T000000.000Z-0192d4e8-0000-7000-8000-000000000105"
 		writeFiles(t, filepath.Join(e.backupsDir, testGameID, interrupted), files)
-		del := &fakeRemoteDeletion{}
+		del := e.watchDeletion()
 
-		if err := e.deleteGame(t, del); err != nil {
+		if err := e.deleteGame(t); err != nil {
 			t.Fatalf("DeleteGame: %v", err)
 		}
 		names := e.gameBackups(t)
@@ -255,7 +310,7 @@ func TestDeleteGame(t *testing.T) {
 			t.Errorf("バックアップ = %v, want 中断したときのものと、作ったもの", names)
 		}
 		if del.calls != 1 || e.registered(t) {
-			t.Errorf("リモートの削除 %d 回・登録 %v, want 1 回・解除", del.calls, e.registered(t))
+			t.Errorf("deleted.json の PUT %d 回・登録 %v, want 1 回・解除", del.calls, e.registered(t))
 		}
 	})
 
@@ -263,9 +318,9 @@ func TestDeleteGame(t *testing.T) {
 		e := newEnv(t)
 		writeFiles(t, e.saveDir, files)
 		injected := errors.New("injected: put deleted.json")
-		del := &fakeRemoteDeletion{err: injected}
+		failOn(e, memstore.OpPut, "deleted.json", injected)
 
-		err := e.deleteGame(t, del)
+		err := e.deleteGame(t)
 		if !errors.Is(err, syncore.ErrRemoteDeletionFailed) || !errors.Is(err, injected) {
 			t.Fatalf("DeleteGame error = %v, want ErrRemoteDeletionFailed で包んだ元のエラー", err)
 		}
@@ -278,13 +333,62 @@ func TestDeleteGame(t *testing.T) {
 		assertLockReleased(t, e)
 	})
 
+	t.Run("8-X9 deleted.json の PUT に失敗したら、記録も削除もしない", func(t *testing.T) {
+		e := newEnv(t)
+		writeFiles(t, e.saveDir, files)
+		e.putGameData(t)
+		before := e.keys(t, "games/")
+		injected := errors.New("injected: put deleted.json")
+		failOn(e, memstore.OpPut, "deleted.json", injected)
+
+		err := e.deleteGame(t)
+		if !errors.Is(err, injected) || errors.Is(err, syncore.ErrDeleteIncomplete) {
+			t.Fatalf("DeleteGame error = %v, want ErrDeleteIncomplete でない元のエラー", err)
+		}
+		if _, rec := e.recorded(t); rec {
+			t.Error("DB に記録した")
+		}
+		if diff := cmp.Diff(before, e.keys(t, "games/")); diff != "" {
+			t.Errorf("リモートのキーが変わった (-before +after):\n%s", diff)
+		}
+	})
+
+	t.Run("8-X10 PUT の後で配下の削除に失敗したら、記録を残し、次の tombstone の確認で消し残りを削除する", func(t *testing.T) {
+		e := newEnv(t)
+		writeFiles(t, e.saveDir, files)
+		e.putGameData(t)
+		injected := errors.New("injected: delete game.json")
+		failOn(e, memstore.OpDelete, "/game.json", injected)
+
+		err := e.deleteGame(t)
+		if !errors.Is(err, syncore.ErrDeleteIncomplete) || !errors.Is(err, injected) {
+			t.Fatalf("DeleteGame error = %v, want ErrDeleteIncomplete で包んだ元のエラー", err)
+		}
+		if _, rec := e.recorded(t); !rec {
+			t.Error("DB に記録しなかった")
+		}
+		if !e.registered(t) {
+			t.Error("登録を解除した")
+		}
+		if body, _ := e.getObject(t, tombstoneKey()); body != deletedByTest {
+			t.Errorf("deleted.json = %s, want %s", body, deletedByTest)
+		}
+
+		e.remote.Before = nil
+		got, ok, err := e.core.HandleTombstone(t.Context(), testGameID)
+		assertTombstone(t, got, ok, err, deletedByTestTombstone, true)
+		if diff := cmp.Diff(afterCleanup(), e.keys(t, "games/")); diff != "" {
+			t.Errorf("残ったキー (-want +got):\n%s", diff)
+		}
+	})
+
 	t.Run("8-X11 ゲームの tombstone があれば、何も変えずに拒否する", func(t *testing.T) {
 		e := newEnv(t)
 		writeFiles(t, e.saveDir, files)
-		e.tombs.deletedFrom = 1
-		del := &fakeRemoteDeletion{}
+		e.putTombstone(t)
+		del := e.watchDeletion()
 
-		if err := e.deleteGame(t, del); !errors.Is(err, syncore.ErrRemoteDeleted) {
+		if err := e.deleteGame(t); !errors.Is(err, syncore.ErrRemoteDeleted) {
 			t.Fatalf("DeleteGame error = %v, want ErrRemoteDeleted", err)
 		}
 		assertNotDeleted(t, e, del)
@@ -293,14 +397,14 @@ func TestDeleteGame(t *testing.T) {
 	t.Run("8-X11 バックアップの間にゲームの tombstone が書かれたら、リモートを削除せずに止める", func(t *testing.T) {
 		e := newEnv(t)
 		writeFiles(t, e.saveDir, files)
-		e.tombs.deletedFrom = 2
-		del := &fakeRemoteDeletion{}
+		e.putTombstoneOnGet(2)
+		del := e.watchDeletion()
 
-		if err := e.deleteGame(t, del); !errors.Is(err, syncore.ErrRemoteDeleted) {
+		if err := e.deleteGame(t); !errors.Is(err, syncore.ErrRemoteDeleted) {
 			t.Fatalf("DeleteGame error = %v, want ErrRemoteDeleted", err)
 		}
 		if del.calls != 0 || !e.registered(t) {
-			t.Errorf("リモートの削除 %d 回・登録 %v, want 0 回・残る", del.calls, e.registered(t))
+			t.Errorf("deleted.json の PUT %d 回・登録 %v, want 0 回・残る", del.calls, e.registered(t))
 		}
 		assertLockReleased(t, e)
 	})
@@ -308,11 +412,11 @@ func TestDeleteGame(t *testing.T) {
 	t.Run("8-X11 ゲームの tombstone を確かめられなければ、何も変えずに止める", func(t *testing.T) {
 		e := newEnv(t)
 		writeFiles(t, e.saveDir, files)
-		injected := errors.New("injected: invalid deleted.json")
-		e.tombs.err = injected
-		del := &fakeRemoteDeletion{}
+		injected := errors.New("injected: get deleted.json")
+		failOn(e, memstore.OpGet, "deleted.json", injected)
+		del := e.watchDeletion()
 
-		err := e.deleteGame(t, del)
+		err := e.deleteGame(t)
 		if !errors.Is(err, injected) || errors.Is(err, syncore.ErrRemoteDeleted) {
 			t.Fatalf("DeleteGame error = %v, want ErrRemoteDeleted でない元のエラー", err)
 		}
@@ -324,9 +428,9 @@ func TestDeleteGame(t *testing.T) {
 		if err := os.Remove(e.saveDir); err != nil {
 			t.Fatalf("remove save folder: %v", err)
 		}
-		del := &fakeRemoteDeletion{}
+		del := e.watchDeletion()
 
-		res, err := e.core.DeleteGame(t.Context(), testGameID, del.run)
+		res, err := e.core.DeleteGame(t.Context(), testGameID)
 		if err != nil {
 			t.Fatalf("DeleteGame: %v", err)
 		}
@@ -337,7 +441,7 @@ func TestDeleteGame(t *testing.T) {
 			t.Errorf("BackupPath = %q, want 空", res.BackupPath)
 		}
 		if del.calls != 1 || e.registered(t) {
-			t.Errorf("リモートの削除 %d 回・登録 %v, want 1 回・解除", del.calls, e.registered(t))
+			t.Errorf("deleted.json の PUT %d 回・登録 %v, want 1 回・解除", del.calls, e.registered(t))
 		}
 	})
 
@@ -347,13 +451,13 @@ func TestDeleteGame(t *testing.T) {
 		if err := os.Remove(e.exePath); err != nil {
 			t.Fatalf("remove exe: %v", err)
 		}
-		del := &fakeRemoteDeletion{}
+		del := e.watchDeletion()
 
-		if err := e.deleteGame(t, del); err != nil {
+		if err := e.deleteGame(t); err != nil {
 			t.Fatalf("DeleteGame: %v", err)
 		}
 		if del.calls != 1 || e.registered(t) {
-			t.Errorf("リモートの削除 %d 回・登録 %v, want 1 回・解除", del.calls, e.registered(t))
+			t.Errorf("deleted.json の PUT %d 回・登録 %v, want 1 回・解除", del.calls, e.registered(t))
 		}
 	})
 
@@ -364,9 +468,9 @@ func TestDeleteGame(t *testing.T) {
 		if err := os.Symlink("slot1.sav", filepath.Join(e.saveDir, "link.sav")); err != nil {
 			t.Skipf("symlink を作れない: %v", err)
 		}
-		del := &fakeRemoteDeletion{}
+		del := e.watchDeletion()
 
-		if err := e.deleteGame(t, del); err == nil {
+		if err := e.deleteGame(t); err == nil {
 			t.Fatal("エラーを返さなかった")
 		}
 		assertNotDeleted(t, e, del)
@@ -381,9 +485,9 @@ func TestDeleteGame(t *testing.T) {
 			}
 			return nil
 		}
-		del := &fakeRemoteDeletion{}
+		del := e.watchDeletion()
 
-		if err := e.deleteGame(t, del); err == nil {
+		if err := e.deleteGame(t); err == nil {
 			t.Fatal("エラーを返さなかった")
 		}
 		assertNotDeleted(t, e, del)
@@ -396,7 +500,6 @@ func TestDeleteGame(t *testing.T) {
 		}{
 			{"Locker", func(cfg *syncore.Config) { cfg.Locker = nil }},
 			{"Processes", func(cfg *syncore.Config) { cfg.Processes = nil }},
-			{"ReadTombstone", func(cfg *syncore.Config) { cfg.ReadTombstone = nil }},
 			{"BackupsDir", func(cfg *syncore.Config) { cfg.BackupsDir = "" }},
 			{"Rename", func(cfg *syncore.Config) { cfg.Rename = nil }},
 		}
@@ -404,9 +507,9 @@ func TestDeleteGame(t *testing.T) {
 			t.Run(tc.name, func(t *testing.T) {
 				e := newEnv(t)
 				writeFiles(t, e.saveDir, files)
-				del := &fakeRemoteDeletion{}
+				del := e.watchDeletion()
 
-				if _, err := e.coreWithout(tc.edit).DeleteGame(t.Context(), testGameID, del.run); err == nil {
+				if _, err := e.coreWithout(tc.edit).DeleteGame(t.Context(), testGameID); err == nil {
 					t.Fatal("エラーを返さなかった")
 				}
 				if acquired, _ := e.lock.state(); acquired != 0 {
@@ -415,18 +518,5 @@ func TestDeleteGame(t *testing.T) {
 				assertNotDeleted(t, e, del)
 			})
 		}
-
-		t.Run("deleteRemote", func(t *testing.T) {
-			e := newEnv(t)
-			if _, err := e.core.DeleteGame(t.Context(), testGameID, nil); err == nil {
-				t.Fatal("エラーを返さなかった")
-			}
-			if acquired, _ := e.lock.state(); acquired != 0 {
-				t.Errorf("同期ロックを %d 回取った", acquired)
-			}
-			if !e.registered(t) {
-				t.Error("登録を解除した")
-			}
-		})
 	})
 }

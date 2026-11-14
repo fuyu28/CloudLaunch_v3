@@ -94,10 +94,11 @@ func newEnvOn(t *testing.T, remote *memstore.Store) *env {
 
 	e := &env{store: s, remote: remote, dbPath: dbPath, imageDir: filepath.Join(t.TempDir(), "images")}
 	e.core = metasync.New(metasync.Config{
-		Remote:   e.remote,
-		Local:    s,
-		Logger:   slog.New(slog.DiscardHandler),
-		ImageDir: e.imageDir,
+		Remote:     e.remote,
+		Local:      s,
+		Tombstones: fakeTombstones{remote: e.remote},
+		Logger:     slog.New(slog.DiscardHandler),
+		ImageDir:   e.imageDir,
 	})
 	return e
 }

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"strings"
 	"testing"
@@ -30,6 +31,33 @@ var errInjected = errors.New("injected")
 
 func remoteGameKey(gameID, name string) string {
 	return "games/" + gameID + "/" + name
+}
+
+// fakeTombstones は、syncore の代わりにゲームの tombstone を確かめる。リモートの deleted.json の本文が deletedJSON なら
+// 削除済み、それ以外の本文なら不正と返す。本文の検証（8-T4〜8-T6）は syncore のテストで確かめる。
+type fakeTombstones struct {
+	remote interface {
+		Get(ctx context.Context, key string) (io.ReadCloser, error)
+	}
+}
+
+func (f fakeTombstones) RemoteTombstoneExists(ctx context.Context, gameID string) (bool, error) {
+	r, err := f.remote.Get(ctx, remoteGameKey(gameID, "deleted.json"))
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = r.Close() }()
+	body, err := io.ReadAll(r)
+	if err != nil {
+		return false, err
+	}
+	if string(body) != deletedJSON {
+		return false, fmt.Errorf("%w: %s", metasync.ErrInvalidTombstone, body)
+	}
+	return true, nil
 }
 
 // fullGameJSON は、brand と imageSha256 を持ち、createdAt と updatedAt が違う game.json を返す。
@@ -156,33 +184,22 @@ func TestRemoteGames(t *testing.T) {
 		}
 	})
 
-	for _, tt := range []struct {
-		name string
-		body string
-	}{
-		{"8-N8 ゲームの tombstone が JSON として読めなければ（8-T4）、除く", `{`},
-		{"8-N8 ゲームの tombstone が 64 KiB を超えれば（8-T4）、除く", deletedJSON + strings.Repeat(" ", 64<<10)},
-		{"8-N8 ゲームの tombstone の deletedAt がなければ（8-T5）、除く", `{"deviceName":"Laptop"}`},
-		{"8-N8 ゲームの tombstone の deviceName が空なら（8-T5）、除く", `{"deletedAt":"2026-11-03T01:02:03.004Z","deviceName":""}`},
-		{"8-N8 ゲームの tombstone の deletedAt が日時の形でなければ（8-T6）、除く", `{"deletedAt":"2026-11-03","deviceName":"Laptop"}`},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			e := newBareEnv(t)
-			e.putRemoteGame(t, remoteGameA, "A")
-			e.putRemote(t, remoteGameKey(remoteGameA, "deleted.json"), tt.body)
+	t.Run("8-N8 ゲームの tombstone が不正なら、除く", func(t *testing.T) {
+		e := newBareEnv(t)
+		e.putRemoteGame(t, remoteGameA, "A")
+		e.putRemote(t, remoteGameKey(remoteGameA, "deleted.json"), `{`)
 
-			got, err := e.core.RemoteGames(ctx)
-			if err != nil {
-				t.Fatalf("RemoteGames: %v", err)
-			}
-			if diff := cmp.Diff(metasync.RemoteGames{Skipped: 1}, got); diff != "" {
-				t.Errorf("RemoteGames (-want +got):\n%s", diff)
-			}
-			if diff := cmp.Diff([]string{remoteGameKey(remoteGameA, "deleted.json")}, e.getKeys()); diff != "" {
-				t.Errorf("GET したキー (-want +got):\n%s", diff)
-			}
-		})
-	}
+		got, err := e.core.RemoteGames(ctx)
+		if err != nil {
+			t.Fatalf("RemoteGames: %v", err)
+		}
+		if diff := cmp.Diff(metasync.RemoteGames{Skipped: 1}, got); diff != "" {
+			t.Errorf("RemoteGames (-want +got):\n%s", diff)
+		}
+		if diff := cmp.Diff([]string{remoteGameKey(remoteGameA, "deleted.json")}, e.getKeys()); diff != "" {
+			t.Errorf("GET したキー (-want +got):\n%s", diff)
+		}
+	})
 
 	for _, tt := range []struct {
 		name string
@@ -266,7 +283,9 @@ func TestRemoteGames(t *testing.T) {
 		e.failOn(memstore.OpGet, remoteGameKey(remoteGameB, "deleted.json"))
 		// remoteGameA の tombstone の GET は、ctx がキャンセルされるまで返らない。キャンセルしなければ RemoteGames も返らない
 		remote := blockingStore{Store: e.remote, key: remoteGameKey(remoteGameA, "deleted.json")}
-		core := metasync.New(metasync.Config{Remote: remote, Local: e.store, Logger: slog.New(slog.DiscardHandler), ImageDir: e.imageDir})
+		core := metasync.New(metasync.Config{
+			Remote: remote, Local: e.store, Tombstones: fakeTombstones{remote: remote}, Logger: slog.New(slog.DiscardHandler), ImageDir: e.imageDir,
+		})
 
 		done := make(chan error, 1)
 		go func() {
@@ -280,6 +299,29 @@ func TestRemoteGames(t *testing.T) {
 			}
 		case <-time.After(10 * time.Second):
 			t.Fatal("RemoteGames が返らない: 失敗した後に、読み込み中の GET をキャンセルしていない")
+		}
+	})
+}
+
+func TestImportWithoutTombstones(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("8章/取り込み/tombstone の確認がなければ、リモートを読まずにエラーにする", func(t *testing.T) {
+		e := newBareEnv(t)
+		e.putRemoteGame(t, remoteGameA, "A")
+		core := metasync.New(metasync.Config{Remote: e.remote, Local: e.store, Logger: slog.New(slog.DiscardHandler), ImageDir: e.imageDir})
+
+		if _, err := core.RemoteGames(ctx); err == nil {
+			t.Error("RemoteGames がエラーを返さなかった")
+		}
+		if _, err := core.ImportGame(ctx, remoteGameA, "/saveA", "/gameA.exe"); err == nil {
+			t.Error("ImportGame がエラーを返さなかった")
+		}
+		if gets := e.getKeys(); len(gets) != 0 {
+			t.Errorf("GET した: %v", gets)
+		}
+		if _, err := e.store.GameInfo(ctx, remoteGameA); err == nil {
+			t.Error("登録した")
 		}
 	})
 }

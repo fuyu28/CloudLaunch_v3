@@ -7,7 +7,7 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 
-	"github.com/fuyu28/CloudLaunch_v3/internal/metasync"
+	"github.com/fuyu28/CloudLaunch_v3/internal/syncore"
 )
 
 func TestRemoteDeleted(t *testing.T) {
@@ -30,7 +30,7 @@ func TestRemoteDeleted(t *testing.T) {
 		s, _ := openTemp(t)
 		createTestGame(t, s)
 		jst := time.FixedZone("JST", 9*60*60)
-		if err := s.RecordRemoteDeleted(ctx, testGameID, metasync.Tombstone{
+		if err := s.RecordRemoteDeleted(ctx, testGameID, syncore.Tombstone{
 			DeletedAt: time.Date(2026, 11, 3, 9, 0, 0, 1_234_567, jst), DeviceName: "Laptop",
 		}); err != nil {
 			t.Fatalf("RecordRemoteDeleted: %v", err)
@@ -43,9 +43,24 @@ func TestRemoteDeleted(t *testing.T) {
 		if !ok {
 			t.Fatal("RemoteDeleted = false, want true")
 		}
-		want := metasync.Tombstone{DeletedAt: time.Date(2026, 11, 3, 0, 0, 0, 1_000_000, time.UTC), DeviceName: "Laptop"}
+		want := syncore.Tombstone{DeletedAt: time.Date(2026, 11, 3, 0, 0, 0, 1_000_000, time.UTC), DeviceName: "Laptop"}
 		if diff := cmp.Diff(want, got); diff != "" {
 			t.Errorf("RemoteDeleted (-want +got):\n%s", diff)
+		}
+	})
+
+	t.Run("store/IsRemoteDeleted はゲームの tombstone の記録の有無を返す", func(t *testing.T) {
+		s, _ := openTemp(t)
+		createTestGame(t, s)
+
+		if deleted, err := s.IsRemoteDeleted(ctx, testGameID); err != nil || deleted {
+			t.Fatalf("記録の前: IsRemoteDeleted = %v, %v, want false, nil", deleted, err)
+		}
+		if err := s.RecordRemoteDeleted(ctx, testGameID, syncore.Tombstone{DeletedAt: time.Now(), DeviceName: "Laptop"}); err != nil {
+			t.Fatalf("RecordRemoteDeleted: %v", err)
+		}
+		if deleted, err := s.IsRemoteDeleted(ctx, testGameID); err != nil || !deleted {
+			t.Errorf("記録の後: IsRemoteDeleted = %v, %v, want true, nil", deleted, err)
 		}
 	})
 
@@ -60,7 +75,7 @@ func TestRemoteDeleted(t *testing.T) {
 	t.Run("store/RecordRemoteDeleted は登録していないゲームでエラーを返す", func(t *testing.T) {
 		s, _ := openTemp(t)
 
-		if err := s.RecordRemoteDeleted(ctx, testGameID, metasync.Tombstone{DeletedAt: time.Now(), DeviceName: "Laptop"}); err == nil {
+		if err := s.RecordRemoteDeleted(ctx, testGameID, syncore.Tombstone{DeletedAt: time.Now(), DeviceName: "Laptop"}); err == nil {
 			t.Error("RecordRemoteDeleted がエラーを返さなかった")
 		}
 	})
