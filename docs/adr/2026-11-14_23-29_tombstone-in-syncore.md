@@ -88,9 +88,15 @@ syncore と metasync は互いに import しない（2026-10-23_00-30_package-st
 
 ## 結果 / 影響
 
-（作業が終わったら書く）
+- tombstone の型・検証・確認・記録・配下の削除・PUT が syncore の 1 か所にそろった。`Config.ReadTombstone` と `DeleteGame` の `deleteRemote` の閉包、`Tombstone` 型の二重定義と cmd の詰め替えがなくなった
+- metasync から syncore への問い合わせは、取り込みのための `TombstoneReader` 1 つだけになった。代わりに、不正な tombstone のエラーを包み直す cmd のアダプタが残る。cmd にはテストを書かないので、本物の検証からアダプタを通って 8-N8 になる道は、metasync のテスト（偽物を使う）では検査されない
+- syncore のテストは閉包の偽物をやめ、メモリ上のリモートに本物の deleted.json を置くようになった。承認の後に tombstone が書かれる場面は、n 回目の GET の前に置くフックで作る
+- 8-M4 のために store に `IsRemoteDeleted` が一時的に残る。8-M5 の作業で外す
+- 「syncore = 2・4〜7 章」という章との対応は崩れ、syncore が 8 章の tombstone とゲームの削除も持つ
+- 見込みとの差: 差分は約 1,900 行（テスト +651 −559、本番 +301 −270、ADR・AGENTS.md など）で、見込みの約 900 行を超えた。syncore のテストを閉包の偽物から本物の deleted.json に書き換えたため、移すだけでなく既存のケースにも手が入った
 
 ## 更新履歴
 
 - 2026-11-14 23:29 作成
 - 2026-11-14 23:48 取り込みの確認は未登録のゲームを相手にし、DB の記録を読めないので、syncore にリモートだけを読む `ReadRemoteTombstone` を置くことにした。「不正」の状態は列挙型ではなく `metasync.ErrInvalidTombstone` で包んだエラーで表すことにした。検証の詳細をログに残せるため。store の `RemoteDeleted` が syncore の型を返すので、8-M4 のために `IsRemoteDeleted` を足すことにした。syncore が tombstone を書くので、`Config.DeviceName` が空なら削除を拒むことにした。置き換える過去の ADR に、game-delete と game-reupload の該当部分を足した
+- 2026-11-14 23:58 「結果 / 影響」を書いた。レビュー指摘の反映として、`Config.Remote` がなければ削除をロックの前に拒むことにした。移す前は閉包の nil で止まっていたが、移した後はバックアップの後で nil 参照になるため
