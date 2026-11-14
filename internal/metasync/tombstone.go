@@ -1,8 +1,9 @@
 // ゲームの tombstone（`games/{gameId}/deleted.json`、仕様書 8 章「ゲームの tombstone の確認」）の検証・確認と、
-// tombstone を見つけたときの DB への記録と配下の削除（8-T2）。
+// tombstone を見つけたときの DB への記録と配下の削除（8-T2）、ゲームの削除での tombstone の PUT（8-X5・8-X6）。
 package metasync
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -102,6 +103,35 @@ func (c *Core) HandleTombstone(ctx context.Context, gameID string) (Tombstone, b
 		t = remote
 	}
 	return t, true, c.deleteGameData(ctx, gameID)
+}
+
+// ErrDeleteIncomplete は、DeleteRemoteGame が deleted.json の PUT に成功した後で止まったことを表す。リモートでは削除済みに
+// 見え、記録と消し残りは次の HandleTombstone が片付ける（仕様書 8-X10）。
+var ErrDeleteIncomplete = errors.New("game is deleted on remote but the deletion is incomplete")
+
+type tombstoneJSON struct {
+	DeletedAt  string `json:"deletedAt"`
+	DeviceName string `json:"deviceName"`
+}
+
+// DeleteRemoteGame は、ゲームの tombstone を PUT し、DB に記録してから、配下の deleted.json 以外を削除する（仕様書 8-X5・8-X6）。
+// PUT の後の失敗は ErrDeleteIncomplete で包む。PUT の失敗は包まない。PUT が届いたかは分からないので（8-X9）、呼び出し側は
+// 削除されていないとも言えない。既に tombstone があるかは確かめないので、呼び出し側が先に確かめる（8-X11）。
+func (c *Core) DeleteRemoteGame(ctx context.Context, gameID string, t Tombstone) error {
+	body, err := json.Marshal(tombstoneJSON{DeletedAt: t.DeletedAt.UTC().Format(timeLayout), DeviceName: t.DeviceName})
+	if err != nil {
+		return fmt.Errorf("encode deleted.json: %w", err)
+	}
+	if err := c.cfg.Remote.Put(ctx, tombstoneKey(gameID), bytes.NewReader(body), int64(len(body))); err != nil {
+		return fmt.Errorf("put deleted.json: %w", err)
+	}
+	if err := c.cfg.Local.RecordRemoteDeleted(ctx, gameID, t); err != nil {
+		return fmt.Errorf("record remote deleted: %w: %w", ErrDeleteIncomplete, err)
+	}
+	if err := c.deleteGameData(ctx, gameID); err != nil {
+		return fmt.Errorf("%w: %w", ErrDeleteIncomplete, err)
+	}
+	return nil
 }
 
 // deleteGameData は、`games/{gameId}/` 配下の deleted.json 以外を削除する。
