@@ -131,15 +131,8 @@ func TestImport(t *testing.T) {
 
 	t.Run("9-L3 通常のプレイ履歴に同じ ID があるものは持たない", func(t *testing.T) {
 		s := openStore(t)
-		ctx := context.Background()
-		if err := s.CreateGame(ctx, store.NewGame{
-			ID: v3GameID, Title: "ゲーム", SaveFolderPath: "/save", ExePath: "/game.exe", CreatedAt: time.Now(),
-		}); err != nil {
-			t.Fatalf("CreateGame: %v", err)
-		}
-		if err := s.CreateSession(ctx, metasync.Session{ID: sessionA, GameID: v3GameID, PlayedAt: time.Now(), DurationSec: 61}); err != nil {
-			t.Fatalf("CreateSession: %v", err)
-		}
+		createGame(t, s, v3GameID, "ゲーム")
+		createSession(t, s, metasync.Session{ID: sessionA, GameID: v3GameID, PlayedAt: time.Now(), DurationSec: 61})
 
 		res, err := importString(t, s, validExport)
 		if err != nil {

@@ -32,6 +32,7 @@ const usage = `usage:
   cloudlaunch-cli game import --game <gameId> --save-dir <パス> --exe <パス> [--data-dir <dir>]
   cloudlaunch-cli session add --game <gameId> --duration <秒> [--played-at <RFC3339>] [--data-dir <dir>]
   cloudlaunch-cli legacy import [--data-dir <dir>] <旧版のエクスポートの JSON>
+  cloudlaunch-cli legacy link --game <gameId> --legacy-game <旧版の gameId> [--data-dir <dir>]
   cloudlaunch-cli status --game <gameId> [--data-dir <dir>]
   cloudlaunch-cli push --game <gameId> [--overwrite] [--data-dir <dir>]
   cloudlaunch-cli pull --game <gameId> [--overwrite] [--data-dir <dir>]
@@ -76,6 +77,9 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 	case "legacy":
 		if len(args) >= 2 && args[1] == "import" {
 			return legacyImport(ctx, args[2:], stdout)
+		}
+		if len(args) >= 2 && args[1] == "link" {
+			return legacyLink(ctx, args[2:], stdout)
 		}
 	case "status":
 		return status(ctx, args[1:], stdout)
@@ -337,8 +341,8 @@ func openRemote() (*objstore.S3, error) {
 }
 
 // openMeta は、syncore を使わない game remote・game import のために、メタ情報の同期だけをリモートと DB につなぐ。
-// 戻り値の close は呼び出し側が必ず呼ぶ。
-func openMeta(ctx context.Context, dataDir string) (*metasync.Core, func(), error) {
+// 返す store は、game import の後の照合（仕様書 9-K4）に使う。store は呼び出し側が必ず閉じる。
+func openMeta(ctx context.Context, dataDir string) (*metasync.Core, *store.Store, error) {
 	remote, err := openRemote()
 	if err != nil {
 		return nil, nil, err
@@ -347,7 +351,7 @@ func openMeta(ctx context.Context, dataDir string) (*metasync.Core, func(), erro
 	if err != nil {
 		return nil, nil, err
 	}
-	return newMeta(remote, s, newLogger(), dir), func() { _ = s.Close() }, nil
+	return newMeta(remote, s, newLogger(), dir), s, nil
 }
 
 func newMeta(remote *objstore.S3, s *store.Store, logger *slog.Logger, dataDir string) *metasync.Core {
@@ -366,11 +370,11 @@ func gameRemote(ctx context.Context, args []string, stdout io.Writer) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	meta, closeMeta, err := openMeta(ctx, *dataDir)
+	meta, s, err := openMeta(ctx, *dataDir)
 	if err != nil {
 		return err
 	}
-	defer closeMeta()
+	defer func() { _ = s.Close() }()
 
 	res, err := meta.RemoteGames(ctx)
 	if err != nil {
@@ -416,19 +420,83 @@ func gameImport(ctx context.Context, args []string, stdout io.Writer) error {
 	if err := checkAbsPaths(*saveDir, *exe); err != nil {
 		return err
 	}
-	meta, closeMeta, err := openMeta(ctx, *dataDir)
+	meta, s, err := openMeta(ctx, *dataDir)
 	if err != nil {
 		return err
 	}
-	defer closeMeta()
+	defer func() { _ = s.Close() }()
 
 	g, err := meta.ImportGame(ctx, *game, filepath.Clean(*saveDir), filepath.Clean(*exe))
 	if err != nil {
 		return err
 	}
 	// title はほかの PC が書いた値なので、game remote と同じく引用符つきで出す
-	_, err = fmt.Fprintf(stdout, "%s\t%q\n", g.ID, g.Title)
+	if _, err := fmt.Fprintf(stdout, "%s\t%q\n", g.ID, g.Title); err != nil {
+		return err
+	}
+	// 読み直した game.json のタイトルで照合する
+	return printLegacyMatch(ctx, s, g.ID, g.Title, *dataDir, stdout)
+}
+
+// printLegacyMatch は、登録したゲームと未紐付けの旧履歴の照合の結果を出す（仕様書 9-K1・9-K2）。CLI は対話をしないので、
+// 9-K1 の確認は、提案を見て legacy link を実行することで取る。旧版のタイトルは手で書き換えたエクスポートから来ることがあり、
+// タブや改行を含みうるので、引用符つきで出して列と行を崩さない。旧版の gameId も、読み込みでは空文字しか拒否していないので、
+// 同じく引用符つきで出す。コマンドの例は、引用符のまま貼り付けて実行できる。
+//
+// 照合に失敗しても、警告を stderr に出して nil を返す。登録は済んでいるので、失敗で終わると打ち直されて、--id を省いた
+// game add では同じゲームが 2 つ登録される。照合は legacy link で後からやり直せる。
+func printLegacyMatch(ctx context.Context, s *store.Store, gameID, title, dataDir string, stdout io.Writer) error {
+	m, err := legacy.Match(ctx, s, title)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "warning: ゲームは登録しましたが、旧版のプレイ履歴との照合に失敗しました:", err)
+		return nil
+	}
+	if len(m.Candidates) == 0 {
+		return nil
+	}
+	legacyGameID := "<旧版の gameId>"
+	var others []legacy.Game
+	if m.Suggested != nil {
+		legacyGameID = strconv.Quote(m.Suggested.ID)
+		if err := printLegacyGames(stdout, "旧版のプレイ履歴に、タイトルが一致するゲームがあります:", []legacy.Game{*m.Suggested}); err != nil {
+			return err
+		}
+		// 提案を断って別の旧ゲームを選べるよう、ほかの候補も出す
+		for _, c := range m.Candidates {
+			if c.ID != m.Suggested.ID {
+				others = append(others, c)
+			}
+		}
+		if err := printLegacyGames(stdout, "ほかの候補:", others); err != nil {
+			return err
+		}
+	} else if err := printLegacyGames(stdout, "旧版のプレイ履歴に、タイトルが一致するゲームがないか、複数あります。候補:", m.Candidates); err != nil {
+		return err
+	}
+	// 照合に使った DB と同じ DB で取り込むよう、--data-dir を引き継ぐ
+	dataDirFlag := ""
+	if dataDir != "" {
+		dataDirFlag = " --data-dir " + strconv.Quote(dataDir)
+	}
+	_, err = fmt.Fprintf(stdout, "取り込むには: cloudlaunch-cli legacy link%s --game %s --legacy-game %s\n",
+		dataDirFlag, gameID, legacyGameID)
 	return err
+}
+
+func printLegacyGames(w io.Writer, heading string, games []legacy.Game) error {
+	if len(games) == 0 {
+		return nil
+	}
+	if _, err := fmt.Fprintln(w, heading); err != nil {
+		return err
+	}
+	for _, g := range games {
+		if _, err := fmt.Fprintf(w, "%q\t%q\t%d\t%d\t%s\n",
+			g.ID, g.Title, g.Sessions, g.TotalSec, g.LastPlayedAt.Format(time.RFC3339Nano)); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // checkAbsPaths は、存在は確かめない。2 台目の PC では、まだセーブフォルダがないことがある（仕様書 4 章の「local なし」）。
@@ -557,8 +625,10 @@ func gameAdd(ctx context.Context, args []string, stdout io.Writer) error {
 	}); err != nil {
 		return err
 	}
-	_, err = fmt.Fprintln(stdout, gameID)
-	return err
+	if _, err := fmt.Fprintln(stdout, gameID); err != nil {
+		return err
+	}
+	return printLegacyMatch(ctx, s, gameID, *title, *dataDir, stdout)
 }
 
 // gameSetImage は、画像をキャッシュに入れて DB だけを書き換え、リモートには次の push・pull で画像 → game.json の順に
@@ -739,6 +809,39 @@ func legacyImport(ctx context.Context, args []string, stdout io.Writer) error {
 	}
 	_, err = fmt.Fprintf(stdout, "旧版のプレイ履歴を %d 件保持しました（既にある %d 件、games にない %d 件は保持していません）\n",
 		res.Added, res.Existing, res.Orphaned)
+	return err
+}
+
+// legacyLink は、game add・game import が出した提案や候補を見て実行することを、仕様書 9-K1 の確認とみなす。
+func legacyLink(ctx context.Context, args []string, stdout io.Writer) error {
+	fs := flag.NewFlagSet("legacy link", flag.ContinueOnError)
+	game := fs.String("game", "", "取り込み先のゲームの ID")
+	legacyGame := fs.String("legacy-game", "", "取り込む旧版のゲームの ID")
+	dataDir := fs.String("data-dir", "", "DB などを置くディレクトリ")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *game == "" || *legacyGame == "" {
+		return errors.New("--game and --legacy-game are required")
+	}
+
+	s, _, err := openStore(ctx, *dataDir)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = s.Close() }()
+
+	res, err := legacy.Link(ctx, s, *legacyGame, *game)
+	if err != nil {
+		return err
+	}
+	if res == (legacy.LinkResult{}) {
+		// 取り込み済みのときも、--legacy-game を打ち間違えたときも 0 件になる。取り込めたと誤解されないよう分けて出す
+		_, err = fmt.Fprintf(stdout, "旧版の gameId %q の未紐付けの旧履歴はありません（取り込み済みか、ID が違います）\n", *legacyGame)
+		return err
+	}
+	_, err = fmt.Fprintf(stdout, "旧版のプレイ履歴を %d 件取り込みました（既にある %d 件は取り込まずに旧履歴から消しました）\n",
+		res.Linked, res.Dropped)
 	return err
 }
 
