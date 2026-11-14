@@ -3,6 +3,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"time"
 
@@ -50,11 +51,16 @@ func (s *Store) AddLegacySessions(ctx context.Context, sessions []legacy.Session
 }
 
 func (s *Store) LegacyGames(ctx context.Context) ([]legacy.Game, error) {
-	// 集約に MAX を 1 つだけ使うと、SQLite は素の列（legacy_game_title）を MAX を取った行から返す。played_at は固定幅の
-	// 形で持つので、文字列の MAX が最も新しい行になる
+	// タイトルは played_at が最も新しい行から取る。MAX の素の列に任せると、played_at が同じ行が複数あるときにどの行から
+	// 来るかが決まらないので、id でも順を付けて 1 行に決める。played_at は固定幅の形で持つので、文字列の順が時刻の順になる
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT legacy_game_id, legacy_game_title, COUNT(*), SUM(duration_sec), MAX(played_at)
-		 FROM legacy_sessions GROUP BY legacy_game_id`)
+		`SELECT legacy_game_id, legacy_game_title, sessions, total_sec, played_at FROM (
+		   SELECT legacy_game_id, legacy_game_title, played_at,
+		     COUNT(*) OVER w_all AS sessions, SUM(duration_sec) OVER w_all AS total_sec,
+		     ROW_NUMBER() OVER (PARTITION BY legacy_game_id ORDER BY played_at DESC, id DESC) AS rn
+		   FROM legacy_sessions
+		   WINDOW w_all AS (PARTITION BY legacy_game_id)
+		 ) WHERE rn = 1`)
 	if err != nil {
 		return nil, fmt.Errorf("select legacy_sessions: %w", err)
 	}
@@ -93,6 +99,10 @@ func (s *Store) LinkLegacySessions(ctx context.Context, legacyGameID, gameID str
 		 ON CONFLICT (id) DO NOTHING`,
 		gameID, legacyGameID)
 	if err != nil {
+		// 外部キーの生のエラーでは gameId が原因だと分からないので、旧履歴がないときと同じ文言にそろえる
+		if regErr := checkRegistered(ctx, tx, gameID); regErr != nil {
+			return legacy.LinkResult{}, regErr
+		}
 		return legacy.LinkResult{}, fmt.Errorf("insert play_sessions: %w", err)
 	}
 	linked, err := inserted.RowsAffected()
@@ -107,17 +117,24 @@ func (s *Store) LinkLegacySessions(ctx context.Context, legacyGameID, gameID str
 	if err != nil {
 		return legacy.LinkResult{}, fmt.Errorf("delete legacy_sessions: %w", err)
 	}
-	var registered bool
-	if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM games WHERE id = ?)`, gameID).Scan(&registered); err != nil {
-		return legacy.LinkResult{}, fmt.Errorf("select games: %w", err)
-	}
-	if !registered {
-		return legacy.LinkResult{}, fmt.Errorf("game %s is not registered", gameID)
+	if err := checkRegistered(ctx, tx, gameID); err != nil {
+		return legacy.LinkResult{}, err
 	}
 	if err := tx.Commit(); err != nil {
 		return legacy.LinkResult{}, fmt.Errorf("commit: %w", err)
 	}
 	return legacy.LinkResult{Linked: int(linked), Dropped: int(removed - linked)}, nil
+}
+
+func checkRegistered(ctx context.Context, tx *sql.Tx, gameID string) error {
+	var registered bool
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM games WHERE id = ?)`, gameID).Scan(&registered); err != nil {
+		return fmt.Errorf("select games: %w", err)
+	}
+	if !registered {
+		return fmt.Errorf("game %s is not registered", gameID)
+	}
+	return nil
 }
 
 // LegacySessions は、played_at（同じなら id）の順に返す。

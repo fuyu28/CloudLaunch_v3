@@ -434,44 +434,62 @@ func gameImport(ctx context.Context, args []string, stdout io.Writer) error {
 	if _, err := fmt.Fprintf(stdout, "%s\t%q\n", g.ID, g.Title); err != nil {
 		return err
 	}
-	// 読み直した game.json のタイトルで照合する。登録した後なので、照合に失敗しても登録は取り消さない
+	// 読み直した game.json のタイトルで照合する
 	return printLegacyMatch(ctx, s, g.ID, g.Title, stdout)
 }
 
 // printLegacyMatch は、登録したゲームと未紐付けの旧履歴の照合の結果を出す（仕様書 9-K1・9-K2）。CLI は対話をしないので、
 // 9-K1 の確認は、提案を見て legacy link を実行することで取る。旧版のタイトルは手で書き換えたエクスポートから来ることがあり、
 // タブや改行を含みうるので、引用符つきで出して列と行を崩さない。
+//
+// 照合に失敗しても、警告を stderr に出して nil を返す。登録は済んでいるので、失敗で終わると打ち直されて、--id を省いた
+// game add では同じゲームが 2 つ登録される。照合は legacy link で後からやり直せる。
 func printLegacyMatch(ctx context.Context, s *store.Store, gameID, title string, stdout io.Writer) error {
 	m, err := legacy.Match(ctx, s, title)
 	if err != nil {
-		return err
+		fmt.Fprintln(os.Stderr, "warning: ゲームは登録しましたが、旧版のプレイ履歴との照合に失敗しました:", err)
+		return nil
 	}
 	if len(m.Candidates) == 0 {
 		return nil
 	}
-	var lines []legacy.Game
-	if m.Suggested != nil {
-		lines = []legacy.Game{*m.Suggested}
-		_, err = fmt.Fprintln(stdout, "旧版のプレイ履歴に、タイトルが一致するゲームがあります:")
-	} else {
-		lines = m.Candidates
-		_, err = fmt.Fprintln(stdout, "旧版のプレイ履歴に、タイトルが一致するゲームがないか、複数あります。候補:")
-	}
-	if err != nil {
-		return err
-	}
-	for _, lg := range lines {
-		if _, err := fmt.Fprintf(stdout, "%s\t%q\t%d\t%d\t%s\n",
-			lg.ID, lg.Title, lg.Sessions, lg.TotalSec, lg.LastPlayedAt.Format(time.RFC3339Nano)); err != nil {
-			return err
-		}
-	}
 	legacyGameID := "<旧版の gameId>"
+	var others []legacy.Game
 	if m.Suggested != nil {
 		legacyGameID = m.Suggested.ID
+		if err := printLegacyGames(stdout, "旧版のプレイ履歴に、タイトルが一致するゲームがあります:", []legacy.Game{*m.Suggested}); err != nil {
+			return err
+		}
+		// 提案を断って別の旧ゲームを選べるよう、ほかの候補も出す
+		for _, c := range m.Candidates {
+			if c.ID != m.Suggested.ID {
+				others = append(others, c)
+			}
+		}
+		if err := printLegacyGames(stdout, "ほかの候補:", others); err != nil {
+			return err
+		}
+	} else if err := printLegacyGames(stdout, "旧版のプレイ履歴に、タイトルが一致するゲームがないか、複数あります。候補:", m.Candidates); err != nil {
+		return err
 	}
 	_, err = fmt.Fprintf(stdout, "取り込むには: cloudlaunch-cli legacy link --game %s --legacy-game %s\n", gameID, legacyGameID)
 	return err
+}
+
+func printLegacyGames(w io.Writer, heading string, games []legacy.Game) error {
+	if len(games) == 0 {
+		return nil
+	}
+	if _, err := fmt.Fprintln(w, heading); err != nil {
+		return err
+	}
+	for _, g := range games {
+		if _, err := fmt.Fprintf(w, "%s\t%q\t%d\t%d\t%s\n",
+			g.ID, g.Title, g.Sessions, g.TotalSec, g.LastPlayedAt.Format(time.RFC3339Nano)); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // checkAbsPaths は、存在は確かめない。2 台目の PC では、まだセーブフォルダがないことがある（仕様書 4 章の「local なし」）。
@@ -808,6 +826,11 @@ func legacyLink(ctx context.Context, args []string, stdout io.Writer) error {
 
 	res, err := legacy.Link(ctx, s, *legacyGame, *game)
 	if err != nil {
+		return err
+	}
+	if res == (legacy.LinkResult{}) {
+		// 取り込み済みのときも、--legacy-game を打ち間違えたときも 0 件になる。取り込めたと誤解されないよう分けて出す
+		_, err = fmt.Fprintf(stdout, "旧版の gameId %s の未紐付けの旧履歴はありません（取り込み済みか、ID が違います）\n", *legacyGame)
 		return err
 	}
 	_, err = fmt.Fprintf(stdout, "旧版のプレイ履歴を %d 件取り込みました（既にある %d 件は取り込まずに旧履歴から消しました）\n",

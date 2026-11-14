@@ -199,6 +199,25 @@ func TestMatch(t *testing.T) {
 			t.Errorf("Match (-want +got):\n%s", diff)
 		}
 	})
+
+	t.Run("9章/照合/最も新しい行が複数あれば、ID が大きい行のタイトルを使う", func(t *testing.T) {
+		s := openStore(t)
+		// ID の大きい行を先に読み込み、読み込んだ順にはよらないことを確かめる
+		mustImport(t, s, exportJSON(gamesOf([2]string{legacyGameA, "ID が大きい行"}),
+			sessionJSON(sessionB, legacyGameA, "2026-10-01T00:00:00Z", 10)))
+		mustImport(t, s, exportJSON(gamesOf([2]string{legacyGameA, "ID が小さい行"}),
+			sessionJSON(sessionA, legacyGameA, "2026-10-01T00:00:00Z", 60)))
+
+		got, err := legacy.Match(ctx, s, "ID が大きい行")
+		if err != nil {
+			t.Fatalf("Match: %v", err)
+		}
+		matched := legacy.Game{ID: legacyGameA, Title: "ID が大きい行", Sessions: 2, TotalSec: 70, LastPlayedAt: utc(1, 0)}
+		want := legacy.MatchResult{Suggested: &matched, Candidates: []legacy.Game{matched}}
+		if diff := cmp.Diff(want, got); diff != "" {
+			t.Errorf("Match (-want +got):\n%s", diff)
+		}
+	})
 }
 
 func TestLink(t *testing.T) {
