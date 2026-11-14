@@ -4,10 +4,7 @@ package metasync
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"io/fs"
-	"os"
 	"time"
 )
 
@@ -48,12 +45,6 @@ func (c *Core) hasCachedImage(sha string) (bool, error) {
 	if sha == "" {
 		return false, nil
 	}
-	body, err := os.ReadFile(c.imagePath(sha))
-	if errors.Is(err, fs.ErrNotExist) {
-		return false, nil
-	}
-	if err != nil {
-		return false, fmt.Errorf("read cached image: %w", err)
-	}
-	return sha256Hex(body) == sha, nil
+	_, state, err := c.readCachedImage(sha)
+	return state == cacheValid, err
 }

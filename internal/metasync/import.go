@@ -7,17 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"regexp"
 	"slices"
 	"strings"
 
 	"golang.org/x/sync/errgroup"
 )
-
-const gamesPrefix = "games/"
-
-// gameIDPattern は、UUIDv7 の形（仕様書 2 章の HEAD と同じ）に当たる。
-var gameIDPattern = regexp.MustCompile(`^` + uuidV7Expr + `$`)
 
 var (
 	// errTombstonesNotSet は、tombstone の確認を飛ばして、削除済みのゲームを取り込む道を作らないためのもの
@@ -67,34 +61,34 @@ func (c *Core) RemoteGames(ctx context.Context) (RemoteGames, error) {
 		candidates = append(candidates, id)
 	}
 
-	// 並列に読むので、結果をゲームの位置に書き、最後に一覧の順（ListPrefixes の辞書順）で集める
-	infos := make([]GameInfo, len(candidates))
-	skipped := make([]error, len(candidates))
+	// 並列に読むので、結果をゲームの位置に書き、最後に一覧の順（ListPrefixes の辞書順）で集める。err は
+	// errRemoteDeleted か errUnimportable で包んだものだけを入れ、それ以外の失敗は一覧の全体をエラーにする
+	type read struct {
+		info GameInfo
+		err  error
+	}
+	reads := make([]read, len(candidates))
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(transferLimit)
 	for i, id := range candidates {
 		g.Go(func() error {
 			info, err := c.readRemoteGame(gctx, id)
-			switch {
-			case errors.Is(err, errRemoteDeleted), errors.Is(err, errUnimportable):
-				skipped[i] = err
-			case err != nil:
+			if err != nil && !errors.Is(err, errRemoteDeleted) && !errors.Is(err, errUnimportable) {
 				return err
-			default:
-				infos[i] = info
 			}
+			reads[i] = read{info, err}
 			return nil
 		})
 	}
 	if err := g.Wait(); err != nil {
 		return RemoteGames{}, err
 	}
-	for i, id := range candidates {
+	for i, r := range reads {
 		switch {
-		case skipped[i] == nil:
-			res.Games = append(res.Games, infos[i])
-		case errors.Is(skipped[i], errUnimportable):
-			c.cfg.Logger.Warn("skip remote game that cannot be imported", "gameId", id, "err", skipped[i])
+		case r.err == nil:
+			res.Games = append(res.Games, r.info)
+		case errors.Is(r.err, errUnimportable):
+			c.cfg.Logger.Warn("skip remote game that cannot be imported", "gameId", candidates[i], "err", r.err)
 			res.Skipped++
 		}
 	}

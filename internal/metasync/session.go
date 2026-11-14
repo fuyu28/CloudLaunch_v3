@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"io/fs"
 	"regexp"
 	"sort"
@@ -16,11 +15,6 @@ import (
 
 	"golang.org/x/sync/errgroup"
 )
-
-const transferLimit = 8
-
-// uuidV7Expr は、UUIDv7 の形（仕様書 2 章の HEAD と同じ）。セッション ID（8-S6）とゲーム ID（8-N6）の検証で同じ形を使う。
-const uuidV7Expr = `[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}`
 
 // sessionIDPattern は、UUIDv7 の形か、旧版の 32 桁の小文字 16 進に当たる（8-S6）。
 var sessionIDPattern = regexp.MustCompile(`^(?:` + uuidV7Expr + `|[0-9a-f]{32})$`)
@@ -34,14 +28,6 @@ type sessionJSON struct {
 	GameID      string `json:"gameId"`
 	PlayedAt    string `json:"playedAt"`
 	DurationSec int64  `json:"durationSec"`
-}
-
-func sessionsPrefix(gameID string) string {
-	return "games/" + gameID + "/sessions/"
-}
-
-func sessionKey(gameID, sessionID string) string {
-	return sessionsPrefix(gameID) + sessionID + ".json"
 }
 
 // remoteSessionIDs は、`{ID}.json` の形で ID が 8-S6 に合うキーだけを数える。`{ID}.deleted.json` は、
@@ -180,22 +166,17 @@ func (c *Core) downloadSessions(ctx context.Context, gameID string, local []Sess
 
 // getSession は、取り込めるセッションを返す。不正なものと、一覧の後に消えていたものは、ログに残して nil を返す。
 func (c *Core) getSession(ctx context.Context, gameID, id string) (*Session, error) {
-	r, err := c.cfg.Remote.Get(ctx, sessionKey(gameID, id))
+	body, err := c.getLimited(ctx, sessionKey(gameID, id), maxMetaJSONSize)
 	if errors.Is(err, fs.ErrNotExist) {
 		c.cfg.Logger.Info("skip remote session removed after listing", "gameId", gameID, "sessionId", id)
 		return nil, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("get session %s: %w", id, err)
-	}
-	defer func() { _ = r.Close() }()
-	body, err := io.ReadAll(io.LimitReader(r, maxSessionSize+1))
-	if err != nil {
-		return nil, fmt.Errorf("read session %s: %w", id, err)
+		return nil, err
 	}
 	s, err := parseSession(body, gameID, id)
-	if len(body) > maxSessionSize {
-		err = fmt.Errorf("8-V1: body exceeds %d bytes", maxSessionSize)
+	if len(body) > maxMetaJSONSize {
+		err = fmt.Errorf("8-V1: body exceeds %d bytes", maxMetaJSONSize)
 	}
 	if err != nil {
 		c.cfg.Logger.Warn("skip invalid remote session", "gameId", gameID, "sessionId", id, "err", err)
@@ -203,10 +184,6 @@ func (c *Core) getSession(ctx context.Context, gameID, id string) (*Session, err
 	}
 	return &s, nil
 }
-
-// maxSessionSize は、読むセッションの本文の上限。正しい本文は 200 バイトに満たないので、超えるものは壊れた
-// object として 8-V1 で扱い、同期のたびに大きな object を並列でメモリに読まないようにする。
-const maxSessionSize = 64 << 10
 
 // durationPattern は、0 以上の整数の JSON の表記に当たる。小数（1.5）・指数（1e3）・負の数は当たらない。
 var durationPattern = regexp.MustCompile(`^(?:0|[1-9][0-9]*)$`)
