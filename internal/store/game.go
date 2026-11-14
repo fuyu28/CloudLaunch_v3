@@ -115,6 +115,60 @@ func (s *Store) DeleteGame(ctx context.Context, gameID string) error {
 	return nil
 }
 
+// ReuploadGame は、リモートで削除されたゲームを g.ID のゲームとして上げ直す（仕様書 8-U4）。新しい行を作ってから古い行を
+// 消すので、どこで失敗してもロールバックで上げ直す前に戻る。Pull ジャーナルが残っていれば ErrPullInProgress を返す。
+// DeleteGame と同じく、ON DELETE RESTRICT の制約違反では呼び出し側が復旧を案内できないので、先に確かめる。ゲームの
+// tombstone の記録もトランザクションの中で確かめ、ロックを握らない登録の解除と重なっても、消えた行を移さない。
+func (s *Store) ReuploadGame(ctx context.Context, oldID string, g metasync.GameInfo) error {
+	if err := validateGameInfo(g); err != nil {
+		return err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var pulls int
+	if err := tx.QueryRowContext(ctx,
+		`SELECT count(*) FROM pull_operations WHERE game_id = ?`, oldID).Scan(&pulls); err != nil {
+		return fmt.Errorf("select pull_operations: %w", err)
+	}
+	if pulls > 0 {
+		return fmt.Errorf("reupload game %s: %w", oldID, ErrPullInProgress)
+	}
+
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO games (id, title, brand, image_sha256, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
+		g.ID, g.Title, nullIfEmpty(g.Brand), nullIfEmpty(g.ImageSha256), formatTime(g.CreatedAt), formatTime(g.UpdatedAt),
+	); err != nil {
+		return fmt.Errorf("insert games: %w", err)
+	}
+	res, err := tx.ExecContext(ctx,
+		`INSERT INTO game_locals (game_id, save_folder_path, exe_path)
+		 SELECT ?, save_folder_path, exe_path FROM game_locals WHERE game_id = ? AND remote_deleted_at IS NOT NULL`,
+		g.ID, oldID)
+	if err != nil {
+		return fmt.Errorf("insert game_locals: %w", err)
+	}
+	if n, err := res.RowsAffected(); err != nil {
+		return fmt.Errorf("insert game_locals: %w", err)
+	} else if n == 0 {
+		return fmt.Errorf("game %s: %w", oldID, metasync.ErrNotRemoteDeleted)
+	}
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE play_sessions SET game_id = ? WHERE game_id = ?`, g.ID, oldID); err != nil {
+		return fmt.Errorf("update play_sessions: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM games WHERE id = ?`, oldID); err != nil {
+		return fmt.Errorf("delete games: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit: %w", err)
+	}
+	return nil
+}
+
 func (s *Store) GameIDs(ctx context.Context) ([]string, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT id FROM games ORDER BY id`)
 	if err != nil {

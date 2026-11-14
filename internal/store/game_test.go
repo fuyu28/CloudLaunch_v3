@@ -177,3 +177,102 @@ func TestDeleteGame(t *testing.T) {
 		}
 	})
 }
+
+func TestReuploadGame(t *testing.T) {
+	const newGameID = "0192d4e8-0000-7000-8000-0000000000b1"
+	now := time.Date(2026, 11, 10, 0, 0, 0, 0, time.UTC)
+
+	// snapshot は、上げ直しが書き換える表の全行を、表ごとに文字列にして返す。
+	snapshot := func(t *testing.T, s *Store) map[string][]string {
+		t.Helper()
+		got := map[string][]string{}
+		for table, query := range map[string]string{
+			"games":         `SELECT id || '|' || title || '|' || coalesce(image_sha256, '') || '|' || updated_at FROM games ORDER BY id`,
+			"game_locals":   `SELECT game_id || '|' || coalesce(base_manifest_hash, '') || '|' || coalesce(remote_deleted_at, '') FROM game_locals ORDER BY game_id`,
+			"play_sessions": `SELECT id || '|' || game_id FROM play_sessions ORDER BY id`,
+		} {
+			rows, err := s.db.Query(query)
+			if err != nil {
+				t.Fatalf("%s: %v", query, err)
+			}
+			for rows.Next() {
+				var row string
+				if err := rows.Scan(&row); err != nil {
+					t.Fatalf("scan %s: %v", table, err)
+				}
+				got[table] = append(got[table], row)
+			}
+			if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+				t.Fatalf("%s: %v", query, err)
+			}
+		}
+		return got
+	}
+
+	// setup は、プレイ履歴と base を持つゲームを登録する。recordDeleted なら、ゲームの tombstone の記録も書く。
+	setup := func(t *testing.T, recordDeleted bool) *Store {
+		t.Helper()
+		s, _ := openTemp(t)
+		ctx := context.Background()
+		createTestGame(t, s)
+		if err := s.CreateSession(ctx, metasync.Session{
+			ID: "0192d4e8-0000-7000-8000-0000000000c1", GameID: testGameID, PlayedAt: now, DurationSec: 60,
+		}); err != nil {
+			t.Fatalf("CreateSession: %v", err)
+		}
+		if err := s.SetBase(ctx, testGameID, "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"); err != nil {
+			t.Fatalf("SetBase: %v", err)
+		}
+		if recordDeleted {
+			if err := s.RecordRemoteDeleted(ctx, testGameID, metasync.Tombstone{DeletedAt: now, DeviceName: "Laptop"}); err != nil {
+				t.Fatalf("RecordRemoteDeleted: %v", err)
+			}
+		}
+		return s
+	}
+	newGame := metasync.GameInfo{ID: newGameID, Title: "Game", CreatedAt: now, UpdatedAt: now}
+
+	t.Run("8-U4 途中で失敗したら、DB は上げ直す前のままになる", func(t *testing.T) {
+		s := setup(t, true)
+		// 最後の手順の、古いゲーム情報の削除で失敗させる
+		if _, err := s.db.Exec(`CREATE TRIGGER fail_delete_games BEFORE DELETE ON games BEGIN SELECT RAISE(ABORT, 'injected'); END`); err != nil {
+			t.Fatalf("create trigger: %v", err)
+		}
+		before := snapshot(t, s)
+
+		if err := s.ReuploadGame(context.Background(), testGameID, newGame); err == nil {
+			t.Fatal("ReuploadGame error = nil, want error")
+		}
+		if diff := cmp.Diff(before, snapshot(t, s)); diff != "" {
+			t.Errorf("DB (-before +after):\n%s", diff)
+		}
+	})
+
+	t.Run("8-U3 Pull ジャーナルが残っていれば、何も変えずに ErrPullInProgress を返す", func(t *testing.T) {
+		s := setup(t, true)
+		if err := s.InsertPullOperation(context.Background(), "0192d4e8-0000-7000-8000-0000000000d1", testGameID,
+			"/save", "/.cloudlaunch-stage-x", "/.cloudlaunch-old-x", now); err != nil {
+			t.Fatalf("InsertPullOperation: %v", err)
+		}
+		before := snapshot(t, s)
+
+		if err := s.ReuploadGame(context.Background(), testGameID, newGame); !errors.Is(err, ErrPullInProgress) {
+			t.Fatalf("ReuploadGame error = %v, want ErrPullInProgress", err)
+		}
+		if diff := cmp.Diff(before, snapshot(t, s)); diff != "" {
+			t.Errorf("DB (-before +after):\n%s", diff)
+		}
+	})
+
+	t.Run("8章/上げ直し/ゲームの tombstone の記録がなければ、何も変えずに ErrNotRemoteDeleted を返す", func(t *testing.T) {
+		s := setup(t, false)
+		before := snapshot(t, s)
+
+		if err := s.ReuploadGame(context.Background(), testGameID, newGame); !errors.Is(err, metasync.ErrNotRemoteDeleted) {
+			t.Fatalf("ReuploadGame error = %v, want ErrNotRemoteDeleted", err)
+		}
+		if diff := cmp.Diff(before, snapshot(t, s)); diff != "" {
+			t.Errorf("DB (-before +after):\n%s", diff)
+		}
+	})
+}
