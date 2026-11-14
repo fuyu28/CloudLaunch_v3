@@ -24,6 +24,13 @@ type Store interface {
 	// AddLegacySessions は、1 つのトランザクションで未紐付けの旧履歴に入れ、入れた件数を返す。未紐付けの旧履歴か
 	// 通常のプレイ履歴に同じ ID があるものは入れない（仕様書 9-L3）
 	AddLegacySessions(ctx context.Context, sessions []Session) (int, error)
+	// LegacyGames は、未紐付けの旧履歴を旧版の gameId でまとめて返す。順は問わない。Title は played_at が最も新しい行の
+	// タイトルにする
+	LegacyGames(ctx context.Context) ([]Game, error)
+	// LinkLegacySessions は、1 つのトランザクションで、legacyGameID の旧履歴を gameID の通常のプレイ履歴にし、旧履歴から
+	// 消す。通常のプレイ履歴に同じ ID があるものは取り込まずに消す（仕様書 9-K3）。gameID が登録されていなければ、
+	// 何も変えずにエラーを返す
+	LinkLegacySessions(ctx context.Context, legacyGameID, gameID string) (LinkResult, error)
 }
 
 type Result struct {
