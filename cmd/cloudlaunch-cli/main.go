@@ -30,6 +30,7 @@ const usage = `usage:
   cloudlaunch-cli game set-image --game <gameId> (--file <パス> | --clear) [--data-dir <dir>]
   cloudlaunch-cli game remote [--data-dir <dir>]
   cloudlaunch-cli game import --game <gameId> --save-dir <パス> --exe <パス> [--data-dir <dir>]
+  cloudlaunch-cli game delete --game <gameId> [--remote --confirm-title <タイトル>] [--data-dir <dir>]
   cloudlaunch-cli session add --game <gameId> --duration <秒> [--played-at <RFC3339>] [--data-dir <dir>]
   cloudlaunch-cli legacy import [--data-dir <dir>] <旧版のエクスポートの JSON>
   cloudlaunch-cli legacy link --game <gameId> --legacy-game <旧版の gameId> [--data-dir <dir>]
@@ -38,7 +39,7 @@ const usage = `usage:
   cloudlaunch-cli pull --game <gameId> [--overwrite] [--data-dir <dir>]
   cloudlaunch-cli recover [--data-dir <dir>]
 
-status・push・pull・game remote・game import はリモートの接続先と鍵を環境変数から読む:
+status・push・pull・game remote・game import・game delete --remote はリモートの接続先と鍵を環境変数から読む:
   CLOUDLAUNCH_S3_ENDPOINT, CLOUDLAUNCH_S3_BUCKET, CLOUDLAUNCH_S3_ACCESS_KEY_ID, CLOUDLAUNCH_S3_SECRET_ACCESS_KEY,
   CLOUDLAUNCH_S3_REGION（省くと auto）`
 
@@ -69,6 +70,9 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 		}
 		if len(args) >= 2 && args[1] == "import" {
 			return gameImport(ctx, args[2:], stdout)
+		}
+		if len(args) >= 2 && args[1] == "delete" {
+			return gameDelete(ctx, args[2:], stdout)
 		}
 	case "session":
 		if len(args) >= 2 && args[1] == "add" {
@@ -324,11 +328,13 @@ func printTransferred(w io.Writer, plan syncore.Plan, overwrite bool, done strin
 
 // cores は、リモートと DB につないだ同期コアとメタ情報の同期。close は呼び出し側が必ず呼ぶ。
 type cores struct {
-	sync   *syncore.Core
-	meta   *metasync.Core
-	logger *slog.Logger
-	gameID string
-	close  func()
+	sync       *syncore.Core
+	meta       *metasync.Core
+	store      *store.Store
+	logger     *slog.Logger
+	gameID     string
+	deviceName string
+	close      func()
 }
 
 // openCore は --game と --data-dir を読み、リモートと DB につないだコアを返す。overwrite が nil でなければ、
@@ -346,7 +352,10 @@ func openCore(ctx context.Context, name string, args []string, overwrite *bool) 
 	if *game == "" {
 		return cores{}, errors.New("--game is required")
 	}
+	return connectCores(ctx, *game, *dataDir)
+}
 
+func connectCores(ctx context.Context, gameID, dataDir string) (cores, error) {
 	remote, err := openRemote()
 	if err != nil {
 		return cores{}, err
@@ -356,7 +365,7 @@ func openCore(ctx context.Context, name string, args []string, overwrite *bool) 
 	if err != nil {
 		return cores{}, fmt.Errorf("hostname: %w", err)
 	}
-	s, dir, err := openStore(ctx, *dataDir)
+	s, dir, err := openStore(ctx, dataDir)
 	if err != nil {
 		return cores{}, err
 	}
@@ -371,11 +380,13 @@ func openCore(ctx context.Context, name string, args []string, overwrite *bool) 
 		return syncore.Tombstone(t), ok, err
 	}
 	return cores{
-		sync:   syncore.New(cfg),
-		meta:   meta,
-		logger: cfg.Logger,
-		gameID: *game,
-		close:  func() { _ = s.Close() },
+		sync:       syncore.New(cfg),
+		meta:       meta,
+		store:      s,
+		logger:     cfg.Logger,
+		gameID:     gameID,
+		deviceName: host,
+		close:      func() { _ = s.Close() },
 	}, nil
 }
 
@@ -487,6 +498,92 @@ func gameImport(ctx context.Context, args []string, stdout io.Writer) error {
 	return printLegacyMatch(ctx, s, g.ID, g.Title, *dataDir, stdout)
 }
 
+// gameDelete は、--remote がなければ登録だけを解除し、リモートには接続しない（仕様書 8-X1）。--remote なら、--confirm-title を
+// 強い確認（8-X4）とみなし、DB のタイトルと完全に一致しなければ、何も変えずに拒否する。gameId の打ち間違いで別のゲームを
+// 消さないため。
+func gameDelete(ctx context.Context, args []string, stdout io.Writer) error {
+	fs := flag.NewFlagSet("game delete", flag.ContinueOnError)
+	game := fs.String("game", "", "削除するゲームの ID")
+	remote := fs.Bool("remote", false, "リモートのデータも削除する")
+	confirmTitle := fs.String("confirm-title", "", "--remote で、確認のために打つゲームのタイトル")
+	dataDir := fs.String("data-dir", "", "DB などを置くディレクトリ")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *game == "" {
+		return errors.New("--game is required")
+	}
+	confirmGiven := false
+	fs.Visit(func(f *flag.Flag) { confirmGiven = confirmGiven || f.Name == "confirm-title" })
+	if !*remote {
+		if confirmGiven {
+			return errors.New("--confirm-title is only for --remote")
+		}
+		return unregisterGame(ctx, *game, *dataDir, stdout)
+	}
+	if !confirmGiven {
+		return errors.New("--remote requires --confirm-title")
+	}
+
+	c, err := connectCores(ctx, *game, *dataDir)
+	if err != nil {
+		return err
+	}
+	defer c.close()
+	info, err := c.store.GameInfo(ctx, c.gameID)
+	if err != nil {
+		return err
+	}
+	if info.Title != *confirmTitle {
+		return fmt.Errorf("--confirm-title がゲームのタイトル %q と一致しないので、削除しません", info.Title)
+	}
+
+	res, err := c.sync.DeleteGame(ctx, c.gameID, func(ctx context.Context) error {
+		return c.meta.DeleteRemoteGame(ctx, c.gameID, metasync.Tombstone{DeletedAt: time.Now(), DeviceName: c.deviceName})
+	})
+	if err != nil {
+		return explainDeleteError(err, c.gameID, *dataDir)
+	}
+	backup := "セーブフォルダがないので、バックアップは作っていません"
+	if res.BackupPath != "" {
+		backup = "バックアップは " + res.BackupPath + " にあります"
+	}
+	_, err = fmt.Fprintf(stdout, "リモートのデータを削除し、この PC の登録を解除しました（セーブフォルダはそのままです。%s）\n", backup)
+	return err
+}
+
+func unregisterGame(ctx context.Context, gameID, dataDir string, stdout io.Writer) error {
+	s, _, err := openStore(ctx, dataDir)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = s.Close() }()
+	if err := s.DeleteGame(ctx, gameID); err != nil {
+		return explainDeleteError(err, gameID, dataDir)
+	}
+	_, err = fmt.Fprintln(stdout, "この PC の登録を解除しました（セーブフォルダとリモートはそのままです）")
+	return err
+}
+
+// explainDeleteError は、ゲームの削除が止まった場所（仕様書 8-X8〜8-X10）ごとに、利用者がすることを添える。
+func explainDeleteError(err error, gameID, dataDir string) error {
+	unregister := "cloudlaunch-cli game delete" + dataDirFlag(dataDir) + " --game " + gameID
+	recoverCmd := "cloudlaunch-cli recover" + dataDirFlag(dataDir)
+	switch {
+	case errors.Is(err, syncore.ErrUnregisterFailed):
+		return fmt.Errorf("リモートのデータは削除しましたが、この PC の登録を解除できませんでした。%s で解除してください: %w", unregister, err)
+	case errors.Is(err, metasync.ErrDeleteIncomplete):
+		return fmt.Errorf("リモートでは削除済みになりましたが、途中で止まりました。消し残りは次の push・pull で削除されます。この PC の登録は残っているので、%s で解除してください: %w", unregister, err)
+	case errors.Is(err, syncore.ErrRemoteDeletionFailed):
+		return fmt.Errorf("リモートの削除に失敗しました。削除が届いたかは分かりません。status で確かめてから、もう一度実行してください: %w", err)
+	case errors.Is(err, syncore.ErrRemoteDeleted):
+		return fmt.Errorf("このゲームはリモートで削除済みです。この PC の登録を解除するときは %s を実行してください: %w", unregister, err)
+	case errors.Is(err, syncore.ErrPullPending), errors.Is(err, store.ErrPullInProgress):
+		return fmt.Errorf("途中で止まった Pull が残っています。%s を実行してから、もう一度実行してください: %w", recoverCmd, err)
+	}
+	return explainSyncError(err)
+}
+
 // printLegacyMatch は、登録したゲームと未紐付けの旧履歴の照合の結果を出す（仕様書 9-K1・9-K2）。CLI は対話をしないので、
 // 9-K1 の確認は、提案を見て legacy link を実行することで取る。旧版のタイトルは手で書き換えたエクスポートから来ることがあり、
 // タブや改行を含みうるので、引用符つきで出して列と行を崩さない。旧版の gameId も、読み込みでは空文字しか拒否していないので、
@@ -523,13 +620,17 @@ func printLegacyMatch(ctx context.Context, s *store.Store, gameID, title, dataDi
 		return err
 	}
 	// 照合に使った DB と同じ DB で取り込むよう、--data-dir を引き継ぐ
-	dataDirFlag := ""
-	if dataDir != "" {
-		dataDirFlag = " --data-dir " + strconv.Quote(dataDir)
-	}
 	_, err = fmt.Fprintf(stdout, "取り込むには: cloudlaunch-cli legacy link%s --game %s --legacy-game %s\n",
-		dataDirFlag, gameID, legacyGameID)
+		dataDirFlag(dataDir), gameID, legacyGameID)
 	return err
+}
+
+// dataDirFlag は、案内するコマンドに --data-dir を引用して引き継ぐ。落とすと、既定の DB を相手に実行されてしまう。
+func dataDirFlag(dataDir string) string {
+	if dataDir == "" {
+		return ""
+	}
+	return " --data-dir " + strconv.Quote(dataDir)
 }
 
 func printLegacyGames(w io.Writer, heading string, games []legacy.Game) error {

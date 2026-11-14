@@ -41,6 +41,7 @@ type LocalStore interface {
 	InsertPullOperation(ctx context.Context, opID, gameID, livePath, stagePath, oldPath string, createdAt time.Time) error
 	DeletePullOperation(ctx context.Context, opID string) error
 	ListPullOperations(ctx context.Context) ([]PullOperation, error)
+	DeleteGame(ctx context.Context, gameID string) error
 }
 
 type Config struct {

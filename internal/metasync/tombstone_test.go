@@ -2,6 +2,7 @@ package metasync_test
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -282,4 +283,88 @@ func TestHandleTombstone(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestDeleteRemoteGame(t *testing.T) {
+	ctx := context.Background()
+	tombstoneKey := remoteGameKey(testGameID, "deleted.json")
+	afterDelete := []string{
+		tombstoneKey,
+		remoteGameKey(remoteGameA, "HEAD"),
+		remoteGameKey(remoteGameA, "game.json"),
+	}
+
+	t.Run("8-X5 deleted.json を PUT し、DB にゲームの tombstone を記録する", func(t *testing.T) {
+		e := newBareEnv(t)
+		e.putGameData(t)
+
+		if err := e.core.DeleteRemoteGame(ctx, testGameID, remoteTombstone); err != nil {
+			t.Fatalf("DeleteRemoteGame: %v", err)
+		}
+		if body := e.remoteBody(t, tombstoneKey); body != deletedJSON {
+			t.Errorf("deleted.json = %s, want %s", body, deletedJSON)
+		}
+		rec, recOK := e.recorded(t)
+		if !recOK {
+			t.Fatal("DB に記録しなかった")
+		}
+		if diff := cmp.Diff(remoteTombstone, rec); diff != "" {
+			t.Errorf("記録 (-want +got):\n%s", diff)
+		}
+	})
+
+	t.Run("8-X6 配下のゲームの tombstone 以外を削除し、ほかのゲームのキーは残す", func(t *testing.T) {
+		e := newBareEnv(t)
+		e.putGameData(t)
+
+		if err := e.core.DeleteRemoteGame(ctx, testGameID, remoteTombstone); err != nil {
+			t.Fatalf("DeleteRemoteGame: %v", err)
+		}
+		if diff := cmp.Diff(afterDelete, e.remoteKeys(t)); diff != "" {
+			t.Errorf("残ったキー (-want +got):\n%s", diff)
+		}
+	})
+
+	t.Run("8-X9 deleted.json の PUT に失敗したら、記録も削除もしない", func(t *testing.T) {
+		e := newBareEnv(t)
+		e.putGameData(t)
+		before := e.remoteKeys(t)
+		e.failOn(memstore.OpPut, tombstoneKey)
+
+		err := e.core.DeleteRemoteGame(ctx, testGameID, remoteTombstone)
+		if !errors.Is(err, errInjected) || errors.Is(err, metasync.ErrDeleteIncomplete) {
+			t.Fatalf("err = %v, want ErrDeleteIncomplete でない元のエラー", err)
+		}
+		if _, rec := e.recorded(t); rec {
+			t.Error("DB に記録した")
+		}
+		if diff := cmp.Diff(before, e.remoteKeys(t)); diff != "" {
+			t.Errorf("リモートのキーが変わった (-before +after):\n%s", diff)
+		}
+	})
+
+	t.Run("8-X10 PUT の後で配下の削除に失敗したら、記録を残し、次の tombstone の確認で消し残りを削除する", func(t *testing.T) {
+		e := newBareEnv(t)
+		e.putGameData(t)
+		record := e.remote.Before
+		e.failOn(memstore.OpDelete, remoteGameKey(testGameID, "game.json"))
+
+		err := e.core.DeleteRemoteGame(ctx, testGameID, remoteTombstone)
+		if !errors.Is(err, metasync.ErrDeleteIncomplete) || !errors.Is(err, errInjected) {
+			t.Fatalf("err = %v, want ErrDeleteIncomplete で包んだ元のエラー", err)
+		}
+		if _, rec := e.recorded(t); !rec {
+			t.Error("DB に記録しなかった")
+		}
+		if body := e.remoteBody(t, tombstoneKey); body != deletedJSON {
+			t.Errorf("deleted.json = %s, want %s", body, deletedJSON)
+		}
+
+		e.remote.Before = record
+		got, ok, err := e.core.HandleTombstone(ctx, testGameID)
+		assertTombstone(t, got, ok, err, remoteTombstone, true)
+		if diff := cmp.Diff(afterDelete, e.remoteKeys(t)); diff != "" {
+			t.Errorf("残ったキー (-want +got):\n%s", diff)
+		}
+	})
 }

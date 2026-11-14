@@ -1,9 +1,10 @@
-// ゲームの登録（games と game_locals への書き込み）と、同期コアが使うゲームのローカル情報の読み込みを行う。
+// ゲームの登録（games と game_locals への書き込み）と登録の解除、同期コアが使うゲームのローカル情報の読み込みを行う。
 package store
 
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
@@ -69,6 +70,44 @@ func (s *Store) RegisterGame(ctx context.Context, g metasync.GameInfo, saveFolde
 		`INSERT INTO game_locals (game_id, save_folder_path, exe_path) VALUES (?, ?, ?)`,
 		g.ID, saveFolderPath, exePath); err != nil {
 		return fmt.Errorf("insert game_locals: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit: %w", err)
+	}
+	return nil
+}
+
+// ErrPullInProgress は、Pull ジャーナルが残っていて、ゲームの登録を解除できないことを表す。復旧で片付けてから解除する。
+var ErrPullInProgress = errors.New("pull journal remains for the game")
+
+// DeleteGame は、ゲームの登録を解除する（仕様書 8-X1）。ゲーム情報の行を消し、ON DELETE CASCADE でローカル情報とプレイ履歴も
+// 消す。Pull ジャーナルが残っていれば ErrPullInProgress を返す。pull_operations の ON DELETE RESTRICT も止めるが、
+// 制約違反のエラーでは呼び出し側が復旧を案内できないので、同じトランザクションで先に確かめる。
+func (s *Store) DeleteGame(ctx context.Context, gameID string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var pulls int
+	if err := tx.QueryRowContext(ctx,
+		`SELECT count(*) FROM pull_operations WHERE game_id = ?`, gameID).Scan(&pulls); err != nil {
+		return fmt.Errorf("select pull_operations: %w", err)
+	}
+	if pulls > 0 {
+		return fmt.Errorf("delete game %s: %w", gameID, ErrPullInProgress)
+	}
+	res, err := tx.ExecContext(ctx, `DELETE FROM games WHERE id = ?`, gameID)
+	if err != nil {
+		return fmt.Errorf("delete games: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("delete games: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("delete games: game %s: %w", gameID, sql.ErrNoRows)
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit: %w", err)

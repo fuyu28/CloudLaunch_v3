@@ -68,21 +68,36 @@ func (c *Core) moveToBackup(ctx context.Context, gameID, old, name string) error
 	if _, err := os.Lstat(old); errors.Is(err, fs.ErrNotExist) {
 		return renameErr
 	}
+	if err := c.copyToBackup(ctx, dir, old, name); err != nil {
+		return errors.Join(renameErr, err)
+	}
+	return removeOld(old)
+}
+
+// copyToBackup は src を dir/{name} にコピーする。.partial- の名前にコピーしてから最終の名前にリネームするので、
+// 最終の名前があれば中身は完全である。dir は呼び出し側が作る。
+func (c *Core) copyToBackup(ctx context.Context, dir, src, name string) error {
 	partial := filepath.Join(dir, ".partial-"+name)
 	if err := os.RemoveAll(partial); err != nil {
-		return errors.Join(renameErr, fmt.Errorf("remove partial backup: %w", err))
+		return fmt.Errorf("remove partial backup: %w", err)
 	}
 	// 途中までのコピーは 3 個に保つ処理の対象にならず、消さないと残り続ける
-	if err := c.copyTree(ctx, old, partial); err != nil {
+	if err := c.copyTree(ctx, src, partial); err != nil {
 		if rmErr := os.RemoveAll(partial); rmErr != nil {
 			err = errors.Join(err, fmt.Errorf("remove partial backup: %w", rmErr))
 		}
-		return errors.Join(renameErr, fmt.Errorf("copy to backup: %w", err))
+		return fmt.Errorf("copy to backup: %w", err)
 	}
-	if err := c.cfg.Rename(partial, dst); err != nil {
-		return errors.Join(renameErr, fmt.Errorf("rename partial backup: %w", err))
+	if err := c.cfg.Rename(partial, filepath.Join(dir, name)); err != nil {
+		// 削除のバックアップは呼ぶたびに名前を振るので、残すと次の呼び出しでも消されない。リネームが済んでから書き出しに
+		// 失敗したときは partial がもうないので、消しても最終の名前のコピーは残る
+		err = fmt.Errorf("rename partial backup: %w", err)
+		if rmErr := os.RemoveAll(partial); rmErr != nil {
+			err = errors.Join(err, fmt.Errorf("remove partial backup: %w", rmErr))
+		}
+		return err
 	}
-	return removeOld(old)
+	return nil
 }
 
 func removeOld(old string) error {
