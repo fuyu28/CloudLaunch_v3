@@ -435,16 +435,17 @@ func gameImport(ctx context.Context, args []string, stdout io.Writer) error {
 		return err
 	}
 	// 読み直した game.json のタイトルで照合する
-	return printLegacyMatch(ctx, s, g.ID, g.Title, stdout)
+	return printLegacyMatch(ctx, s, g.ID, g.Title, *dataDir, stdout)
 }
 
 // printLegacyMatch は、登録したゲームと未紐付けの旧履歴の照合の結果を出す（仕様書 9-K1・9-K2）。CLI は対話をしないので、
 // 9-K1 の確認は、提案を見て legacy link を実行することで取る。旧版のタイトルは手で書き換えたエクスポートから来ることがあり、
-// タブや改行を含みうるので、引用符つきで出して列と行を崩さない。
+// タブや改行を含みうるので、引用符つきで出して列と行を崩さない。旧版の gameId も、読み込みでは空文字しか拒否していないので、
+// 同じく引用符つきで出す。コマンドの例は、引用符のまま貼り付けて実行できる。
 //
 // 照合に失敗しても、警告を stderr に出して nil を返す。登録は済んでいるので、失敗で終わると打ち直されて、--id を省いた
 // game add では同じゲームが 2 つ登録される。照合は legacy link で後からやり直せる。
-func printLegacyMatch(ctx context.Context, s *store.Store, gameID, title string, stdout io.Writer) error {
+func printLegacyMatch(ctx context.Context, s *store.Store, gameID, title, dataDir string, stdout io.Writer) error {
 	m, err := legacy.Match(ctx, s, title)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "warning: ゲームは登録しましたが、旧版のプレイ履歴との照合に失敗しました:", err)
@@ -456,7 +457,7 @@ func printLegacyMatch(ctx context.Context, s *store.Store, gameID, title string,
 	legacyGameID := "<旧版の gameId>"
 	var others []legacy.Game
 	if m.Suggested != nil {
-		legacyGameID = m.Suggested.ID
+		legacyGameID = strconv.Quote(m.Suggested.ID)
 		if err := printLegacyGames(stdout, "旧版のプレイ履歴に、タイトルが一致するゲームがあります:", []legacy.Game{*m.Suggested}); err != nil {
 			return err
 		}
@@ -472,7 +473,13 @@ func printLegacyMatch(ctx context.Context, s *store.Store, gameID, title string,
 	} else if err := printLegacyGames(stdout, "旧版のプレイ履歴に、タイトルが一致するゲームがないか、複数あります。候補:", m.Candidates); err != nil {
 		return err
 	}
-	_, err = fmt.Fprintf(stdout, "取り込むには: cloudlaunch-cli legacy link --game %s --legacy-game %s\n", gameID, legacyGameID)
+	// 照合に使った DB と同じ DB で取り込むよう、--data-dir を引き継ぐ
+	dataDirFlag := ""
+	if dataDir != "" {
+		dataDirFlag = " --data-dir " + strconv.Quote(dataDir)
+	}
+	_, err = fmt.Fprintf(stdout, "取り込むには: cloudlaunch-cli legacy link%s --game %s --legacy-game %s\n",
+		dataDirFlag, gameID, legacyGameID)
 	return err
 }
 
@@ -484,7 +491,7 @@ func printLegacyGames(w io.Writer, heading string, games []legacy.Game) error {
 		return err
 	}
 	for _, g := range games {
-		if _, err := fmt.Fprintf(w, "%s\t%q\t%d\t%d\t%s\n",
+		if _, err := fmt.Fprintf(w, "%q\t%q\t%d\t%d\t%s\n",
 			g.ID, g.Title, g.Sessions, g.TotalSec, g.LastPlayedAt.Format(time.RFC3339Nano)); err != nil {
 			return err
 		}
@@ -621,7 +628,7 @@ func gameAdd(ctx context.Context, args []string, stdout io.Writer) error {
 	if _, err := fmt.Fprintln(stdout, gameID); err != nil {
 		return err
 	}
-	return printLegacyMatch(ctx, s, gameID, *title, stdout)
+	return printLegacyMatch(ctx, s, gameID, *title, *dataDir, stdout)
 }
 
 // gameSetImage は、画像をキャッシュに入れて DB だけを書き換え、リモートには次の push・pull で画像 → game.json の順に
@@ -830,7 +837,7 @@ func legacyLink(ctx context.Context, args []string, stdout io.Writer) error {
 	}
 	if res == (legacy.LinkResult{}) {
 		// 取り込み済みのときも、--legacy-game を打ち間違えたときも 0 件になる。取り込めたと誤解されないよう分けて出す
-		_, err = fmt.Fprintf(stdout, "旧版の gameId %s の未紐付けの旧履歴はありません（取り込み済みか、ID が違います）\n", *legacyGame)
+		_, err = fmt.Fprintf(stdout, "旧版の gameId %q の未紐付けの旧履歴はありません（取り込み済みか、ID が違います）\n", *legacyGame)
 		return err
 	}
 	_, err = fmt.Fprintf(stdout, "旧版のプレイ履歴を %d 件取り込みました（既にある %d 件は取り込まずに旧履歴から消しました）\n",

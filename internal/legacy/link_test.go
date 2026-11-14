@@ -292,9 +292,13 @@ func TestLink(t *testing.T) {
 
 	t.Run("9-K3 途中で失敗したら DB は取り込む前のまま", func(t *testing.T) {
 		s := openStore(t)
+		createGame(t, s, otherGameID, "別のゲーム")
 		mustImport(t, s, validExport)
+		// 旧ゲーム A の旧履歴と同じ ID を、通常のプレイ履歴に先に入れておく。登録していない gameId に取り込もうとすると、
+		// 通常のプレイ履歴への追加は全件が衝突して外部キーに当たらずに済み、旧履歴からの削除まで進んでから、最後の登録の
+		// 確かめで失敗する
+		createSession(t, s, metasync.Session{ID: sessionA, GameID: otherGameID, PlayedAt: utc(1, 0), DurationSec: 1})
 
-		// 登録していない gameId に取り込もうとすると、通常のプレイ履歴への追加が外部キーに当たって失敗する
 		if _, err := legacy.Link(ctx, s, legacyGameA, unknownGameID); err == nil {
 			t.Fatal("Link がエラーを返さなかった")
 		}
@@ -304,11 +308,28 @@ func TestLink(t *testing.T) {
 	})
 
 	t.Run("9章/取り込み/登録していないゲームはエラーにする", func(t *testing.T) {
-		s := openStore(t)
+		tests := []struct {
+			name         string
+			legacyGameID string
+		}{
+			// 通常のプレイ履歴への追加が外部キーに当たる
+			{name: "旧履歴がある旧ゲーム", legacyGameID: legacyGameA},
+			// 何も書かずに、最後の登録の確かめで止まる
+			{name: "旧履歴がない旧ゲーム", legacyGameID: legacyGameC},
+		}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				s := openStore(t)
+				mustImport(t, s, validExport)
 
-		// 旧履歴がない旧ゲームでも、取り込み先が登録されていなければエラーにする
-		if _, err := legacy.Link(ctx, s, legacyGameC, unknownGameID); err == nil {
-			t.Fatal("Link がエラーを返さなかった")
+				_, err := legacy.Link(ctx, s, tt.legacyGameID, unknownGameID)
+				if err == nil || !strings.Contains(err.Error(), "not registered") {
+					t.Fatalf("Link のエラー = %v, want 登録していないことを示すエラー", err)
+				}
+				if diff := cmp.Diff(validSessions, legacySessions(t, s)); diff != "" {
+					t.Errorf("LegacySessions (-want +got):\n%s", diff)
+				}
+			})
 		}
 	})
 
