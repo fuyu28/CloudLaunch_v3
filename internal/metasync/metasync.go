@@ -31,6 +31,8 @@ type ObjectStore interface {
 	Get(ctx context.Context, key string) (io.ReadCloser, error)
 	Put(ctx context.Context, key string, body io.ReadSeeker, size int64) error
 	List(ctx context.Context, prefix string) ([]string, error)
+	// DeleteMany は、キーがなくてもエラーにしない
+	DeleteMany(ctx context.Context, keys []string) error
 	// ListPrefixes は、prefix の直下にある共通の接頭辞（`/` までを含む）を返す
 	ListPrefixes(ctx context.Context, prefix string) ([]string, error)
 }
@@ -44,8 +46,11 @@ type Session struct {
 
 type LocalStore interface {
 	Sessions(ctx context.Context, gameID string) ([]Session, error)
-	// RemoteDeleted は、ゲームの tombstone の記録（仕様書 8-T2）があれば true を返す。登録していないゲームはエラーにする
-	RemoteDeleted(ctx context.Context, gameID string) (bool, error)
+	// RemoteDeleted は、ゲームの tombstone の記録（仕様書 8-T2）があれば、その値と true を返す。登録していないゲームは
+	// エラーにする
+	RemoteDeleted(ctx context.Context, gameID string) (Tombstone, bool, error)
+	// RecordRemoteDeleted は、ゲームの tombstone の記録を書く。登録していないゲームはエラーにする
+	RecordRemoteDeleted(ctx context.Context, gameID string, t Tombstone) error
 	// ImportSessions は、sessions を 1 つのトランザクションで gameID のセッションとして入れる。同じゲームに同じ ID が
 	// あれば飛ばし、別のゲームに同じ ID があれば入れずに ImportResult.OtherGame で返す（仕様書 8-S5）
 	ImportSessions(ctx context.Context, gameID string, sessions []Session) (ImportResult, error)
@@ -128,7 +133,7 @@ type Result struct {
 // ゲーム情報の同期が失敗したら、プレイ履歴は同期せずにエラーを返す。不正な game.json は失敗に数えない。
 // ゲームの tombstone の記録があれば、リモートに触れずにゼロ値を返す（仕様書 8-M4）。
 func (c *Core) Sync(ctx context.Context, gameID string) (Result, error) {
-	deleted, err := c.cfg.Local.RemoteDeleted(ctx, gameID)
+	_, deleted, err := c.cfg.Local.RemoteDeleted(ctx, gameID)
 	if err != nil {
 		return Result{}, fmt.Errorf("read remote deleted: %w", err)
 	}

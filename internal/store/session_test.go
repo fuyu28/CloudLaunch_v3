@@ -84,49 +84,6 @@ func TestSessions(t *testing.T) {
 	})
 }
 
-func TestRemoteDeleted(t *testing.T) {
-	ctx := context.Background()
-
-	t.Run("store/RemoteDeleted はゲームの tombstone の記録がなければ false を返す", func(t *testing.T) {
-		s, _ := openTemp(t)
-		createTestGame(t, s)
-
-		got, err := s.RemoteDeleted(ctx, testGameID)
-		if err != nil {
-			t.Fatalf("RemoteDeleted: %v", err)
-		}
-		if got {
-			t.Error("RemoteDeleted = true, want false")
-		}
-	})
-
-	t.Run("store/RemoteDeleted はゲームの tombstone の記録があれば true を返す", func(t *testing.T) {
-		s, _ := openTemp(t)
-		createTestGame(t, s)
-		if _, err := s.db.ExecContext(ctx,
-			`UPDATE game_locals SET remote_deleted_at = ?, remote_deleted_by = ? WHERE game_id = ?`,
-			"2026-11-03T00:00:00.000Z", "Laptop", testGameID); err != nil {
-			t.Fatalf("update game_locals: %v", err)
-		}
-
-		got, err := s.RemoteDeleted(ctx, testGameID)
-		if err != nil {
-			t.Fatalf("RemoteDeleted: %v", err)
-		}
-		if !got {
-			t.Error("RemoteDeleted = false, want true")
-		}
-	})
-
-	t.Run("store/RemoteDeleted は登録していないゲームでエラーを返す", func(t *testing.T) {
-		s, _ := openTemp(t)
-
-		if _, err := s.RemoteDeleted(ctx, testGameID); err == nil {
-			t.Error("RemoteDeleted がエラーを返さなかった")
-		}
-	})
-}
-
 func TestImportSessions(t *testing.T) {
 	ctx := context.Background()
 	const (

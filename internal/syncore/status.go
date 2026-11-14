@@ -39,6 +39,8 @@ type Plan struct {
 	Base         string // 空なら base なし
 	Local        LocalState
 	Remote       RemoteState
+	// RemoteDeleted は、ゲームの tombstone があって判定しなかったことを表す。このとき GameID のほかの項目は使わない（仕様書 8-T2）
+	RemoteDeleted *Tombstone
 }
 
 type LocalState struct {
@@ -61,11 +63,19 @@ type RemoteState struct {
 	Hash       string // HEAD がなければ空。空 manifest の世代なら空にならない
 }
 
-// Status はローカルにもリモートにも書き込まない。
+// Status はローカルにもリモートにも書き込まない。ゲームの tombstone があれば、セーブフォルダも HEAD も読まずに、
+// RemoteDeleted だけを埋めた plan を返す。
 func (c *Core) Status(ctx context.Context, gameID string) (Plan, error) {
 	game, err := c.cfg.Local.GameLocal(ctx, gameID)
 	if err != nil {
 		return Plan{}, fmt.Errorf("read game %s: %w", gameID, err)
+	}
+	tomb, deleted, err := c.readTombstone(ctx, gameID)
+	if err != nil {
+		return Plan{}, err
+	}
+	if deleted {
+		return Plan{GameID: gameID, RemoteDeleted: &tomb}, nil
 	}
 	saveFolder, base := game.SaveFolderPath, game.BaseManifestHash
 

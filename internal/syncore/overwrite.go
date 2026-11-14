@@ -43,7 +43,7 @@ func (c *Core) finishSameContent(ctx context.Context, plan Plan, saveFolder stri
 	if err := ensureLocalUnchanged(ctx, saveFolder, plan); err != nil {
 		return err
 	}
-	if err := c.ensureHeadUnchanged(ctx, plan); err != nil {
+	if err := c.ensureRemoteUnchanged(ctx, plan); err != nil {
 		return err
 	}
 	if !plan.RecordBase {
