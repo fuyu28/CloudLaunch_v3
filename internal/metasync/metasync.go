@@ -62,6 +62,10 @@ type LocalStore interface {
 	// RegisterGame は、g の全項目（createdAt・updatedAt を含む）をそのまま入れ、base なしで登録する（仕様書 8-N3・8-N4）。
 	// 登録済みの ID ならエラーにする
 	RegisterGame(ctx context.Context, g GameInfo, saveFolderPath, exePath string) error
+	// ReuploadGame は、1 つのトランザクションで、g で新しいゲーム情報を作り、oldID のプレイ履歴とローカル情報（base と
+	// ゲームの tombstone の記録を除く）を g.ID に移し、oldID のゲーム情報を消す（仕様書 8-U4）。oldID にゲームの tombstone の
+	// 記録がなければ、何も変えずに ErrNotRemoteDeleted で包んだエラーを返す
+	ReuploadGame(ctx context.Context, oldID string, g GameInfo) error
 }
 
 // GameInfo は game.json と同じ項目（仕様書 8 章）。Brand と ImageSha256 は空文字を未設定とする。

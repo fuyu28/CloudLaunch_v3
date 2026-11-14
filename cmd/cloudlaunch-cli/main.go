@@ -31,6 +31,7 @@ const usage = `usage:
   cloudlaunch-cli game remote [--data-dir <dir>]
   cloudlaunch-cli game import --game <gameId> --save-dir <パス> --exe <パス> [--data-dir <dir>]
   cloudlaunch-cli game delete --game <gameId> [--remote --confirm-title <タイトル>] [--data-dir <dir>]
+  cloudlaunch-cli game reupload --game <gameId> [--data-dir <dir>]
   cloudlaunch-cli session add --game <gameId> --duration <秒> [--played-at <RFC3339>] [--data-dir <dir>]
   cloudlaunch-cli legacy import [--data-dir <dir>] <旧版のエクスポートの JSON>
   cloudlaunch-cli legacy link --game <gameId> --legacy-game <旧版の gameId> [--data-dir <dir>]
@@ -73,6 +74,9 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 		}
 		if len(args) >= 2 && args[1] == "delete" {
 			return gameDelete(ctx, args[2:], stdout)
+		}
+		if len(args) >= 2 && args[1] == "reupload" {
+			return gameReupload(ctx, args[2:], stdout)
 		}
 	case "session":
 		if len(args) >= 2 && args[1] == "add" {
@@ -580,6 +584,61 @@ func explainDeleteError(err error, gameID, dataDir string) error {
 		return fmt.Errorf("このゲームはリモートで削除済みです。この PC の登録を解除するときは %s を実行してください: %w", unregister, err)
 	case errors.Is(err, syncore.ErrPullPending), errors.Is(err, store.ErrPullInProgress):
 		return fmt.Errorf("途中で止まった Pull が残っています。%s を実行してから、もう一度実行してください: %w", recoverCmd, err)
+	}
+	return explainSyncError(err)
+}
+
+// gameReupload は DB だけを書き換え、リモートには次の push・pull で新しい gameId の下に PUT する（仕様書 8 章
+// 「リモートで削除されたゲーム」）。リモートには接続しないので、接続先を読まない。
+func gameReupload(ctx context.Context, args []string, stdout io.Writer) error {
+	fs := flag.NewFlagSet("game reupload", flag.ContinueOnError)
+	game := fs.String("game", "", "上げ直すゲームの ID")
+	dataDir := fs.String("data-dir", "", "DB などを置くディレクトリ")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *game == "" {
+		return errors.New("--game is required")
+	}
+	newGameID, err := resolveGameID("")
+	if err != nil {
+		return err
+	}
+	s, dir, err := openStore(ctx, *dataDir)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = s.Close() }()
+
+	cfg := localConfig(s, dir)
+	meta := metasync.New(metasync.Config{Local: s, Logger: cfg.Logger, ImageDir: imageDir(dir)})
+	var res metasync.ReuploadResult
+	err = syncore.New(cfg).ReuploadGame(ctx, *game, func(ctx context.Context) error {
+		var err error
+		res, err = meta.ReuploadGame(ctx, *game, newGameID, time.Now())
+		return err
+	})
+	if err != nil {
+		return explainReuploadError(err, *game, *dataDir)
+	}
+	if _, err := fmt.Fprintf(stdout, "新しい gameId %s で上げ直しました。次の push・pull で、新しい gameId の下にアップロードします\n", newGameID); err != nil {
+		return err
+	}
+	if res.ImageDropped {
+		_, err = fmt.Fprintf(stdout, "画像がキャッシュにないので引き継いでいません。cloudlaunch-cli game set-image%s --game %s で設定し直してください\n",
+			dataDirFlag(*dataDir), newGameID)
+	}
+	return err
+}
+
+func explainReuploadError(err error, gameID, dataDir string) error {
+	switch {
+	case errors.Is(err, metasync.ErrNotRemoteDeleted):
+		return fmt.Errorf("このゲームはリモートで削除された記録がないので、上げ直しません。cloudlaunch-cli status%s --game %s で確かめ、削除されていれば push か pull で記録してから、もう一度実行してください: %w",
+			dataDirFlag(dataDir), gameID, err)
+	case errors.Is(err, syncore.ErrPullPending):
+		return fmt.Errorf("途中で止まった Pull が残っています。cloudlaunch-cli recover%s を実行してから、もう一度実行してください: %w",
+			dataDirFlag(dataDir), err)
 	}
 	return explainSyncError(err)
 }
