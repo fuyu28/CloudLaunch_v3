@@ -177,3 +177,66 @@ func TestDeleteGame(t *testing.T) {
 		}
 	})
 }
+
+func TestReuploadGame(t *testing.T) {
+	const newGameID = "0192d4e8-0000-7000-8000-0000000000b1"
+	now := time.Date(2026, 11, 10, 0, 0, 0, 0, time.UTC)
+
+	// snapshot は、上げ直しが書き換える表の全行を、表ごとに文字列にして返す。
+	snapshot := func(t *testing.T, s *Store) map[string][]string {
+		t.Helper()
+		got := map[string][]string{}
+		for table, query := range map[string]string{
+			"games":         `SELECT id || '|' || title || '|' || coalesce(image_sha256, '') || '|' || updated_at FROM games ORDER BY id`,
+			"game_locals":   `SELECT game_id || '|' || coalesce(base_manifest_hash, '') || '|' || coalesce(remote_deleted_at, '') FROM game_locals ORDER BY game_id`,
+			"play_sessions": `SELECT id || '|' || game_id FROM play_sessions ORDER BY id`,
+		} {
+			rows, err := s.db.Query(query)
+			if err != nil {
+				t.Fatalf("%s: %v", query, err)
+			}
+			for rows.Next() {
+				var row string
+				if err := rows.Scan(&row); err != nil {
+					t.Fatalf("scan %s: %v", table, err)
+				}
+				got[table] = append(got[table], row)
+			}
+			if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+				t.Fatalf("%s: %v", query, err)
+			}
+		}
+		return got
+	}
+
+	t.Run("8-U4 途中で失敗したら、DB は上げ直す前のままになる", func(t *testing.T) {
+		s, _ := openTemp(t)
+		ctx := context.Background()
+		createTestGame(t, s)
+		if err := s.CreateSession(ctx, metasync.Session{
+			ID: "0192d4e8-0000-7000-8000-0000000000c1", GameID: testGameID, PlayedAt: now, DurationSec: 60,
+		}); err != nil {
+			t.Fatalf("CreateSession: %v", err)
+		}
+		if err := s.SetBase(ctx, testGameID, "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"); err != nil {
+			t.Fatalf("SetBase: %v", err)
+		}
+		if err := s.RecordRemoteDeleted(ctx, testGameID, metasync.Tombstone{DeletedAt: now, DeviceName: "Laptop"}); err != nil {
+			t.Fatalf("RecordRemoteDeleted: %v", err)
+		}
+		// Pull ジャーナルの行があると、最後の手順の古いゲーム情報の削除が ON DELETE RESTRICT で失敗する
+		if err := s.InsertPullOperation(ctx, "0192d4e8-0000-7000-8000-0000000000d1", testGameID,
+			"/save", "/.cloudlaunch-stage-x", "/.cloudlaunch-old-x", now); err != nil {
+			t.Fatalf("InsertPullOperation: %v", err)
+		}
+		before := snapshot(t, s)
+
+		err := s.ReuploadGame(ctx, testGameID, metasync.GameInfo{ID: newGameID, Title: "Game", CreatedAt: now, UpdatedAt: now})
+		if err == nil {
+			t.Fatal("ReuploadGame error = nil, want error")
+		}
+		if diff := cmp.Diff(before, snapshot(t, s)); diff != "" {
+			t.Errorf("DB (-before +after):\n%s", diff)
+		}
+	})
+}
