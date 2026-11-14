@@ -26,7 +26,7 @@ store は日時を `timeLayout`（`2006-01-02T15:04:05.000Z`、仕様書 3 章�
 ### 年を確かめる場所
 
 - 事項: どこで年を確かめるか
-- 決定内容: `formatTime` を `(string, error)` にし、UTC の年が範囲を外れたらエラーを返す。日時を書くすべての操作は `formatTime` を通す。`validateTime` は `formatTime` の中だけで使い、`validateSession`・`validateGameInfo`・`EditGame`・`AddLegacySessions` にある個別の呼び出しは外す。ID・タイトル・sha256 の検証はそのまま残す
+- 決定内容: `formatTime` を `(string, error)` にし、UTC の年が範囲を外れたらエラーを返す。日時を書くすべての操作は `formatTime` を通す。`validateTime` は `formatTime` に入れてなくし、`validateSession`・`validateGameInfo`・`EditGame`・`AddLegacySessions` にある個別の呼び出しは外す。ID・タイトル・sha256 の検証はそのまま残す
 - 判断理由: 日時を DB の文字列にする場所は `formatTime` の 1 か所なので、そこで確かめれば、日時を書く操作を足しても確かめ忘れが起きない。操作ごとに `validateTime` を呼ぶ形のままにする案は、今の確かめ忘れと同じことが繰り返されうるので採らない
 
 ### 受け付ける年の範囲
@@ -55,8 +55,12 @@ store は日時を `timeLayout`（`2006-01-02T15:04:05.000Z`、仕様書 3 章�
 
 ## 結果 / 影響
 
-（作業が終わったら書く）
+- 日時を DB の文字列にする場所と、年を確かめる場所が `formatTime` の 1 か所になった。`CreateGame`・`InsertPullOperation`・`RecordRemoteDeleted` も年を確かめるようになった
+- `ImportSessions` と `AddLegacySessions` は、トランザクションを始める前に全件を `formatTime` に通し、1 件でも範囲外なら何も書かない
+- ゲーム情報の 2 つの日時をまとめて文字列にする `formatGameTimes` を足した。`RegisterGame`・`ReuploadGame`・`ReplaceGameInfo` が使う
+- 呼び出し側から見た振る舞いは、範囲外の日時を渡した 3 つの操作がエラーを返すようになったことだけである。今の呼び出し元が渡す日時は PC の時計か、仕様書 3 章の形を確かめたリモートの値なので、実際に変わる場面はない
 
 ## 更新履歴
 
 - 2026-11-15 01:21 作成
+- 2026-11-15 01:26 確かめていない操作の一覧を直した。`RegisterGame`・`ReuploadGame` は `validateGameInfo` で年を確かめていた。呼び出し元が `formatTime` だけになる `validateTime` は、`formatTime` に入れてなくすことにした。1 か所からしか呼ばれない関数を分けておく理由がないため。「結果 / 影響」を書いた

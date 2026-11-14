@@ -36,9 +36,13 @@ func (s *Store) IsRemoteDeleted(ctx context.Context, gameID string) (bool, error
 
 // RecordRemoteDeleted は、DeletedAt を UTC のミリ秒に切り捨てて書く（仕様書 3 章の日時の形）。
 func (s *Store) RecordRemoteDeleted(ctx context.Context, gameID string, t syncore.Tombstone) error {
+	deletedAt, err := formatTime(t.DeletedAt)
+	if err != nil {
+		return err
+	}
 	res, err := s.db.ExecContext(ctx,
 		`UPDATE game_locals SET remote_deleted_at = ?, remote_deleted_by = ? WHERE game_id = ?`,
-		formatTime(t.DeletedAt), t.DeviceName, gameID)
+		deletedAt, t.DeviceName, gameID)
 	if err != nil {
 		return fmt.Errorf("update remote deleted: %w", err)
 	}

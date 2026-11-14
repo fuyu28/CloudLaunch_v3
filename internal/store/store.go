@@ -60,6 +60,12 @@ func (s *Store) Close() error {
 	return s.db.Close()
 }
 
-func formatTime(t time.Time) string {
-	return t.UTC().Format(timeLayout)
+// formatTime は、UTC の年が 4 桁に収まらない日時を拒む。4 桁を超える年は固定長の形で読み戻せず、その行を読むたびに
+// 失敗するため。日時を DB に書くときは、必ずここを通す。
+func formatTime(t time.Time) (string, error) {
+	u := t.UTC()
+	if y := u.Year(); y < 0 || y > 9999 {
+		return "", fmt.Errorf("time out of range: %s", t)
+	}
+	return u.Format(timeLayout), nil
 }

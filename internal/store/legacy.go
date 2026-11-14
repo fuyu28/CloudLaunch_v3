@@ -12,11 +12,13 @@ import (
 
 // AddLegacySessions は、ID と日時を CreateSession と同じく検証し、1 件でも当たれば何も書かない。
 func (s *Store) AddLegacySessions(ctx context.Context, sessions []legacy.Session) (int, error) {
-	for _, sess := range sessions {
+	playedAt := make([]string, len(sessions))
+	for i, sess := range sessions {
 		if !legacy.ValidSessionID(sess.ID) {
 			return 0, fmt.Errorf("invalid legacy session id: %q", sess.ID)
 		}
-		if err := validateTime(sess.PlayedAt); err != nil {
+		var err error
+		if playedAt[i], err = formatTime(sess.PlayedAt); err != nil {
 			return 0, err
 		}
 	}
@@ -27,14 +29,14 @@ func (s *Store) AddLegacySessions(ctx context.Context, sessions []legacy.Session
 	defer func() { _ = tx.Rollback() }()
 
 	added := 0
-	for _, sess := range sessions {
+	for i, sess := range sessions {
 		// 先に SELECT で確かめてから INSERT すると、WAL では書き込みへの格上げが busy_timeout を待たずに失敗しうる
 		// （ImportSessions と同じ）。play_sessions に同じ ID があるかは、INSERT の中で確かめる
 		r, err := tx.ExecContext(ctx,
 			`INSERT INTO legacy_sessions (id, legacy_game_id, legacy_game_title, played_at, duration_sec)
 			 SELECT ?, ?, ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM play_sessions WHERE id = ?)
 			 ON CONFLICT (id) DO NOTHING`,
-			sess.ID, sess.GameID, sess.GameTitle, formatTime(sess.PlayedAt), sess.DurationSec, sess.ID)
+			sess.ID, sess.GameID, sess.GameTitle, playedAt[i], sess.DurationSec, sess.ID)
 		if err != nil {
 			return 0, fmt.Errorf("insert legacy_sessions: %w", err)
 		}
