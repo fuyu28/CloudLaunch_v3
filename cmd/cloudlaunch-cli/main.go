@@ -143,7 +143,7 @@ func status(ctx context.Context, args []string, stdout io.Writer) error {
 	}
 	// status は表示だけを行い、記録も削除もしない（仕様書 8-T2）
 	if plan.RemoteDeleted != nil {
-		_, err := fmt.Fprintln(stdout, remoteDeletedLabel(metasync.Tombstone(*plan.RemoteDeleted)))
+		_, err := fmt.Fprintln(stdout, remoteDeletedLabel(*plan.RemoteDeleted))
 		return err
 	}
 	if err := printPlan(stdout, plan); err != nil {
@@ -152,7 +152,7 @@ func status(ctx context.Context, args []string, stdout io.Writer) error {
 	return recordBaseIfNeeded(ctx, c.sync, plan, stdout)
 }
 
-func remoteDeletedLabel(t metasync.Tombstone) string {
+func remoteDeletedLabel(t syncore.Tombstone) string {
 	return fmt.Sprintf("リモートで削除されました（deviceName: %q, deletedAt: %s）", t.DeviceName, t.DeletedAt.Format(time.RFC3339Nano))
 }
 
@@ -162,7 +162,7 @@ var errRemoteDeleted = errors.New("リモートで削除されたゲームなの
 // handleTombstone は、ゲームの tombstone を確かめ、あれば DB に記録して配下を削除し（仕様書 8-T2）、表示して
 // errRemoteDeleted を返す。配下の削除に失敗しても、記録はしたので表示する。なければ nil を返す。
 func handleTombstone(ctx context.Context, c cores, stdout io.Writer) error {
-	t, deleted, err := c.meta.HandleTombstone(ctx, c.gameID)
+	t, deleted, err := c.sync.HandleTombstone(ctx, c.gameID)
 	if !deleted {
 		return err
 	}
@@ -344,9 +344,8 @@ type cores struct {
 	logger *slog.Logger
 	gameID string
 	// dataDir は --data-dir に渡された値。案内するコマンドに引き継ぐので、空なら既定の場所に置き換えずに空のまま持つ
-	dataDir    string
-	deviceName string
-	close      func()
+	dataDir string
+	close   func()
 }
 
 // openCore は --game と --data-dir を読み、リモートと DB につないだコアを返す。overwrite が nil でなければ、
@@ -383,23 +382,18 @@ func connectCores(ctx context.Context, gameID, dataDir string) (cores, error) {
 	}
 
 	cfg := localConfig(s, dir)
-	meta := newMeta(remote, s, cfg.Logger, dir)
 	cfg.Remote = remote
 	cfg.DeviceName = host
 	cfg.Processes = platform.Processes{}
-	cfg.ReadTombstone = func(ctx context.Context, gameID string) (syncore.Tombstone, bool, error) {
-		t, ok, err := meta.CheckTombstone(ctx, gameID)
-		return syncore.Tombstone(t), ok, err
-	}
+	core := syncore.New(cfg)
 	return cores{
-		sync:       syncore.New(cfg),
-		meta:       meta,
-		store:      s,
-		logger:     cfg.Logger,
-		gameID:     gameID,
-		dataDir:    dataDir,
-		deviceName: host,
-		close:      func() { _ = s.Close() },
+		sync:    core,
+		meta:    newMeta(remote, s, cfg.Logger, dir, core),
+		store:   s,
+		logger:  cfg.Logger,
+		gameID:  gameID,
+		dataDir: dataDir,
+		close:   func() { _ = s.Close() },
 	}, nil
 }
 
@@ -424,11 +418,34 @@ func openMeta(ctx context.Context, dataDir string) (*metasync.Core, *store.Store
 	if err != nil {
 		return nil, nil, err
 	}
-	return newMeta(remote, s, newLogger(), dir), s, nil
+	logger := newLogger()
+	// 取り込みの tombstone の確認（仕様書 8-N7）は、リモートだけを読むので、同期ロックなどの設定は要らない
+	tombstones := syncore.New(syncore.Config{Remote: remote, Local: s, Logger: logger})
+	return newMeta(remote, s, logger, dir, tombstones), s, nil
 }
 
-func newMeta(remote *objstore.S3, s *store.Store, logger *slog.Logger, dataDir string) *metasync.Core {
-	return metasync.New(metasync.Config{Remote: remote, Local: s, Logger: logger, ImageDir: imageDir(dataDir)})
+func newMeta(remote *objstore.S3, s *store.Store, logger *slog.Logger, dataDir string, tombstones *syncore.Core) *metasync.Core {
+	return metasync.New(metasync.Config{
+		Remote:     remote,
+		Local:      s,
+		Tombstones: tombstoneReader{tombstones},
+		Logger:     logger,
+		ImageDir:   imageDir(dataDir),
+	})
+}
+
+// tombstoneReader は、metasync の取り込みに syncore の tombstone の確認を渡す。metasync は syncore を import できないので、
+// 不正な tombstone のエラーをここで metasync のものに包み直す。
+type tombstoneReader struct {
+	core *syncore.Core
+}
+
+func (r tombstoneReader) RemoteTombstoneExists(ctx context.Context, gameID string) (bool, error) {
+	_, ok, err := r.core.ReadRemoteTombstone(ctx, gameID)
+	if errors.Is(err, syncore.ErrInvalidTombstone) {
+		return false, fmt.Errorf("%w: %w", metasync.ErrInvalidTombstone, err)
+	}
+	return ok, err
 }
 
 func newLogger() *slog.Logger {
@@ -551,9 +568,7 @@ func gameDelete(ctx context.Context, args []string, stdout io.Writer) error {
 		return fmt.Errorf("--confirm-title がゲームのタイトル %q と一致しないので、削除しません", info.Title)
 	}
 
-	res, err := c.sync.DeleteGame(ctx, c.gameID, func(ctx context.Context) error {
-		return c.meta.DeleteRemoteGame(ctx, c.gameID, metasync.Tombstone{DeletedAt: time.Now(), DeviceName: c.deviceName})
-	})
+	res, err := c.sync.DeleteGame(ctx, c.gameID)
 	if err != nil {
 		return explainDeleteError(err, c.gameID, *dataDir)
 	}
@@ -585,7 +600,7 @@ func explainDeleteError(err error, gameID, dataDir string) error {
 	switch {
 	case errors.Is(err, syncore.ErrUnregisterFailed):
 		return fmt.Errorf("リモートのデータは削除しましたが、この PC の登録を解除できませんでした。%s で解除してください: %w", unregister, err)
-	case errors.Is(err, metasync.ErrDeleteIncomplete):
+	case errors.Is(err, syncore.ErrDeleteIncomplete):
 		return fmt.Errorf("リモートでは削除済みになりましたが、途中で止まりました。消し残りは次の push・pull で削除されます。この PC の登録は残っているので、%s で解除してください: %w", unregister, err)
 	case errors.Is(err, syncore.ErrRemoteDeletionFailed):
 		return fmt.Errorf("リモートの削除に失敗しました。削除が届いたかは分かりません。status で確かめてから、もう一度実行してください: %w", err)
@@ -642,7 +657,7 @@ func gameReupload(ctx context.Context, args []string, stdout io.Writer) error {
 
 func explainReuploadError(err error, gameID, dataDir string) error {
 	switch {
-	case errors.Is(err, metasync.ErrNotRemoteDeleted):
+	case errors.Is(err, syncore.ErrNotRemoteDeleted):
 		return fmt.Errorf("このゲームはリモートで削除された記録がないので、上げ直しません。cloudlaunch-cli status%s --game %s で確かめ、削除されていれば push か pull で記録してから、もう一度実行してください: %w",
 			dataDirFlag(dataDir), gameID, err)
 	case errors.Is(err, syncore.ErrPullPending), errors.Is(err, store.ErrPullInProgress):

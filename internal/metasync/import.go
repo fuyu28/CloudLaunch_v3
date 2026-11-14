@@ -20,7 +20,9 @@ const gamesPrefix = "games/"
 var gameIDPattern = regexp.MustCompile(`^` + uuidV7Expr + `$`)
 
 var (
-	errRemoteDeleted = errors.New("game is deleted on remote")
+	// errTombstonesNotSet は、tombstone の確認を飛ばして、削除済みのゲームを取り込む道を作らないためのもの
+	errTombstonesNotSet = errors.New("tombstone reader is not configured")
+	errRemoteDeleted    = errors.New("game is deleted on remote")
 	// errUnimportable は、リモートのデータが不正で取り込めないことを表す（8-N8・8-N9）
 	errUnimportable = errors.New("game cannot be imported")
 )
@@ -35,6 +37,9 @@ type RemoteGames struct {
 // RemoteGames は、この PC に登録していないリモートのゲームを一覧する（8-N1・8-N5〜8-N11）。登録済みのゲームと、gameId が
 // UUIDv7 の形でないゲームは、リモートを読まずに除く。読み込みが 1 つでも失敗したら、一覧の全体をエラーにする。
 func (c *Core) RemoteGames(ctx context.Context) (RemoteGames, error) {
+	if c.cfg.Tombstones == nil {
+		return RemoteGames{}, errTombstonesNotSet
+	}
 	ids, err := c.cfg.Local.GameIDs(ctx)
 	if err != nil {
 		return RemoteGames{}, fmt.Errorf("read registered games: %w", err)
@@ -102,6 +107,9 @@ func (c *Core) ImportGame(ctx context.Context, gameID, saveFolderPath, exePath s
 	if !gameIDPattern.MatchString(gameID) {
 		return GameInfo{}, fmt.Errorf("game id is not a UUIDv7: %q", gameID)
 	}
+	if c.cfg.Tombstones == nil {
+		return GameInfo{}, errTombstonesNotSet
+	}
 	ids, err := c.cfg.Local.GameIDs(ctx)
 	if err != nil {
 		return GameInfo{}, fmt.Errorf("read registered games: %w", err)
@@ -123,17 +131,16 @@ func (c *Core) ImportGame(ctx context.Context, gameID, saveFolderPath, exePath s
 // 不正な tombstone（8-N8）と、ない・不正な game.json（8-N9）なら errUnimportable で包んだエラーを返す。それ以外のエラーは
 // 読み込みの失敗（8-N11）である。
 func (c *Core) readRemoteGame(ctx context.Context, gameID string) (GameInfo, error) {
-	body, err := c.getLimited(ctx, tombstoneKey(gameID), maxTombstoneSize)
+	deleted, err := c.cfg.Tombstones.RemoteTombstoneExists(ctx, gameID)
 	switch {
-	case err == nil:
-		if _, err := validateTombstone(body); err != nil {
-			return GameInfo{}, fmt.Errorf("%w: invalid deleted.json: %w", errUnimportable, err)
-		}
-		return GameInfo{}, errRemoteDeleted
-	case !errors.Is(err, fs.ErrNotExist):
+	case errors.Is(err, ErrInvalidTombstone):
+		return GameInfo{}, fmt.Errorf("%w: %w", errUnimportable, err)
+	case err != nil:
 		return GameInfo{}, err
+	case deleted:
+		return GameInfo{}, errRemoteDeleted
 	}
-	body, err = c.getGameJSON(ctx, gameID)
+	body, err := c.getGameJSON(ctx, gameID)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
 		return GameInfo{}, fmt.Errorf("%w: %w", errUnimportable, err)

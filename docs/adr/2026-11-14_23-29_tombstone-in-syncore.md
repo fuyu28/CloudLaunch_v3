@@ -38,8 +38,8 @@ syncore と metasync は互いに import しない（2026-10-23_00-30_package-st
 ### metasync が tombstone を知る方法
 
 - 事項: 取り込み（8-N7・8-N8・8-N12）が tombstone を確かめる方法
-- 決定内容: metasync が、副作用なしで「ない・ある・不正」の 3 つの状態を返すインターフェースを定義し、`Config` で受け取る。cmd の小さなアダプタが `*syncore.Core` を包んで実装する。syncore は、不正な tombstone を新しいセンチネルエラー `syncore.ErrInvalidTombstone` で包んで返し、アダプタがそれを metasync の状態に詰め替える
-- 判断理由: 依存の向き（コアが必要な操作のインターフェースを定義し、外が実装する）の形をそのまま使える。metasync は syncore を import できないので、状態の型は metasync が持ち、詰め替えは配線の側に置く。8-N8 は不正な tombstone を「除いてログに残す」ので、読めないとき（8-N11）と区別できる必要があり、真偽値とエラーだけでは足りない
+- 決定内容: metasync が、副作用なしで「ない・ある・不正」を区別できるインターフェース `TombstoneReader`（`RemoteTombstoneExists(ctx, gameID) (bool, error)`）を定義し、`Config.Tombstones` で受け取る。「不正」は metasync のセンチネルエラー `metasync.ErrInvalidTombstone` で包んだエラーで表す。cmd の小さなアダプタが `*syncore.Core` の `ReadRemoteTombstone` を包んで実装し、`syncore.ErrInvalidTombstone` を `metasync.ErrInvalidTombstone` で包み直す。`Config.Tombstones` が nil なら、取り込みはリモートを読まずにエラーにする。取り込むゲームは未登録で DB に記録がないので、確認は DB を見ずにリモートだけを読む
+- 判断理由: 依存の向き（コアが必要な操作のインターフェースを定義し、外が実装する）の形をそのまま使える。metasync は syncore を import できないので、エラーの型は metasync が持ち、詰め替えは配線の側に置く。8-N8 は不正な tombstone を「除いてログに残す」ので、読めないとき（8-N11）と区別できる必要がある。状態の列挙型を別に作るより、センチネルエラーで包めば検証の詳細をログに残せる。nil のときに確認を飛ばすと、削除済みのゲームを取り込む道ができる
 
 ### 上げ直しの前提の確認
 
@@ -50,23 +50,28 @@ syncore と metasync は互いに import しない（2026-10-23_00-30_package-st
 ### メタ情報の同期の 8-M4
 
 - 事項: `metasync.Sync` が DB の記録を見て同期しない処理（8-M4）を、この作業で移すか
-- 決定内容: 移さない。metasync の store のインターフェースの `RemoteDeleted` は、8-M4 のためだけに残す。`RecordRemoteDeleted` は metasync から外す
-- 判断理由: この作業は振る舞いを変えない。8-M4 を syncore に尋ねる形にするには、リモートの tombstone も読む「扱いまで」の操作が要り、それは仕様書 8-M5（#137）の振る舞いの変更になる。8-M5 の作業で `RemoteDeleted` を外す
+- 決定内容: 移さない。metasync の store のインターフェースの `RemoteDeleted`・`RecordRemoteDeleted` を、有無だけを返す `IsRemoteDeleted(ctx, gameID) (bool, error)` に置き換え、store に足す。8-M5 の作業で外す
+- 判断理由: この作業は振る舞いを変えない。8-M4 を syncore に尋ねる形にするには、リモートの tombstone も読む「扱いまで」の操作が要り、それは仕様書 8-M5（#137）の振る舞いの変更になる。store の `RemoteDeleted` は syncore の `Tombstone` を返すようになり、metasync は syncore の型を書けないので、同じ名前のメソッドを両方のインターフェースで使えない
 
 ### API の形
 
 - 事項: 移した後の公開 API
 - 決定内容:
   - syncore: `CheckTombstone(ctx, gameID string) (Tombstone, bool, error)` と `HandleTombstone(ctx, gameID string) (Tombstone, bool, error)` を `*Core` に置く。振る舞いは今の metasync のものと同じにする
-  - syncore: `DeleteGame(ctx, gameID string) (DeleteResult, error)` にし、`deleteRemote` の引数をなくす。tombstone の `deletedAt` は `Config.Now()`、`deviceName` は `Config.DeviceName` から作る。metasync の `ErrDeleteIncomplete` は `syncore.ErrDeleteIncomplete` にする
-  - syncore: `Config.ReadTombstone` と `errReadTombstoneNotSet` をなくす。`Local` のインターフェースに `RemoteDeleted` と `RecordRemoteDeleted` を足す
+  - syncore: DB を見ずに deleted.json だけを読む `ReadRemoteTombstone(ctx, gameID string) (Tombstone, bool, error)` を置く。不正なら `ErrInvalidTombstone` で包んで返す。`CheckTombstone` と `HandleTombstone` も、不正なら同じく包む
+  - syncore: `DeleteGame(ctx, gameID string) (DeleteResult, error)` にし、`deleteRemote` の引数をなくす。tombstone の `deletedAt` は `Config.Now()`、`deviceName` は `Config.DeviceName` から作る。`Config.DeviceName` が空なら、ロックを取る前にエラーにする。metasync の `ErrDeleteIncomplete` は `syncore.ErrDeleteIncomplete` にする
+  - syncore: `Config.ReadTombstone` と `errReadTombstoneNotSet` をなくす。`LocalStore` に `RemoteDeleted` と `RecordRemoteDeleted` を足す
   - metasync: `CheckTombstone`・`HandleTombstone`・`DeleteRemoteGame`・`Tombstone`・`ErrDeleteIncomplete`・`ErrNotRemoteDeleted` をなくす
-- 判断理由: 公開する名前と振る舞いは今の metasync のものを引き継ぎ、cmd と GUI から見た使い方を変えない。削除の時刻と deviceName は、今は cmd が `time.Now()` と設定から作っているが、syncore は既に両方を `Config` で受け取っている
+- 判断理由: 公開する名前と振る舞いは今の metasync のものを引き継ぎ、cmd と GUI から見た使い方を変えない。削除の時刻と deviceName は、今は cmd が `time.Now()` と設定から作っているが、syncore は既に両方を `Config` で受け取っている。deviceName が空のまま tombstone を書くと 8-T5 に当たり、どの PC もそのゲームを確かめられなくなる。今は cmd が必ずホスト名を渡すが、`Config` で受け取る以上、空を拒む場所が syncore に要る
 
 ### 文書の変更
 
 - 事項: AGENTS.md と過去の ADR
-- 決定内容: AGENTS.md の「構成」の syncore の行に「ゲームの tombstone とゲームの削除（8 章）」を足し、metasync の行から「ゲームの tombstone の確認と掃除もここが持つ」を消す。2026-10-23_00-30_package-structure.md の「依存の向き」のうち tombstone の問い合わせの部分と、2026-11-14_19-07_game-tombstone-check.md の「syncore と metasync の分担」を、この ADR で置き換える。それぞれの更新履歴に追記し、本文は書き換えない
+- 決定内容: AGENTS.md の「構成」の syncore の行に「ゲームの tombstone とゲームの削除（8 章）」を足し、metasync の行から「ゲームの tombstone の確認と掃除もここが持つ」を消す。次の部分を、この ADR で置き換える。それぞれの更新履歴に追記し、本文は書き換えない
+  - 2026-10-23_00-30_package-structure.md の「依存の向き」のうち、tombstone の問い合わせの部分
+  - 2026-11-14_19-07_game-tombstone-check.md の「syncore と metasync の分担」と、「API の形」のうち tombstone の確認と扱いを metasync に置く部分
+  - 2026-11-14_20-30_game-delete.md の「syncore と metasync の分担と、ロックを握る範囲」のうち `deleteRemote` の閉包の部分と、「metasync の tombstone の PUT と、止まった場所の伝え方」
+  - 2026-11-14_22-38_game-reupload.md の「上げ直せるゲームの条件」のうち、記録を metasync で確かめる部分
 - 判断理由: docs/adr/README.md の「過去の決定を覆すとき」に従う
 
 ### テスト
@@ -88,3 +93,4 @@ syncore と metasync は互いに import しない（2026-10-23_00-30_package-st
 ## 更新履歴
 
 - 2026-11-14 23:29 作成
+- 2026-11-14 23:48 取り込みの確認は未登録のゲームを相手にし、DB の記録を読めないので、syncore にリモートだけを読む `ReadRemoteTombstone` を置くことにした。「不正」の状態は列挙型ではなく `metasync.ErrInvalidTombstone` で包んだエラーで表すことにした。検証の詳細をログに残せるため。store の `RemoteDeleted` が syncore の型を返すので、8-M4 のために `IsRemoteDeleted` を足すことにした。syncore が tombstone を書くので、`Config.DeviceName` が空なら削除を拒むことにした。置き換える過去の ADR に、game-delete と game-reupload の該当部分を足した

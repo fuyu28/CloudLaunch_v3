@@ -184,21 +184,33 @@ func (e env) putTombstone(t *testing.T) {
 }
 
 // putTombstoneOnGet は、deleted.json の n 回目の GET の直前に deleted.json を置く。2 なら、Status の確認は通り、承認の後の
-// 読み直しで見つかる。それまでの Before は続けて呼ぶので、failOn などで Before を差し替えた後に呼ぶ。
+// 読み直しで見つかる。それまでの Before は続けて呼ぶので、failOn などで Before を差し替えた後に呼ぶ。自分で置く PUT は、
+// コアの PUT として数えられないよう、それまでの Before に渡さない。
 func (e env) putTombstoneOnGet(n int) {
 	prev := e.remote.Before
 	var mu sync.Mutex
 	calls := 0
+	placing := false
 	e.remote.Before = func(op memstore.Op, key string) error {
-		if op == memstore.OpGet && key == tombstoneKey() {
-			mu.Lock()
-			calls++
-			hit := calls == n
+		mu.Lock()
+		if placing {
 			mu.Unlock()
-			if hit {
-				if err := e.remote.Put(context.Background(), key, strings.NewReader(testTombstoneJSON), int64(len(testTombstoneJSON))); err != nil {
-					return fmt.Errorf("put deleted.json: %w", err)
-				}
+			return nil
+		}
+		hit := false
+		if op == memstore.OpGet && key == tombstoneKey() {
+			calls++
+			hit = calls == n
+		}
+		placing = hit
+		mu.Unlock()
+		if hit {
+			err := e.remote.Put(context.Background(), key, strings.NewReader(testTombstoneJSON), int64(len(testTombstoneJSON)))
+			mu.Lock()
+			placing = false
+			mu.Unlock()
+			if err != nil {
+				return fmt.Errorf("put deleted.json: %w", err)
 			}
 		}
 		if prev != nil {

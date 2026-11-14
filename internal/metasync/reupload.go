@@ -1,5 +1,5 @@
 // リモートで削除されたゲームを、新しい gameId のゲームとして上げ直す（仕様書 8 章「リモートで削除されたゲーム」の 8-U4・8-U5）。
-// 同期ロックと Pull ジャーナルの確認（8-U2・8-U3）は、呼び出し側が行う。
+// 同期ロックと Pull ジャーナルとゲームの tombstone の記録の確認（8-U2・8-U3）は、呼び出し側（syncore の ReuploadGame）が行う。
 package metasync
 
 import (
@@ -10,9 +10,6 @@ import (
 	"os"
 	"time"
 )
-
-// ErrNotRemoteDeleted は、DB にゲームの tombstone の記録がなく、上げ直さなかったことを表す。
-var ErrNotRemoteDeleted = errors.New("game is not recorded as deleted on remote")
 
 type ReuploadResult struct {
 	// ImageDropped は、画像がキャッシュになく、新しいゲーム情報に imageSha256 を引き継がなかったことを表す（8-U5）
@@ -25,13 +22,6 @@ type ReuploadResult struct {
 func (c *Core) ReuploadGame(ctx context.Context, gameID, newGameID string, now time.Time) (ReuploadResult, error) {
 	if !gameIDPattern.MatchString(newGameID) {
 		return ReuploadResult{}, fmt.Errorf("new game id is not a UUIDv7: %q", newGameID)
-	}
-	// 記録は store がトランザクションの中でも確かめる。ここで先に確かめるのは、記録のないゲームで画像を読みに行き、
-	// 読めないときに ErrNotRemoteDeleted ではないエラーを返さないため
-	if _, deleted, err := c.cfg.Local.RemoteDeleted(ctx, gameID); err != nil {
-		return ReuploadResult{}, fmt.Errorf("read remote deleted: %w", err)
-	} else if !deleted {
-		return ReuploadResult{}, fmt.Errorf("game %s: %w", gameID, ErrNotRemoteDeleted)
 	}
 	old, err := c.cfg.Local.GameInfo(ctx, gameID)
 	if err != nil {

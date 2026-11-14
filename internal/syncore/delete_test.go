@@ -27,7 +27,8 @@ type remoteDeletion struct {
 	check func()
 }
 
-// watchDeletion は、それまでの Before を続けて呼ぶので、failOn などで Before を差し替えた後に呼ぶ。
+// watchDeletion は、それまでの Before を続けて呼ぶので、failOn などで Before を差し替えた後に呼ぶ。putTombstoneOnGet よりは
+// 先に呼ぶ。後に呼ぶと、putTombstoneOnGet が自分で置く PUT も数える。
 func (e env) watchDeletion() *remoteDeletion {
 	d := &remoteDeletion{}
 	prev := e.remote.Before
@@ -397,8 +398,8 @@ func TestDeleteGame(t *testing.T) {
 	t.Run("8-X11 バックアップの間にゲームの tombstone が書かれたら、リモートを削除せずに止める", func(t *testing.T) {
 		e := newEnv(t)
 		writeFiles(t, e.saveDir, files)
-		e.putTombstoneOnGet(2)
 		del := e.watchDeletion()
+		e.putTombstoneOnGet(2)
 
 		if err := e.deleteGame(t); !errors.Is(err, syncore.ErrRemoteDeleted) {
 			t.Fatalf("DeleteGame error = %v, want ErrRemoteDeleted", err)
@@ -502,6 +503,7 @@ func TestDeleteGame(t *testing.T) {
 			{"Processes", func(cfg *syncore.Config) { cfg.Processes = nil }},
 			{"BackupsDir", func(cfg *syncore.Config) { cfg.BackupsDir = "" }},
 			{"Rename", func(cfg *syncore.Config) { cfg.Rename = nil }},
+			{"DeviceName", func(cfg *syncore.Config) { cfg.DeviceName = "" }},
 		}
 		for _, tc := range cases {
 			t.Run(tc.name, func(t *testing.T) {
