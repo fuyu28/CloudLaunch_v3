@@ -543,7 +543,7 @@ func gameDelete(ctx context.Context, args []string, stdout io.Writer) error {
 		return c.meta.DeleteRemoteGame(ctx, c.gameID, metasync.Tombstone{DeletedAt: time.Now(), DeviceName: c.deviceName})
 	})
 	if err != nil {
-		return explainDeleteError(err, c.gameID)
+		return explainDeleteError(err, c.gameID, *dataDir)
 	}
 	backup := "セーブフォルダがないので、バックアップは作っていません"
 	if res.BackupPath != "" {
@@ -560,15 +560,16 @@ func unregisterGame(ctx context.Context, gameID, dataDir string, stdout io.Write
 	}
 	defer func() { _ = s.Close() }()
 	if err := s.DeleteGame(ctx, gameID); err != nil {
-		return explainDeleteError(err, gameID)
+		return explainDeleteError(err, gameID, dataDir)
 	}
 	_, err = fmt.Fprintln(stdout, "この PC の登録を解除しました（セーブフォルダとリモートはそのままです）")
 	return err
 }
 
 // explainDeleteError は、ゲームの削除が止まった場所（仕様書 8-X8〜8-X10）ごとに、利用者がすることを添える。
-func explainDeleteError(err error, gameID string) error {
-	unregister := "cloudlaunch-cli game delete --game " + gameID
+func explainDeleteError(err error, gameID, dataDir string) error {
+	unregister := "cloudlaunch-cli game delete" + dataDirFlag(dataDir) + " --game " + gameID
+	recoverCmd := "cloudlaunch-cli recover" + dataDirFlag(dataDir)
 	switch {
 	case errors.Is(err, syncore.ErrUnregisterFailed):
 		return fmt.Errorf("リモートのデータは削除しましたが、この PC の登録を解除できませんでした。%s で解除してください: %w", unregister, err)
@@ -579,7 +580,7 @@ func explainDeleteError(err error, gameID string) error {
 	case errors.Is(err, syncore.ErrRemoteDeleted):
 		return fmt.Errorf("このゲームはリモートで削除済みです。この PC の登録を解除するときは %s を実行してください: %w", unregister, err)
 	case errors.Is(err, syncore.ErrPullPending), errors.Is(err, store.ErrPullInProgress):
-		return fmt.Errorf("途中で止まった Pull が残っています。cloudlaunch-cli recover を実行してから、もう一度実行してください: %w", err)
+		return fmt.Errorf("途中で止まった Pull が残っています。%s を実行してから、もう一度実行してください: %w", recoverCmd, err)
 	}
 	return explainSyncError(err)
 }
@@ -620,13 +621,17 @@ func printLegacyMatch(ctx context.Context, s *store.Store, gameID, title, dataDi
 		return err
 	}
 	// 照合に使った DB と同じ DB で取り込むよう、--data-dir を引き継ぐ
-	dataDirFlag := ""
-	if dataDir != "" {
-		dataDirFlag = " --data-dir " + strconv.Quote(dataDir)
-	}
 	_, err = fmt.Fprintf(stdout, "取り込むには: cloudlaunch-cli legacy link%s --game %s --legacy-game %s\n",
-		dataDirFlag, gameID, legacyGameID)
+		dataDirFlag(dataDir), gameID, legacyGameID)
 	return err
+}
+
+// dataDirFlag は、案内するコマンドに --data-dir を引用して引き継ぐ。落とすと、既定の DB を相手に実行されてしまう。
+func dataDirFlag(dataDir string) string {
+	if dataDir == "" {
+		return ""
+	}
+	return " --data-dir " + strconv.Quote(dataDir)
 }
 
 func printLegacyGames(w io.Writer, heading string, games []legacy.Game) error {
