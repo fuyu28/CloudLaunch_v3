@@ -231,43 +231,65 @@ func TestTimeOutOfRange(t *testing.T) {
 		sessionB    = "0192d4e8-0000-7000-8000-0000000000c2"
 	)
 	valid := time.Date(2026, 11, 15, 0, 0, 0, 0, time.UTC)
-	gameInfo := func(id string, at time.Time) metasync.GameInfo {
-		return metasync.GameInfo{ID: id, Title: "Remote", CreatedAt: at, UpdatedAt: at}
-	}
 	legacySession := func(id string, at time.Time) legacy.Session {
 		return legacy.Session{ID: id, GameID: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1", GameTitle: "ゲーム", PlayedAt: at, DurationSec: 1}
 	}
 	title := "New"
 
-	tests := []struct {
+	type testCase struct {
 		op    string
 		setup func(t *testing.T, s *Store)
 		write func(s *Store, at time.Time) error
-	}{
+	}
+	tests := []testCase{
 		{
 			op: "CreateGame",
 			write: func(s *Store, at time.Time) error {
 				return s.CreateGame(ctx, NewGame{ID: testGameID, Title: "Game", SaveFolderPath: "/save", ExePath: "/game.exe", CreatedAt: at})
 			},
 		},
-		{
-			op: "RegisterGame",
-			write: func(s *Store, at time.Time) error {
-				return s.RegisterGame(ctx, gameInfo(testGameID, at), "/save", "/game.exe")
+	}
+	// ゲーム情報は created_at と updated_at の両方を書くので、片方だけを範囲外にして、どちらも確かめていることを見る
+	for _, field := range []string{"createdAt", "updatedAt"} {
+		gameInfo := func(id string, at time.Time) metasync.GameInfo {
+			g := metasync.GameInfo{ID: id, Title: "Remote", CreatedAt: valid, UpdatedAt: valid}
+			if field == "createdAt" {
+				g.CreatedAt = at
+			} else {
+				g.UpdatedAt = at
+			}
+			return g
+		}
+		tests = append(tests,
+			testCase{
+				op: "RegisterGame の " + field,
+				write: func(s *Store, at time.Time) error {
+					return s.RegisterGame(ctx, gameInfo(testGameID, at), "/save", "/game.exe")
+				},
 			},
-		},
-		{
-			op: "ReuploadGame",
-			setup: func(t *testing.T, s *Store) {
-				createTestGame(t, s)
-				if err := s.RecordRemoteDeleted(ctx, testGameID, syncore.Tombstone{DeletedAt: valid, DeviceName: "Laptop"}); err != nil {
-					t.Fatalf("RecordRemoteDeleted: %v", err)
-				}
+			testCase{
+				op: "ReuploadGame の " + field,
+				setup: func(t *testing.T, s *Store) {
+					createTestGame(t, s)
+					if err := s.RecordRemoteDeleted(ctx, testGameID, syncore.Tombstone{DeletedAt: valid, DeviceName: "Laptop"}); err != nil {
+						t.Fatalf("RecordRemoteDeleted: %v", err)
+					}
+				},
+				write: func(s *Store, at time.Time) error {
+					return s.ReuploadGame(ctx, testGameID, gameInfo(otherGameID, at))
+				},
 			},
-			write: func(s *Store, at time.Time) error {
-				return s.ReuploadGame(ctx, testGameID, gameInfo(otherGameID, at))
+			testCase{
+				op:    "ReplaceGameInfo の " + field,
+				setup: createTestGame,
+				write: func(s *Store, at time.Time) error {
+					_, err := s.ReplaceGameInfo(ctx, gameInfo(testGameID, at))
+					return err
+				},
 			},
-		},
+		)
+	}
+	tests = append(tests, []testCase{
 		{
 			op:    "InsertPullOperation",
 			setup: createTestGame,
@@ -301,14 +323,6 @@ func TestTimeOutOfRange(t *testing.T) {
 			},
 		},
 		{
-			op:    "ReplaceGameInfo",
-			setup: createTestGame,
-			write: func(s *Store, at time.Time) error {
-				_, err := s.ReplaceGameInfo(ctx, gameInfo(testGameID, at))
-				return err
-			},
-		},
-		{
 			op:    "EditGame",
 			setup: createTestGame,
 			write: func(s *Store, at time.Time) error {
@@ -325,14 +339,17 @@ func TestTimeOutOfRange(t *testing.T) {
 				return err
 			},
 		},
-	}
+	}...)
 	for _, tt := range tests {
 		t.Run("3章/日時の形/年が 4 桁に収まらない日時は書かない（"+tt.op+"）", func(t *testing.T) {
 			for _, at := range []time.Time{
 				time.Date(10000, 1, 1, 0, 0, 0, 0, time.UTC),
 				time.Date(-1, 12, 31, 23, 59, 59, 0, time.UTC),
+				// 手元の時刻では 4 桁に収まり、UTC に直すと外れる
+				time.Date(9999, 12, 31, 23, 0, 0, 0, time.FixedZone("", -5*60*60)),
+				time.Date(0, 1, 1, 5, 0, 0, 0, time.FixedZone("", 9*60*60)),
 			} {
-				t.Run(fmt.Sprintf("%d 年", at.Year()), func(t *testing.T) {
+				t.Run(at.Format(time.RFC3339), func(t *testing.T) {
 					s, _ := openTemp(t)
 					if tt.setup != nil {
 						tt.setup(t, s)
@@ -349,4 +366,25 @@ func TestTimeOutOfRange(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("3章/日時の形/年が 0 と 9999 の日時は書いて読み戻せる", func(t *testing.T) {
+		s, _ := openTemp(t)
+		createTestGame(t, s)
+		want := []metasync.Session{
+			{ID: sessionA, GameID: testGameID, PlayedAt: time.Date(0, 1, 1, 0, 0, 0, 0, time.UTC), DurationSec: 1},
+			{ID: sessionB, GameID: testGameID, PlayedAt: time.Date(9999, 12, 31, 23, 59, 59, 999_000_000, time.UTC), DurationSec: 1},
+		}
+		for _, sess := range want {
+			if err := s.CreateSession(ctx, sess); err != nil {
+				t.Fatalf("CreateSession: %v", err)
+			}
+		}
+		got, err := s.Sessions(ctx, testGameID)
+		if err != nil {
+			t.Fatalf("Sessions: %v", err)
+		}
+		if diff := cmp.Diff(want, got); diff != "" {
+			t.Errorf("Sessions (-want +got):\n%s", diff)
+		}
+	})
 }
