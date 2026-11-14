@@ -24,6 +24,7 @@ type Store interface {
 	Get(ctx context.Context, key string) (io.ReadCloser, error)
 	Put(ctx context.Context, key string, body io.ReadSeeker, size int64) error
 	List(ctx context.Context, prefix string) ([]string, error)
+	ListPrefixes(ctx context.Context, prefix string) ([]string, error)
 	Delete(ctx context.Context, key string) error
 	DeleteMany(ctx context.Context, keys []string) error
 }
@@ -88,6 +89,54 @@ func Run(t *testing.T, store Store) {
 		}
 	})
 
+	t.Run("objstore/ListPrefixes は直下の共通の接頭辞だけを辞書順で返す", func(t *testing.T) {
+		p := prefix(t, store)
+		for _, k := range []string{"games/b/HEAD", "games/a/game.json", "games/a/objects/x", "games/top", "gamesx/c/d"} {
+			put(t, store, p+k, []byte(k))
+		}
+
+		got, err := store.ListPrefixes(context.Background(), p+"games/")
+		if err != nil {
+			t.Fatalf("ListPrefixes: %v", err)
+		}
+		want := []string{p + "games/a/", p + "games/b/"}
+		if d := cmp.Diff(want, got); d != "" {
+			t.Errorf("prefixes (-want +got):\n%s", d)
+		}
+	})
+
+	t.Run("objstore/ListPrefixes は該当がなければ空を返す", func(t *testing.T) {
+		p := prefix(t, store)
+		got, err := store.ListPrefixes(context.Background(), p+"games/")
+		if err != nil {
+			t.Fatalf("ListPrefixes: %v", err)
+		}
+		if len(got) != 0 {
+			t.Errorf("prefixes = %v, want none", got)
+		}
+	})
+
+	// S3 の ListObjectsV2 は 1 回に 1000 件までなので、共通の接頭辞もページをまたいで集めることを確かめる
+	t.Run("objstore/ListPrefixes は 1000 件を超えても全件を返す", func(t *testing.T) {
+		p := prefix(t, store)
+		const n = 1001
+		keys := make([]string, n)
+		want := make([]string, n)
+		for i := range n {
+			want[i] = fmt.Sprintf("%s%04d/", p, i)
+			keys[i] = want[i] + "k"
+		}
+		putAll(t, store, keys)
+
+		got, err := store.ListPrefixes(context.Background(), p)
+		if err != nil {
+			t.Fatalf("ListPrefixes: %v", err)
+		}
+		if d := cmp.Diff(want, got); d != "" {
+			t.Errorf("prefixes (-want +got):\n%s", d)
+		}
+	})
+
 	t.Run("objstore/Delete したキーの Get は fs.ErrNotExist", func(t *testing.T) {
 		ctx, p := context.Background(), prefix(t, store)
 		put(t, store, p+"a", []byte("x"))
@@ -149,24 +198,10 @@ func Run(t *testing.T, store Store) {
 		ctx, p := context.Background(), prefix(t, store)
 		const n = 1001
 		keys := make([]string, n)
-		var wg sync.WaitGroup
-		errs := make(chan error, n)
-		sem := make(chan struct{}, 16)
 		for i := range n {
 			keys[i] = fmt.Sprintf("%s%04d", p, i)
-			wg.Go(func() {
-				sem <- struct{}{}
-				defer func() { <-sem }()
-				if err := store.Put(ctx, keys[i], bytes.NewReader(nil), 0); err != nil {
-					errs <- err
-				}
-			})
 		}
-		wg.Wait()
-		close(errs)
-		for err := range errs {
-			t.Fatalf("Put: %v", err)
-		}
+		putAll(t, store, keys)
 		if err := store.DeleteMany(ctx, keys); err != nil {
 			t.Fatalf("DeleteMany: %v", err)
 		}
@@ -192,6 +227,10 @@ func Run(t *testing.T, store Store) {
 		}},
 		{"List", func(ctx context.Context, p string) error {
 			_, err := store.List(ctx, p)
+			return err
+		}},
+		{"ListPrefixes", func(ctx context.Context, p string) error {
+			_, err := store.ListPrefixes(ctx, p)
 			return err
 		}},
 		{"Delete", func(ctx context.Context, p string) error {
@@ -286,6 +325,28 @@ func put(t *testing.T, store Store, key string, body []byte) {
 	t.Helper()
 	if err := store.Put(context.Background(), key, bytes.NewReader(body), int64(len(body))); err != nil {
 		t.Fatalf("Put %s: %v", key, err)
+	}
+}
+
+// putAll は、本物のサーバーで 1000 件を超えるキーを置くときに時間がかからないよう、16 並列で空の本文を Put する。
+func putAll(t *testing.T, store Store, keys []string) {
+	t.Helper()
+	var wg sync.WaitGroup
+	errs := make(chan error, len(keys))
+	sem := make(chan struct{}, 16)
+	for _, key := range keys {
+		wg.Go(func() {
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			if err := store.Put(context.Background(), key, bytes.NewReader(nil), 0); err != nil {
+				errs <- err
+			}
+		})
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatalf("Put: %v", err)
 	}
 }
 

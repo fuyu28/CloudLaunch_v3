@@ -91,6 +91,32 @@ func (s *Store) List(ctx context.Context, prefix string) ([]string, error) {
 	return keys, nil
 }
 
+// ListPrefixes は、失敗を仕込むときに List と区別しないので、Before に OpList と prefix を渡す。
+func (s *Store) ListPrefixes(ctx context.Context, prefix string) ([]string, error) {
+	if err := s.before(ctx, OpList, prefix); err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	seen := map[string]bool{}
+	prefixes := []string{}
+	for k := range s.objects {
+		rest, ok := strings.CutPrefix(k, prefix)
+		if !ok {
+			continue
+		}
+		if i := strings.Index(rest, "/"); i >= 0 {
+			p := prefix + rest[:i+1]
+			if !seen[p] {
+				seen[p] = true
+				prefixes = append(prefixes, p)
+			}
+		}
+	}
+	sort.Strings(prefixes)
+	return prefixes, nil
+}
+
 func (s *Store) Delete(ctx context.Context, key string) error {
 	if err := s.before(ctx, OpDelete, key); err != nil {
 		return err

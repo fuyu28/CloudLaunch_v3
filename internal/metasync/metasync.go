@@ -31,6 +31,8 @@ type ObjectStore interface {
 	Get(ctx context.Context, key string) (io.ReadCloser, error)
 	Put(ctx context.Context, key string, body io.ReadSeeker, size int64) error
 	List(ctx context.Context, prefix string) ([]string, error)
+	// ListPrefixes は、prefix の直下にある共通の接頭辞（`/` までを含む）を返す
+	ListPrefixes(ctx context.Context, prefix string) ([]string, error)
 }
 
 type Session struct {
@@ -50,6 +52,11 @@ type LocalStore interface {
 	GameInfo(ctx context.Context, gameID string) (GameInfo, error)
 	// ReplaceGameInfo は、DB の updatedAt が g.UpdatedAt より小さいときだけ、g の全項目で書き換えて true を返す（仕様書 8-G3）
 	ReplaceGameInfo(ctx context.Context, g GameInfo) (bool, error)
+	// GameIDs は、この PC に登録したすべてのゲームの ID を返す。ゲームの tombstone の記録があるゲームも含む
+	GameIDs(ctx context.Context) ([]string, error)
+	// RegisterGame は、g の全項目（createdAt・updatedAt を含む）をそのまま入れ、base なしで登録する（仕様書 8-N3・8-N4）。
+	// 登録済みの ID ならエラーにする
+	RegisterGame(ctx context.Context, g GameInfo, saveFolderPath, exePath string) error
 }
 
 // GameInfo は game.json と同じ項目（仕様書 8 章）。Brand と ImageSha256 は空文字を未設定とする。

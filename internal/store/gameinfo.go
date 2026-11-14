@@ -42,16 +42,8 @@ func (s *Store) GameInfo(ctx context.Context, gameID string) (metasync.GameInfo,
 // 日時は固定長の形で持つので、文字列の大小が日時の前後と一致する（仕様書 3 章）。title・imageSha256・日時の形が
 // 合わなければ、何も書かずにエラーを返す。
 func (s *Store) ReplaceGameInfo(ctx context.Context, g metasync.GameInfo) (bool, error) {
-	if g.Title == "" {
-		return false, errors.New("empty title")
-	}
-	if g.ImageSha256 != "" && !metasync.ValidSHA256(g.ImageSha256) {
-		return false, fmt.Errorf("invalid image sha256: %q", g.ImageSha256)
-	}
-	for _, t := range []time.Time{g.CreatedAt, g.UpdatedAt} {
-		if err := validateTime(t); err != nil {
-			return false, err
-		}
+	if err := validateGameInfo(g); err != nil {
+		return false, err
 	}
 	updatedAt := formatTime(g.UpdatedAt)
 	res, err := s.db.ExecContext(ctx,
@@ -109,6 +101,22 @@ func (s *Store) EditGame(ctx context.Context, gameID string, edit GameEdit, now 
 	}
 	if n == 0 {
 		return fmt.Errorf("update games: game %s: %w", gameID, sql.ErrNoRows)
+	}
+	return nil
+}
+
+// validateGameInfo は、リモートから受け取ったゲーム情報を書く前に、DB の CHECK 制約より分かりやすいエラーで弾く。
+func validateGameInfo(g metasync.GameInfo) error {
+	if g.Title == "" {
+		return errors.New("empty title")
+	}
+	if g.ImageSha256 != "" && !metasync.ValidSHA256(g.ImageSha256) {
+		return fmt.Errorf("invalid image sha256: %q", g.ImageSha256)
+	}
+	for _, t := range []time.Time{g.CreatedAt, g.UpdatedAt} {
+		if err := validateTime(t); err != nil {
+			return err
+		}
 	}
 	return nil
 }

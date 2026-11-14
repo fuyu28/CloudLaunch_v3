@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"time"
 
 	"github.com/google/uuid"
@@ -27,6 +28,8 @@ const usage = `usage:
   cloudlaunch-cli game add --title <タイトル> --save-dir <パス> --exe <パス> [--brand <ブランド>] [--id <gameId>] [--data-dir <dir>]
   cloudlaunch-cli game edit --game <gameId> [--title <タイトル>] [--brand <ブランド>] [--data-dir <dir>]
   cloudlaunch-cli game set-image --game <gameId> (--file <パス> | --clear) [--data-dir <dir>]
+  cloudlaunch-cli game remote [--data-dir <dir>]
+  cloudlaunch-cli game import --game <gameId> --save-dir <パス> --exe <パス> [--data-dir <dir>]
   cloudlaunch-cli session add --game <gameId> --duration <秒> [--played-at <RFC3339>] [--data-dir <dir>]
   cloudlaunch-cli legacy import [--data-dir <dir>] <旧版のエクスポートの JSON>
   cloudlaunch-cli status --game <gameId> [--data-dir <dir>]
@@ -34,7 +37,7 @@ const usage = `usage:
   cloudlaunch-cli pull --game <gameId> [--overwrite] [--data-dir <dir>]
   cloudlaunch-cli recover [--data-dir <dir>]
 
-status・push・pull はリモートの接続先と鍵を環境変数から読む:
+status・push・pull・game remote・game import はリモートの接続先と鍵を環境変数から読む:
   CLOUDLAUNCH_S3_ENDPOINT, CLOUDLAUNCH_S3_BUCKET, CLOUDLAUNCH_S3_ACCESS_KEY_ID, CLOUDLAUNCH_S3_SECRET_ACCESS_KEY,
   CLOUDLAUNCH_S3_REGION（省くと auto）`
 
@@ -59,6 +62,12 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 		}
 		if len(args) >= 2 && args[1] == "set-image" {
 			return gameSetImage(ctx, args[2:], stdout)
+		}
+		if len(args) >= 2 && args[1] == "remote" {
+			return gameRemote(ctx, args[2:], stdout)
+		}
+		if len(args) >= 2 && args[1] == "import" {
+			return gameImport(ctx, args[2:], stdout)
 		}
 	case "session":
 		if len(args) >= 2 && args[1] == "add" {
@@ -290,13 +299,7 @@ func openCore(ctx context.Context, name string, args []string, overwrite *bool) 
 		return cores{}, errors.New("--game is required")
 	}
 
-	remote, err := objstore.New(objstore.Config{
-		Endpoint:        os.Getenv("CLOUDLAUNCH_S3_ENDPOINT"),
-		Region:          os.Getenv("CLOUDLAUNCH_S3_REGION"),
-		Bucket:          os.Getenv("CLOUDLAUNCH_S3_BUCKET"),
-		AccessKeyID:     os.Getenv("CLOUDLAUNCH_S3_ACCESS_KEY_ID"),
-		SecretAccessKey: os.Getenv("CLOUDLAUNCH_S3_SECRET_ACCESS_KEY"),
-	})
+	remote, err := openRemote()
 	if err != nil {
 		return cores{}, err
 	}
@@ -316,11 +319,126 @@ func openCore(ctx context.Context, name string, args []string, overwrite *bool) 
 	cfg.Processes = platform.Processes{}
 	return cores{
 		sync:   syncore.New(cfg),
-		meta:   metasync.New(metasync.Config{Remote: remote, Local: s, Logger: cfg.Logger, ImageDir: imageDir(dir)}),
+		meta:   newMeta(remote, s, cfg.Logger, dir),
 		logger: cfg.Logger,
 		gameID: *game,
 		close:  func() { _ = s.Close() },
 	}, nil
+}
+
+func openRemote() (*objstore.S3, error) {
+	return objstore.New(objstore.Config{
+		Endpoint:        os.Getenv("CLOUDLAUNCH_S3_ENDPOINT"),
+		Region:          os.Getenv("CLOUDLAUNCH_S3_REGION"),
+		Bucket:          os.Getenv("CLOUDLAUNCH_S3_BUCKET"),
+		AccessKeyID:     os.Getenv("CLOUDLAUNCH_S3_ACCESS_KEY_ID"),
+		SecretAccessKey: os.Getenv("CLOUDLAUNCH_S3_SECRET_ACCESS_KEY"),
+	})
+}
+
+// openMeta は、syncore を使わない game remote・game import のために、メタ情報の同期だけをリモートと DB につなぐ。
+// 戻り値の close は呼び出し側が必ず呼ぶ。
+func openMeta(ctx context.Context, dataDir string) (*metasync.Core, func(), error) {
+	remote, err := openRemote()
+	if err != nil {
+		return nil, nil, err
+	}
+	s, dir, err := openStore(ctx, dataDir)
+	if err != nil {
+		return nil, nil, err
+	}
+	return newMeta(remote, s, newLogger(), dir), func() { _ = s.Close() }, nil
+}
+
+func newMeta(remote *objstore.S3, s *store.Store, logger *slog.Logger, dataDir string) *metasync.Core {
+	return metasync.New(metasync.Config{Remote: remote, Local: s, Logger: logger, ImageDir: imageDir(dataDir)})
+}
+
+func newLogger() *slog.Logger {
+	return slog.New(slog.NewTextHandler(os.Stderr, nil))
+}
+
+// gameRemote は、game import に渡す gameId を cut などで取り出せるよう、タブ区切りで出す。title と brand はほかの PC が
+// 書いた値で、タブ・改行・端末の制御文字を含みうるので、Go の引用符つきの表記にして列と行を崩さない。
+func gameRemote(ctx context.Context, args []string, stdout io.Writer) error {
+	fs := flag.NewFlagSet("game remote", flag.ContinueOnError)
+	dataDir := fs.String("data-dir", "", "DB などを置くディレクトリ")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	meta, closeMeta, err := openMeta(ctx, *dataDir)
+	if err != nil {
+		return err
+	}
+	defer closeMeta()
+
+	res, err := meta.RemoteGames(ctx)
+	if err != nil {
+		return err
+	}
+	for _, g := range res.Games {
+		if _, err := fmt.Fprintf(stdout, "%s\t%q\t%s\t%s\n",
+			g.ID, g.Title, quoteOrDash(g.Brand), g.UpdatedAt.Format(time.RFC3339Nano)); err != nil {
+			return err
+		}
+	}
+	if len(res.Games) == 0 {
+		if _, err := fmt.Fprintln(stdout, "取り込めるゲームはありません"); err != nil {
+			return err
+		}
+	}
+	if res.Skipped > 0 {
+		_, err = fmt.Fprintf(stdout, "取り込めないゲームが %d 件あります（詳細はログ）\n", res.Skipped)
+	}
+	return err
+}
+
+func quoteOrDash(s string) string {
+	if s == "" {
+		return "-"
+	}
+	return strconv.Quote(s)
+}
+
+// gameImport は、画像とプレイ履歴を取得しない。次の push・pull のメタ情報の同期で取得する（仕様書 8-N12）。
+func gameImport(ctx context.Context, args []string, stdout io.Writer) error {
+	fs := flag.NewFlagSet("game import", flag.ContinueOnError)
+	game := fs.String("game", "", "取り込むゲームの ID（game remote で確かめる）")
+	saveDir := fs.String("save-dir", "", "セーブフォルダの絶対パス")
+	exe := fs.String("exe", "", "実行ファイルの絶対パス")
+	dataDir := fs.String("data-dir", "", "DB などを置くディレクトリ")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *game == "" {
+		return errors.New("--game is required")
+	}
+	if err := checkAbsPaths(*saveDir, *exe); err != nil {
+		return err
+	}
+	meta, closeMeta, err := openMeta(ctx, *dataDir)
+	if err != nil {
+		return err
+	}
+	defer closeMeta()
+
+	g, err := meta.ImportGame(ctx, *game, filepath.Clean(*saveDir), filepath.Clean(*exe))
+	if err != nil {
+		return err
+	}
+	// title はほかの PC が書いた値なので、game remote と同じく引用符つきで出す
+	_, err = fmt.Fprintf(stdout, "%s\t%q\n", g.ID, g.Title)
+	return err
+}
+
+// checkAbsPaths は、存在は確かめない。2 台目の PC では、まだセーブフォルダがないことがある（仕様書 4 章の「local なし」）。
+func checkAbsPaths(saveDir, exe string) error {
+	for _, f := range []struct{ name, path string }{{"--save-dir", saveDir}, {"--exe", exe}} {
+		if !filepath.IsAbs(f.path) {
+			return fmt.Errorf("%s must be an absolute path: %q", f.name, f.path)
+		}
+	}
+	return nil
 }
 
 // recoveryLabel は、R2 で確かめるときに仕様書の復旧表と突き合わせられるよう、行の ID を添える。
@@ -361,7 +479,7 @@ func explainSyncError(err error) error {
 func localConfig(s *store.Store, dataDir string) syncore.Config {
 	return syncore.Config{
 		Local:      s,
-		Logger:     slog.New(slog.NewTextHandler(os.Stderr, nil)),
+		Logger:     newLogger(),
 		BackupsDir: filepath.Join(dataDir, "backups"),
 		Locker:     platform.NewFileLock(filepath.Join(dataDir, "sync.lock")),
 		Rename:     platform.Rename,
@@ -415,11 +533,8 @@ func gameAdd(ctx context.Context, args []string, stdout io.Writer) error {
 	if *title == "" {
 		return errors.New("--title is required")
 	}
-	// 存在は検査しない。2 台目の PC では、まだセーブフォルダがないことがある（仕様書 4 章の「local なし」）
-	for _, f := range []struct{ name, path string }{{"--save-dir", *saveDir}, {"--exe", *exe}} {
-		if !filepath.IsAbs(f.path) {
-			return fmt.Errorf("%s must be an absolute path: %q", f.name, f.path)
-		}
+	if err := checkAbsPaths(*saveDir, *exe); err != nil {
+		return err
 	}
 	gameID, err := resolveGameID(*id)
 	if err != nil {

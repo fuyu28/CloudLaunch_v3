@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/fuyu28/CloudLaunch_v3/internal/metasync"
 	"github.com/fuyu28/CloudLaunch_v3/internal/syncore"
 )
 
@@ -44,6 +45,55 @@ func (s *Store) CreateGame(ctx context.Context, g NewGame) error {
 		return fmt.Errorf("commit: %w", err)
 	}
 	return nil
+}
+
+// RegisterGame は、リモートから取り込むゲームを登録する（仕様書 8-N3・8-N4）。CreateGame と違い、createdAt・updatedAt と
+// imageSha256 も g のものをそのまま書く。base は書かない。
+func (s *Store) RegisterGame(ctx context.Context, g metasync.GameInfo, saveFolderPath, exePath string) error {
+	if err := validateGameInfo(g); err != nil {
+		return err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO games (id, title, brand, image_sha256, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
+		g.ID, g.Title, nullIfEmpty(g.Brand), nullIfEmpty(g.ImageSha256), formatTime(g.CreatedAt), formatTime(g.UpdatedAt),
+	); err != nil {
+		return fmt.Errorf("insert games: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO game_locals (game_id, save_folder_path, exe_path) VALUES (?, ?, ?)`,
+		g.ID, saveFolderPath, exePath); err != nil {
+		return fmt.Errorf("insert game_locals: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) GameIDs(ctx context.Context) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id FROM games ORDER BY id`)
+	if err != nil {
+		return nil, fmt.Errorf("select games: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scan games: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("select games: %w", err)
+	}
+	return ids, nil
 }
 
 // GameLocal は、base が未設定なら BaseManifestHash に空文字を返す。

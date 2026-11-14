@@ -106,6 +106,30 @@ func (s *S3) List(ctx context.Context, prefix string) ([]string, error) {
 	return keys, nil
 }
 
+// ListPrefixes は、prefix の直下にある共通の接頭辞（区切り文字 `/` までを含む）を、すべて辞書順で返す。直下のキーは返さない。
+func (s *S3) ListPrefixes(ctx context.Context, prefix string) ([]string, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	prefixes := []string{}
+	pages := s3.NewListObjectsV2Paginator(s.client, &s3.ListObjectsV2Input{
+		Bucket:    &s.bucket,
+		Prefix:    &prefix,
+		Delimiter: aws.String("/"),
+	})
+	for pages.HasMorePages() {
+		page, err := pages.NextPage(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("list prefixes %q: %w", prefix, err)
+		}
+		for _, p := range page.CommonPrefixes {
+			prefixes = append(prefixes, aws.ToString(p.Prefix))
+		}
+	}
+	sort.Strings(prefixes)
+	return prefixes, nil
+}
+
 // Delete はキーがなくてもエラーにしない。
 func (s *S3) Delete(ctx context.Context, key string) error {
 	if err := ctx.Err(); err != nil {
