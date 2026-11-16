@@ -141,7 +141,6 @@ func (e *env) writeSave(t *testing.T, name, body string) {
 	}
 }
 
-// check は、Check を呼び、判定が want であることを確かめる。
 func (e *env) check(t *testing.T, want syncore.Decision) syncore.Plan {
 	t.Helper()
 	plan, err := e.core.Check(t.Context(), testGameID)
@@ -154,7 +153,6 @@ func (e *env) check(t *testing.T, want syncore.Decision) syncore.Plan {
 	return plan
 }
 
-// failOn は、op で key に当たる操作を errInjected で失敗させる。
 func (e *env) failOn(op memstore.Op, match func(key string) bool) {
 	prev := e.remote.Before
 	e.remote.Before = func(o memstore.Op, key string) error {
@@ -200,7 +198,6 @@ func (e *env) assertMetaSynced(t *testing.T, res gamesync.Result) {
 	}
 }
 
-// assertMetaNotSynced は、メタ情報を同期しなかったことを確かめる。
 func (e *env) assertMetaNotSynced(t *testing.T, res gamesync.Result) {
 	t.Helper()
 	if res.Meta != nil || res.MetaErr != nil {

@@ -151,8 +151,7 @@ func remoteDeletedLabel(t syncore.Tombstone) string {
 // errRemoteDeleted は、push・pull がゲームの tombstone で止まったことを表す。頼まれた同期をしていないので、エラーで終わる。
 var errRemoteDeleted = errors.New("リモートで削除されたゲームなので、同期しませんでした")
 
-// printRemoteDeleted は、gamesync が DB への記録と配下の削除（仕様書 8-T2）を済ませたゲームの tombstone を表示して、
-// errRemoteDeleted を返す。配下の削除に失敗していても（err）、記録はしたので表示する。
+// printRemoteDeleted は、配下の削除（仕様書 8-T2）に失敗していても（err）、gamesync が DB に記録したので表示する。
 func printRemoteDeleted(c cores, stdout io.Writer, t syncore.Tombstone, err error) error {
 	if _, werr := fmt.Fprintln(stdout, remoteDeletedLabel(t)); werr != nil {
 		return errors.Join(err, werr)
@@ -288,8 +287,7 @@ func gameInfoLabel(o metasync.GameInfoOutcome) string {
 	}
 }
 
-// syncSave は、判定が cmd.want でなく、上書きでもなければ、転送を見送る。標準出力への書き込みの失敗も、セーブの同期の
-// 失敗として gamesync に渡し、メタ情報を同期させる。
+// syncSave は、標準出力への書き込みの失敗も、セーブの同期の失敗として gamesync に渡し、メタ情報を同期させる。
 func syncSave(ctx context.Context, g *gamesync.Core, plan syncore.Plan, stdout io.Writer, cmd transferCommand, overwrite bool) (gamesync.Result, error) {
 	if err := printPlan(stdout, plan); err != nil {
 		return g.SyncMeta(ctx, plan.GameID, err)
