@@ -7,8 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io/fs"
-	"os"
 	"path/filepath"
 	"time"
 
@@ -52,7 +50,7 @@ func (c *Core) DeleteGame(ctx context.Context, gameID string) (DeleteResult, err
 	if err := c.ensureNoPullJournal(ctx, gameID); err != nil {
 		return DeleteResult{}, fmt.Errorf("delete game %s: %w", gameID, err)
 	}
-	if err := c.ensureNotDeletedBeforeDelete(ctx, gameID); err != nil {
+	if err := c.ensureNotDeleted(ctx, gameID); err != nil {
 		return DeleteResult{}, fmt.Errorf("delete game %s: %w", gameID, err)
 	}
 	game, err := c.cfg.Local.GameLocal(ctx, gameID)
@@ -74,7 +72,7 @@ func (c *Core) DeleteGame(ctx context.Context, gameID string) (DeleteResult, err
 	if err := c.ensureNotRunningForDelete(game.ExePath); err != nil {
 		return res, fmt.Errorf("delete game %s: %w", gameID, err)
 	}
-	if err := c.ensureNotDeletedBeforeDelete(ctx, gameID); err != nil {
+	if err := c.ensureNotDeleted(ctx, gameID); err != nil {
 		return res, fmt.Errorf("delete game %s: %w", gameID, err)
 	}
 
@@ -107,17 +105,6 @@ func (c *Core) deleteRemote(ctx context.Context, gameID string) error {
 	return nil
 }
 
-func (c *Core) ensureNotDeletedBeforeDelete(ctx context.Context, gameID string) error {
-	t, deleted, err := c.CheckTombstone(ctx, gameID)
-	if err != nil {
-		return err
-	}
-	if deleted {
-		return fmt.Errorf("deleted by %s at %s: %w", t.DeviceName, t.DeletedAt.Format(timeLayout), ErrRemoteDeleted)
-	}
-	return nil
-}
-
 // checkDeleteConfig は、ロックだけを取って何もせずに終わらないよう、手順で使う設定をロックの前に確かめる。
 // DeviceName が空のまま tombstone を書くと 8-T5 に当たり、どの PC もそのゲームを確かめられなくなるので、空なら止める。
 func (c *Core) checkDeleteConfig() error {
@@ -127,13 +114,9 @@ func (c *Core) checkDeleteConfig() error {
 	case c.cfg.DeviceName == "":
 		return errors.New("device name is not configured")
 	case c.cfg.Processes == nil:
-		return errors.New("process checker is not configured")
-	case c.cfg.BackupsDir == "":
-		return errBackupsDirNotSet
-	case c.cfg.Rename == nil:
-		return errRenameNotSet
+		return errProcessesNotSet
 	}
-	return nil
+	return c.checkBackupConfig()
 }
 
 func (c *Core) ensureNoPullJournal(ctx context.Context, gameID string) error {
@@ -152,10 +135,10 @@ func (c *Core) ensureNoPullJournal(ctx context.Context, gameID string) error {
 // ensureNotRunningForDelete は、7 章と違い、実行ファイルがなければ実行中でないとして通す（仕様書 8-X13）。
 // ensureGameNotRunning に分岐を足すと、Push・Pull の呼び出しにも 8-X13 の扱いが見えるので、ここで分ける。
 func (c *Core) ensureNotRunningForDelete(exePath string) error {
-	if _, err := os.Stat(exePath); errors.Is(err, fs.ErrNotExist) {
-		return nil
+	if err := c.ensureGameNotRunning(exePath); !errors.Is(err, ErrGameExeNotFound) {
+		return err
 	}
-	return c.ensureGameNotRunning(exePath)
+	return nil
 }
 
 // backupForDelete は、セーブフォルダを Pull のバックアップと同じ置き場所・名前の形でコピーし、3 個に保つ（仕様書 8-X4）。
@@ -174,9 +157,9 @@ func (c *Core) backupForDelete(ctx context.Context, gameID, saveDir string, star
 		return "", fmt.Errorf("generate op id: %w", err)
 	}
 	name := backupName(startedAt, u.String())
-	dir := filepath.Join(c.cfg.BackupsDir, gameID)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return "", fmt.Errorf("create backups directory: %w", err)
+	dir, err := c.makeBackupDir(gameID)
+	if err != nil {
+		return "", err
 	}
 	if err := c.copyToBackup(ctx, dir, saveDir, name); err != nil {
 		return "", err

@@ -4,8 +4,6 @@ package syncore
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -132,8 +130,7 @@ func (c *Core) uploadObject(ctx context.Context, key, root string, e Entry) erro
 	if err != nil {
 		return fmt.Errorf("read %s: %w", e.Path, err)
 	}
-	sum := sha256.Sum256(b)
-	if int64(len(b)) != e.Size || hex.EncodeToString(sum[:]) != e.SHA256 {
+	if int64(len(b)) != e.Size || sha256Hex(b) != e.SHA256 {
 		return fmt.Errorf("%s changed after approval: %w", e.Path, ErrPlanStale)
 	}
 	return c.cfg.Remote.Put(ctx, key, bytes.NewReader(b), int64(len(b)))
