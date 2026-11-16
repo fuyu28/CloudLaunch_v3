@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"time"
 )
 
 // maxImageSize は、仕様書 8-I2・8-V13 の 10 MiB。
@@ -44,6 +45,26 @@ func (c *Core) CacheImage(r io.Reader) (string, error) {
 		return sha, nil
 	}
 	if err := c.writeCache(sha, body); err != nil {
+		return "", err
+	}
+	return sha, nil
+}
+
+// SetImage は、画像をキャッシュに入れて、DB のゲーム情報の imageSha256 にし、sha256 を返す。r が nil なら画像を外して空を返す。
+// リモートには触れず、次の同期で反映する（仕様書 8-M2）。
+func (c *Core) SetImage(ctx context.Context, gameID string, r io.Reader, now time.Time) (string, error) {
+	// 登録していないゲームの ID を打ち間違えたときに、どこからも参照されない画像をキャッシュに残さない
+	if _, err := c.cfg.Local.GameInfo(ctx, gameID); err != nil {
+		return "", err
+	}
+	var sha string
+	if r != nil {
+		var err error
+		if sha, err = c.CacheImage(r); err != nil {
+			return "", err
+		}
+	}
+	if err := c.cfg.Local.SetImageSha256(ctx, gameID, sha, now); err != nil {
 		return "", err
 	}
 	return sha, nil

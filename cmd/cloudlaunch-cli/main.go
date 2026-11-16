@@ -17,6 +17,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/fuyu28/CloudLaunch_v3/internal/gamesync"
 	"github.com/fuyu28/CloudLaunch_v3/internal/legacy"
 	"github.com/fuyu28/CloudLaunch_v3/internal/metasync"
 	"github.com/fuyu28/CloudLaunch_v3/internal/objstore"
@@ -150,13 +151,9 @@ func remoteDeletedLabel(t syncore.Tombstone) string {
 // errRemoteDeleted は、push・pull がゲームの tombstone で止まったことを表す。頼まれた同期をしていないので、エラーで終わる。
 var errRemoteDeleted = errors.New("リモートで削除されたゲームなので、同期しませんでした")
 
-// handleTombstone は、ゲームの tombstone を確かめ、あれば DB に記録して配下を削除し（仕様書 8-T2）、表示して
-// errRemoteDeleted を返す。配下の削除に失敗しても、記録はしたので表示する。なければ nil を返す。
-func handleTombstone(ctx context.Context, c cores, stdout io.Writer) error {
-	t, deleted, err := c.sync.HandleTombstone(ctx, c.gameID)
-	if !deleted {
-		return err
-	}
+// printRemoteDeleted は、gamesync が DB への記録と配下の削除（仕様書 8-T2）を済ませたゲームの tombstone を表示して、
+// errRemoteDeleted を返す。配下の削除に失敗していても（err）、記録はしたので表示する。
+func printRemoteDeleted(c cores, stdout io.Writer, t syncore.Tombstone, err error) error {
 	if _, werr := fmt.Fprintln(stdout, remoteDeletedLabel(t)); werr != nil {
 		return errors.Join(err, werr)
 	}
@@ -187,7 +184,7 @@ type transferCommand struct {
 	// skipped は、判定が want でなく、上書きでもないときに出す
 	skipped string
 	done    string
-	exec    func(ctx context.Context, core *syncore.Core, plan syncore.Plan, overwrite bool) error
+	exec    func(ctx context.Context, g *gamesync.Core, plan syncore.Plan, overwrite bool) (gamesync.Result, error)
 }
 
 var (
@@ -196,8 +193,8 @@ var (
 		want:    syncore.DecisionPush,
 		skipped: "判定が Push でないので、アップロードしません（上書きするときは --overwrite を付ける）",
 		done:    "アップロードしました",
-		exec: func(ctx context.Context, core *syncore.Core, plan syncore.Plan, overwrite bool) error {
-			return core.Push(ctx, plan, syncore.PushOptions{Overwrite: overwrite})
+		exec: func(ctx context.Context, g *gamesync.Core, plan syncore.Plan, overwrite bool) (gamesync.Result, error) {
+			return g.Push(ctx, plan, syncore.PushOptions{Overwrite: overwrite})
 		},
 	}
 	pullCommand = transferCommand{
@@ -205,16 +202,14 @@ var (
 		want:    syncore.DecisionPull,
 		skipped: "判定が Pull でないので、ダウンロードしません（上書きするときは --overwrite を付ける）",
 		done:    "ダウンロードしました",
-		exec: func(ctx context.Context, core *syncore.Core, plan syncore.Plan, overwrite bool) error {
-			return core.Pull(ctx, plan, syncore.PullOptions{Overwrite: overwrite})
+		exec: func(ctx context.Context, g *gamesync.Core, plan syncore.Plan, overwrite bool) (gamesync.Result, error) {
+			return g.Pull(ctx, plan, syncore.PullOptions{Overwrite: overwrite})
 		},
 	}
 )
 
 // transfer は push と pull を行う。コマンドの実行を承認とみなして確認を出さない（仕様書 7 章の確認は GUI が出す）。
-// --overwrite を付けると、判定によらず上書きする。最初にゲームの tombstone を確かめ、あればどちらも同期しない（仕様書 8-M1）。
-// セーブの同期が見送り・失敗で終わっても、そのあとにメタ情報を同期する（8-M2）。メタ情報の同期の失敗は、返すエラーに
-// 含めない（8-M3）。
+// --overwrite を付けると、判定によらず上書きする。判定に失敗したときも、セーブの同期の失敗として、メタ情報を同期する（8-M2）。
 func transfer(ctx context.Context, args []string, stdout io.Writer, cmd transferCommand) error {
 	var overwrite bool
 	c, err := openCore(ctx, cmd.name, args, &overwrite)
@@ -223,36 +218,35 @@ func transfer(ctx context.Context, args []string, stdout io.Writer, cmd transfer
 	}
 	defer c.close()
 
-	if err := handleTombstone(ctx, c, stdout); err != nil {
-		return err
+	g := gamesync.New(gamesync.Config{Save: c.sync, Meta: c.meta, Logger: c.logger})
+	plan, err := g.Check(ctx, c.gameID)
+	if plan.RemoteDeleted != nil {
+		return printRemoteDeleted(c, stdout, *plan.RemoteDeleted, err)
 	}
-	err = syncSave(ctx, c.sync, c.gameID, stdout, cmd, overwrite)
+	var res gamesync.Result
 	if err != nil {
-		// 確かめた後にゲームが削除されると、セーブの同期は 8-T7 のほか、削除で消えた object を取得できずにも失敗する。
-		// どちらでも、メタ情報を同期する前に tombstone を確かめ直す。確かめずに同期すると、削除したデータをリモートに戻す。
-		// 確かめ直しに失敗したときも、メタ情報は同期しない
-		// 元のエラーも返す。8-T7 で止まった Pull は、stage やジャーナルを削除できなかったことも含みうる
-		if herr := handleTombstone(ctx, c, stdout); herr != nil {
-			return errors.Join(herr, err)
-		}
-		if errors.Is(err, syncore.ErrRemoteDeleted) {
-			return err
-		}
+		res, err = g.SyncMeta(ctx, c.gameID, err)
+	} else {
+		res, err = syncSave(ctx, g, plan, stdout, cmd, overwrite)
 	}
-	return errors.Join(err, syncMeta(ctx, c, stdout))
+	if res.RemoteDeleted != nil {
+		return printRemoteDeleted(c, stdout, *res.RemoteDeleted, err)
+	}
+	return errors.Join(err, printMeta(stdout, res))
 }
 
-// syncMeta は、標準出力への書き込みに失敗したときだけエラーを返す。
-func syncMeta(ctx context.Context, c cores, stdout io.Writer) error {
-	res, err := c.meta.Sync(ctx, c.gameID)
-	if err != nil {
-		c.logger.Warn("metadata sync failed", "gameId", c.gameID, "err", err)
-		_, werr := fmt.Fprintf(stdout, "メタ情報の同期に失敗しました: %v\n", err)
-		return werr
+// printMeta は、メタ情報を同期しなかったとき（tombstone を確かめ直せなかったとき）は何も出さない。
+func printMeta(stdout io.Writer, res gamesync.Result) error {
+	switch {
+	case res.MetaErr != nil:
+		_, err := fmt.Fprintf(stdout, "メタ情報の同期に失敗しました: %v\n", res.MetaErr)
+		return err
+	case res.Meta != nil:
+		_, err := fmt.Fprintf(stdout, "ゲーム情報: %s\n画像: %s\nプレイ履歴を %d 件アップロードし、%d 件取り込みました\n",
+			gameInfoLabel(res.Meta.GameInfo), imageLabel(*res.Meta), res.Meta.UploadedSessions, res.Meta.DownloadedSessions)
+		return err
 	}
-	_, err = fmt.Fprintf(stdout, "ゲーム情報: %s\n画像: %s\nプレイ履歴を %d 件アップロードし、%d 件取り込みました\n",
-		gameInfoLabel(res.GameInfo), imageLabel(res), res.UploadedSessions, res.DownloadedSessions)
-	return err
+	return nil
 }
 
 // imageLabel は、game.json が不正で画像を扱わなかったときに「なし」と出さない。DB には画像があるので、外れたと誤解させるため。
@@ -289,27 +283,28 @@ func gameInfoLabel(o metasync.GameInfoOutcome) string {
 	}
 }
 
-func syncSave(ctx context.Context, core *syncore.Core, gameID string, stdout io.Writer, cmd transferCommand, overwrite bool) error {
-	plan, err := core.Status(ctx, gameID)
-	if err != nil {
-		return err
-	}
-	if plan.RemoteDeleted != nil {
-		return syncore.ErrRemoteDeleted
-	}
+// syncSave は、判定が cmd.want でなく、上書きでもなければ、転送を見送る。標準出力への書き込みの失敗も、セーブの同期の
+// 失敗として gamesync に渡し、メタ情報を同期させる。
+func syncSave(ctx context.Context, g *gamesync.Core, plan syncore.Plan, stdout io.Writer, cmd transferCommand, overwrite bool) (gamesync.Result, error) {
 	if err := printPlan(stdout, plan); err != nil {
-		return err
+		return g.SyncMeta(ctx, plan.GameID, err)
 	}
 	if plan.Decision != cmd.want && !overwrite {
 		if _, err := fmt.Fprintln(stdout, cmd.skipped); err != nil {
-			return err
+			return g.SyncMeta(ctx, plan.GameID, err)
 		}
-		return recordBaseIfNeeded(ctx, core, plan, stdout)
+		res, err := g.Skip(ctx, plan)
+		if err != nil || !plan.RecordBase {
+			return res, err
+		}
+		_, err = fmt.Fprintln(stdout, recordBaseLabel(plan)+"しました")
+		return res, err
 	}
-	if err := cmd.exec(ctx, core, plan, overwrite); err != nil {
-		return explainSyncError(err)
+	res, err := cmd.exec(ctx, g, plan, overwrite)
+	if err != nil {
+		return res, explainSyncError(err)
 	}
-	return printTransferred(stdout, plan, overwrite, cmd.done)
+	return res, printTransferred(stdout, plan, overwrite, cmd.done)
 }
 
 // printTransferred は、上書きで local と remote が同じだったときは、コアが転送せずに base だけを記録している
@@ -900,23 +895,18 @@ func gameSetImage(ctx context.Context, args []string, stdout io.Writer) error {
 	}
 	defer c.close()
 
-	// 登録していないゲームの ID を打ち間違えたときに、どこからも参照されない画像をキャッシュに残さない
-	if _, err := c.store.GameInfo(ctx, *game); err != nil {
-		return err
-	}
-	var sha string
+	// *os.File の nil をインターフェースに入れると nil と比べて等しくならないので、開いたときだけ入れる
+	var r io.Reader
 	if *file != "" {
 		f, err := os.Open(*file)
 		if err != nil {
 			return fmt.Errorf("open image: %w", err)
 		}
 		defer func() { _ = f.Close() }()
-		sha, err = c.meta.CacheImage(f)
-		if err != nil {
-			return err
-		}
+		r = f
 	}
-	if err := c.store.EditGame(ctx, *game, store.GameEdit{ImageSha256: &sha}, time.Now()); err != nil {
+	sha, err := c.meta.SetImage(ctx, *game, r, time.Now())
+	if err != nil {
 		return err
 	}
 	_, err = fmt.Fprintf(stdout, "imageSha256: %s\n", orDash(sha))
