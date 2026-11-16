@@ -37,22 +37,6 @@ func mustImport(t *testing.T, s *store.Store, body string) {
 	}
 }
 
-func createGame(t *testing.T, s *store.Store, id, title string) {
-	t.Helper()
-	if err := s.CreateGame(context.Background(), store.NewGame{
-		ID: id, Title: title, SaveFolderPath: "/save", ExePath: "/game.exe", CreatedAt: time.Now(),
-	}); err != nil {
-		t.Fatalf("CreateGame: %v", err)
-	}
-}
-
-func createSession(t *testing.T, s *store.Store, sess metasync.Session) {
-	t.Helper()
-	if err := s.CreateSession(context.Background(), sess); err != nil {
-		t.Fatalf("CreateSession: %v", err)
-	}
-}
-
 func sessionsOf(t *testing.T, s *store.Store, gameID string) []metasync.Session {
 	t.Helper()
 	got, err := s.Sessions(context.Background(), gameID)

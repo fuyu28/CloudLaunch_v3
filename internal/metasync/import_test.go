@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"log/slog"
 	"strings"
 	"testing"
@@ -24,41 +23,7 @@ const (
 	remoteGameC = "0192d4e8-0000-7000-8000-0000000000a4"
 	// otherLocalGame は、testGameID のほかにこの PC に登録するゲーム
 	otherLocalGame = "0192d4e8-0000-7000-8000-0000000000a3"
-	deletedJSON    = `{"deletedAt":"2026-11-03T01:02:03.004Z","deviceName":"Laptop"}`
 )
-
-var errInjected = errors.New("injected")
-
-func remoteGameKey(gameID, name string) string {
-	return "games/" + gameID + "/" + name
-}
-
-// fakeTombstones は、syncore の代わりにゲームの tombstone を確かめる。リモートの deleted.json の本文が deletedJSON なら
-// 削除済み、それ以外の本文なら不正と返す。本文の検証（8-T4〜8-T6）は syncore のテストで確かめる。
-type fakeTombstones struct {
-	remote interface {
-		Get(ctx context.Context, key string) (io.ReadCloser, error)
-	}
-}
-
-func (f fakeTombstones) RemoteTombstoneExists(ctx context.Context, gameID string) (bool, error) {
-	r, err := f.remote.Get(ctx, remoteGameKey(gameID, "deleted.json"))
-	if errors.Is(err, fs.ErrNotExist) {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	defer func() { _ = r.Close() }()
-	body, err := io.ReadAll(r)
-	if err != nil {
-		return false, err
-	}
-	if string(body) != deletedJSON {
-		return false, fmt.Errorf("%w: %s", metasync.ErrInvalidTombstone, body)
-	}
-	return true, nil
-}
 
 // fullGameJSON は、brand と imageSha256 を持ち、createdAt と updatedAt が違う game.json を返す。
 func fullGameJSON(gameID, title string) string {

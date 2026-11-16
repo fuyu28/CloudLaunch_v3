@@ -49,10 +49,6 @@ func sha256Hex(b []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func imageKey(sha string) string {
-	return "games/" + testGameID + "/images/" + sha
-}
-
 // putOrder は、PUT したキーを呼んだ順に返す。
 func (e *env) putOrder() []string {
 	e.mu.Lock()

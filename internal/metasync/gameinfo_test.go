@@ -16,15 +16,10 @@ import (
 )
 
 const (
-	gameKey     = "games/" + testGameID + "/game.json"
-	localStamp  = "2026-11-03T01:02:03.004Z"
 	olderStamp  = "2026-11-01T00:00:00.000Z"
 	newerStamp  = "2026-11-05T00:00:00.000Z"
 	remoteTitle = "Remote"
 )
-
-// localGameJSON は、newEnvOn が登録するゲームを PUT したときの本文。
-const localGameJSON = `{"id":"` + testGameID + `","title":"Game","createdAt":"` + localStamp + `","updatedAt":"` + localStamp + `"}`
 
 // localGameInfo は、newEnvOn が登録するゲームのゲーム情報。
 var localGameInfo = metasync.GameInfo{ID: testGameID, Title: "Game", CreatedAt: testPlayedAt, UpdatedAt: testPlayedAt}
@@ -32,15 +27,6 @@ var localGameInfo = metasync.GameInfo{ID: testGameID, Title: "Game", CreatedAt: 
 // remoteGameJSON は、title を remoteTitle にし、updatedAt を updatedAt にした game.json を返す。
 func remoteGameJSON(updatedAt string) string {
 	return fmt.Sprintf(`{"id":%q,"title":%q,"createdAt":%q,"updatedAt":%q}`, testGameID, remoteTitle, olderStamp, updatedAt)
-}
-
-func mustTime(t *testing.T, s string) time.Time {
-	t.Helper()
-	v, err := time.Parse(time.RFC3339Nano, s)
-	if err != nil {
-		t.Fatalf("parse %s: %v", s, err)
-	}
-	return v
 }
 
 func (e *env) localGameInfo(t *testing.T) metasync.GameInfo {

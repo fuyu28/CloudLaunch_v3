@@ -2,107 +2,26 @@ package metasync_test
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
-	"io"
 	"io/fs"
-	"log/slog"
-	"path/filepath"
-	"sort"
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/google/go-cmp/cmp"
 
 	"github.com/fuyu28/CloudLaunch_v3/internal/metasync"
 	"github.com/fuyu28/CloudLaunch_v3/internal/objstore/memstore"
 	"github.com/fuyu28/CloudLaunch_v3/internal/store"
-	"github.com/fuyu28/CloudLaunch_v3/internal/syncore"
 )
 
 const (
-	testGameID = "0192d4e8-0000-7000-8000-000000000001"
-	sessionA   = "0192d4e8-0000-7000-8000-0000000000c1"
-	sessionB   = "0192d4e8-0000-7000-8000-0000000000c2"
+	sessionA = "0192d4e8-0000-7000-8000-0000000000c1"
+	sessionB = "0192d4e8-0000-7000-8000-0000000000c2"
 	// legacySession は、9 章で取り込む旧版の形の ID
 	legacySession = "0123456789abcdef0123456789abcdef"
 )
-
-var testPlayedAt = time.Date(2026, 11, 3, 1, 2, 3, 4_000_000, time.UTC)
-
-type env struct {
-	core   *metasync.Core
-	store  *store.Store
-	remote *memstore.Store
-	dbPath string
-	// imageDir は、画像のキャッシュのフォルダ
-	imageDir string
-	// puts と gets は、リモートに PUT・GET したキーを、呼んだ順に記録する。並列なので mu で守る
-	mu   sync.Mutex
-	puts []string
-	gets []string
-}
-
-// newEnv は、ローカルと同じ game.json をリモートに置く。ゲーム情報は同期しても変わらず（8-G4）、プレイ履歴のテストの
-// PUT・GET の記録と結果に、game.json の PUT が混ざらない。
-func newEnv(t *testing.T) *env {
-	t.Helper()
-	e := newBareEnv(t)
-	e.putRemote(gameKey, localGameJSON)
-	return e
-}
-
-// newBareEnv は、リモートを空にした PC を 1 台作り、PUT・GET したキーを記録する。
-func newBareEnv(t *testing.T) *env {
-	t.Helper()
-	e := newEnvOn(t, memstore.New())
-	e.remote.Before = func(op memstore.Op, key string) error {
-		e.mu.Lock()
-		defer e.mu.Unlock()
-		switch op {
-		case memstore.OpPut:
-			e.puts = append(e.puts, key)
-		case memstore.OpGet:
-			e.gets = append(e.gets, key)
-		}
-		return nil
-	}
-	return e
-}
-
-// newEnvOn は、remote を使う PC を 1 台作る。複数の PC で同じ remote を共有するときに使い、PUT・GET は記録しない。
-func newEnvOn(t *testing.T, remote *memstore.Store) *env {
-	t.Helper()
-	ctx := context.Background()
-	dbPath := filepath.Join(t.TempDir(), "cloudlaunch.db")
-	s, err := store.Open(ctx, dbPath)
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
-	if err := s.CreateGame(ctx, store.NewGame{
-		ID:             testGameID,
-		Title:          "Game",
-		SaveFolderPath: "/save",
-		ExePath:        "/game.exe",
-		CreatedAt:      testPlayedAt,
-	}); err != nil {
-		t.Fatalf("CreateGame: %v", err)
-	}
-
-	e := &env{store: s, remote: remote, dbPath: dbPath, imageDir: filepath.Join(t.TempDir(), "images")}
-	e.core = metasync.New(metasync.Config{
-		Remote:     e.remote,
-		Local:      s,
-		Tombstones: fakeTombstones{remote: e.remote},
-		Logger:     slog.New(slog.DiscardHandler),
-		ImageDir:   e.imageDir,
-	})
-	return e
-}
 
 func (e *env) addSession(t *testing.T, id string, durationSec int64) {
 	t.Helper()
@@ -114,11 +33,6 @@ func (e *env) addSession(t *testing.T, id string, durationSec int64) {
 	}); err != nil {
 		t.Fatalf("CreateSession %s: %v", id, err)
 	}
-}
-
-// putRemote は、Before を通さずに置くので、puts・gets の記録に数えない。
-func (e *env) putRemote(key, body string) {
-	e.remote.Set(key, []byte(body))
 }
 
 // putRemoteSession は、#95 の PUT と同じ形のセッションをリモートに置く。
@@ -135,22 +49,6 @@ func session(id string, durationSec int64) metasync.Session {
 	return metasync.Session{ID: id, GameID: testGameID, PlayedAt: testPlayedAt, DurationSec: durationSec}
 }
 
-func (e *env) putKeys() []string {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	keys := append([]string{}, e.puts...)
-	sort.Strings(keys)
-	return keys
-}
-
-func (e *env) getKeys() []string {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	keys := append([]string{}, e.gets...)
-	sort.Strings(keys)
-	return keys
-}
-
 func (e *env) localSessions(t *testing.T) []metasync.Session {
 	t.Helper()
 	got, err := e.store.Sessions(context.Background(), testGameID)
@@ -160,22 +58,8 @@ func (e *env) localSessions(t *testing.T) []metasync.Session {
 	return got
 }
 
-func (e *env) remoteBody(t *testing.T, key string) string {
-	t.Helper()
-	r, err := e.remote.Get(context.Background(), key)
-	if err != nil {
-		t.Fatalf("get %s: %v", key, err)
-	}
-	defer func() { _ = r.Close() }()
-	b, err := io.ReadAll(r)
-	if err != nil {
-		t.Fatalf("read %s: %v", key, err)
-	}
-	return string(b)
-}
-
 func sessionKey(id string) string {
-	return "games/" + testGameID + "/sessions/" + id + ".json"
+	return remoteGameKey(testGameID, "sessions/"+id+".json")
 }
 
 func TestSyncSessions(t *testing.T) {
@@ -567,25 +451,4 @@ func TestDownloadSessions(t *testing.T) {
 			t.Errorf("DB に入れた: %v", got)
 		}
 	})
-}
-
-// markRemoteDeleted は、ゲームの tombstone の記録（8-T2）を、リモートの deleted.json（deletedJSON）と違う値で DB にだけ書く。
-func (e *env) markRemoteDeleted(t *testing.T) {
-	t.Helper()
-	ts := syncore.Tombstone{DeletedAt: time.Date(2026, 11, 3, 0, 0, 0, 0, time.UTC), DeviceName: "Laptop"}
-	if err := e.store.RecordRemoteDeleted(context.Background(), testGameID, ts); err != nil {
-		t.Fatalf("RecordRemoteDeleted: %v", err)
-	}
-}
-
-func execDB(t *testing.T, dbPath, query string, args ...any) {
-	t.Helper()
-	db, err := sql.Open("sqlite", dbPath)
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
-	defer func() { _ = db.Close() }()
-	if _, err := db.Exec(query, args...); err != nil {
-		t.Fatalf("exec %q: %v", query, err)
-	}
 }
