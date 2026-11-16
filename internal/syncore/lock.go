@@ -14,7 +14,7 @@ type Locker interface {
 	TryLock() (unlock func() error, ok bool, err error)
 }
 
-// acquire は、Push・Pull・Recover が何かを変える前に呼ぶ。返した release は、成功しても失敗しても呼ぶ。
+// acquire は、ロックを握る操作（Config.Locker）が、何かを変える前に呼ぶ。返した release は、成功しても失敗しても呼ぶ。
 // Locker がなければエラーにし、ロックなしで黙って動く道を作らない。
 func (c *Core) acquire(ctx context.Context) (release func(), err error) {
 	if c.cfg.Locker == nil {

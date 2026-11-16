@@ -67,7 +67,7 @@ func (c *Core) Recover(ctx context.Context) ([]Recovery, error) {
 	return recovered, errors.Join(errs...)
 }
 
-// recoverOne は、記録されたパスの状態から復旧表の行を選んで処理する。
+// recoverOne は、stage・old・live の有無で、仕様書 6 章「起動時の復旧」の表の行を選ぶ。
 func (c *Core) recoverOne(ctx context.Context, op PullOperation) (RecoveryCase, error) {
 	hasStage, err := exists(op.StagePath)
 	if err != nil {

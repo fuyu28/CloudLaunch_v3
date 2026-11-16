@@ -10,7 +10,7 @@ import (
 // ErrPlanStale は、承認した後にセーブフォルダかリモートの状態が変わったことを表す。判定からやり直す。
 var ErrPlanStale = errors.New("plan is stale")
 
-// ensureLocalUnchanged は、Push（5-P3）と Pull（6-L6）が、承認の後にセーブフォルダが変わっていないかを確かめる（仕様書 7 章）。
+// ensureLocalUnchanged は、承認の後にセーブフォルダが変わっていないかを確かめる（仕様書 7 章、5-P3・6-L6）。
 // DB の base ではなく plan.Base を使う。plan.Local.Hash は plan.Base から計算したもので、同じ base で計算し直さないと比べられない
 func ensureLocalUnchanged(ctx context.Context, folder string, plan Plan) error {
 	entries, err := localEntries(ctx, folder)

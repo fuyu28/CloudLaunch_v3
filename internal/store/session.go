@@ -1,4 +1,4 @@
-// プレイ履歴（play_sessions）の読み書きと、メタ情報の同期が使うゲームのローカル情報の読み込みを行う。
+// プレイ履歴（play_sessions）の読み書きを行う（仕様書 8 章「プレイ履歴」）。
 package store
 
 import (

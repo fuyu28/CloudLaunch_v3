@@ -100,7 +100,6 @@ func (c *Core) listGenerations(ctx context.Context, gameID string) ([]string, er
 	return generations, nil
 }
 
-// referencedObjects は、generations の manifest を並列に読み、参照されている object の sha256 を返す。
 func (c *Core) referencedObjects(ctx context.Context, gameID string, generations []string) (map[string]bool, error) {
 	var mu sync.Mutex
 	referenced := map[string]bool{}

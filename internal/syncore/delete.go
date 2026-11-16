@@ -14,7 +14,8 @@ import (
 )
 
 var (
-	// ErrPullPending は、Pull ジャーナルが残っていて、ゲームを削除できないことを表す。復旧（Recover）で片付けてから削除する
+	// ErrPullPending は、Pull ジャーナルが残っていて、ゲームの削除や上げ直しができないことを表す（仕様書 8-X3・8-U3）。
+	// 復旧（Recover）で片付けてからやり直す
 	ErrPullPending = errors.New("pull journal remains for the game")
 	// ErrRemoteDeletionFailed は、リモートの削除（tombstone の PUT・DB への記録・配下の削除）で止まったことを表す。それより
 	// 前の手順で止まったときは何も消えていない。PUT で止まったときは、PUT が届いたかは分からない（8-X9）。PUT の後で止まった
