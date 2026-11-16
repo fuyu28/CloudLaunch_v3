@@ -278,6 +278,40 @@ func TestGameSync(t *testing.T) {
 		e.assertRecordedDeleted(t)
 	})
 
+	t.Run("8-M1 判定がゲームの tombstone を見つけた後に見えなくなったら、判定を止める", func(t *testing.T) {
+		e := newEnv(t)
+		e.writeSave(t, "a.sav", "one")
+		// 2 回目の GET（Status の確認）で見せ、3 回目（記録のための確かめ直し）で見えなくする
+		var mu sync.Mutex
+		gets := 0
+		e.remote.Before = func(op memstore.Op, key string) error {
+			if op == memstore.OpGet && key == tombstoneKey {
+				mu.Lock()
+				defer mu.Unlock()
+				gets++
+				switch gets {
+				case 2:
+					e.remote.Set(tombstoneKey, []byte(tombstoneJSON))
+				case 3:
+					if err := e.remote.Delete(context.Background(), tombstoneKey); err != nil {
+						return err
+					}
+				}
+			}
+			return nil
+		}
+
+		plan, err := e.core.Check(t.Context(), testGameID)
+		if !errors.Is(err, syncore.ErrRemoteDeleted) {
+			t.Errorf("Check = %+v, %v, want ErrRemoteDeleted", plan, err)
+		}
+		res, err := e.core.SyncMeta(t.Context(), testGameID, err)
+		if !errors.Is(err, syncore.ErrRemoteDeleted) {
+			t.Errorf("SyncMeta = %v, want ErrRemoteDeleted", err)
+		}
+		e.assertMetaNotSynced(t, res)
+	})
+
 	t.Run("8-M2 Push を見送っても、メタ情報を同期する", func(t *testing.T) {
 		e := newEnv(t)
 		e.writeSave(t, "a.sav", "one")
