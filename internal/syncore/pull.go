@@ -12,6 +12,13 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+type PullOptions struct {
+	// Overwrite が真なら、判定によらず plan を受け付ける（仕様書 7 章の上書き）
+	Overwrite bool
+	// Progress は、ダウンロードについて、PushOptions.Progress と同じ約束で呼ぶ
+	Progress func(Progress)
+}
+
 // Pull は、上書き（opts.Overwrite）でなければ、判定が Pull の plan だけを受け付ける。入れ替えを始めた後に失敗した
 // ときは、ジャーナルを残してエラーを返す。残った状態は仕様書 6 章の復旧表の行に当たり、Recover が片付ける。
 func (c *Core) Pull(ctx context.Context, plan Plan, opts PullOptions) error {
@@ -45,6 +52,7 @@ func (c *Core) Pull(ctx context.Context, plan Plan, opts PullOptions) error {
 		return fmt.Errorf("pull %s: %w", plan.GameID, err)
 	}
 	if opts.Overwrite && plan.SameContent() {
+		startProgress(ctx, opts.Progress, 0, 0)
 		return c.finishSameContent(ctx, plan, live)
 	}
 
@@ -65,7 +73,7 @@ func (c *Core) Pull(ctx context.Context, plan Plan, opts PullOptions) error {
 		return fmt.Errorf("write pull journal: %w", err)
 	}
 
-	if err := c.prepareStage(ctx, plan, game, stage); err != nil {
+	if err := c.prepareStage(ctx, plan, game, stage, opts.Progress); err != nil {
 		return c.abortPull(ctx, opID, stage, err)
 	}
 
@@ -107,11 +115,11 @@ func (c *Core) Pull(ctx context.Context, plan Plan, opts PullOptions) error {
 }
 
 // prepareStage は手順 4〜6 を行う。
-func (c *Core) prepareStage(ctx context.Context, plan Plan, game GameLocal, stage string) error {
+func (c *Core) prepareStage(ctx context.Context, plan Plan, game GameLocal, stage string, progress func(Progress)) error {
 	if err := os.Mkdir(stage, 0o755); err != nil {
 		return fmt.Errorf("create stage: %w", err)
 	}
-	if err := c.downloadAll(ctx, plan.GameID, stage, plan.Remote.Manifest.Entries); err != nil {
+	if err := c.downloadAll(ctx, plan.GameID, stage, plan.Remote.Manifest.Entries, progress); err != nil {
 		return err
 	}
 
@@ -144,12 +152,25 @@ func (c *Core) abortPull(ctx context.Context, opID, stage string, cause error) e
 	return cause
 }
 
-func (c *Core) downloadAll(ctx context.Context, gameID, stage string, entries []Entry) error {
+// downloadAll は、中身が同じファイルも、ファイルごとに取得する。
+func (c *Core) downloadAll(ctx context.Context, gameID, stage string, entries []Entry, progress func(Progress)) error {
+	var size int64
+	for _, e := range entries {
+		size += e.Size
+	}
+	reporter := startProgress(ctx, progress, len(entries), size)
 	g, ctx := errgroup.WithContext(ctx)
 	g.SetLimit(transferLimit)
 	for _, e := range entries {
 		dst := filepath.Join(stage, filepath.FromSlash(e.Path))
-		g.Go(func() error { return c.downloadObject(ctx, objectKey(gameID, e.SHA256), dst) })
+		g.Go(func() error {
+			if err := c.downloadObject(ctx, objectKey(gameID, e.SHA256), dst); err != nil {
+				reporter.fail()
+				return err
+			}
+			reporter.done(e.Size)
+			return nil
+		})
 	}
 	return g.Wait()
 }
