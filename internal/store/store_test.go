@@ -18,17 +18,6 @@ import (
 	"github.com/fuyu28/CloudLaunch_v3/internal/syncore"
 )
 
-func openTemp(t *testing.T) (*Store, string) {
-	t.Helper()
-	path := filepath.Join(t.TempDir(), "cloudlaunch.db")
-	s, err := Open(context.Background(), path)
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
-	return s, path
-}
-
 func TestOpen(t *testing.T) {
 	t.Run("store/空の DB に migration を最後まで適用できる", func(t *testing.T) {
 		s, _ := openTemp(t)

@@ -16,21 +16,6 @@ import (
 	"github.com/fuyu28/CloudLaunch_v3/internal/syncore"
 )
 
-const testGameID = "0192d4e8-0000-7000-8000-000000000001"
-
-func createTestGame(t *testing.T, s *Store) {
-	t.Helper()
-	if err := s.CreateGame(context.Background(), NewGame{
-		ID:             testGameID,
-		Title:          "Game",
-		SaveFolderPath: "/save",
-		ExePath:        "/game.exe",
-		CreatedAt:      time.Date(2026, 10, 27, 0, 0, 0, 0, time.UTC),
-	}); err != nil {
-		t.Fatalf("CreateGame: %v", err)
-	}
-}
-
 func TestGameLocal(t *testing.T) {
 	t.Run("store/GameLocal がセーブフォルダと実行ファイルのパスと base を返す", func(t *testing.T) {
 		s, _ := openTemp(t)

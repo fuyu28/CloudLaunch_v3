@@ -2,7 +2,6 @@ package legacy_test
 
 import (
 	"context"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -49,16 +48,6 @@ var validExport = exportJSON(gamesJSON,
 var validSessions = []legacy.Session{
 	{ID: sessionB, GameID: legacyGameB, GameTitle: "ゲーム", PlayedAt: time.Date(2026, 10, 5, 0, 0, 0, 0, time.UTC), DurationSec: 0},
 	{ID: sessionA, GameID: legacyGameA, GameTitle: "ゲーム", PlayedAt: time.Date(2026, 10, 13, 17, 13, 23, 185_000_000, time.UTC), DurationSec: 61},
-}
-
-func openStore(t *testing.T) *store.Store {
-	t.Helper()
-	s, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "cloudlaunch.db"))
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
-	return s
 }
 
 func importString(t *testing.T, s *store.Store, body string) (legacy.Result, error) {
