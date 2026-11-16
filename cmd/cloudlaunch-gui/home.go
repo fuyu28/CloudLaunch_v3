@@ -3,16 +3,16 @@ package main
 
 import (
 	"context"
-	"fmt"
+	"errors"
 
 	"github.com/fuyu28/CloudLaunch_v3/internal/store"
+	"github.com/fuyu28/CloudLaunch_v3/internal/syncore"
 )
 
 // HomeService は Wails のサービスとして、フロントから呼ばれる。
 type HomeService struct {
-	store *store.Store
-	// recoverFailed は、起動時の復旧に失敗した行があったことを表す。失敗した行はジャーナルに残り、次の起動でも復旧を試みる
-	recoverFailed bool
+	store  *store.Store
+	banner string
 }
 
 type HomeView struct {
@@ -29,21 +29,26 @@ type GameCard struct {
 }
 
 func (h *HomeService) Load(ctx context.Context) (HomeView, error) {
-	ids, err := h.store.GameIDs(ctx)
+	games, err := h.store.ListGames(ctx)
 	if err != nil {
 		return HomeView{}, err
 	}
-	games := make([]GameCard, 0, len(ids))
-	for _, id := range ids {
-		g, err := h.store.GameInfo(ctx, id)
-		if err != nil {
-			return HomeView{}, fmt.Errorf("read game %s: %w", id, err)
-		}
-		games = append(games, GameCard{ID: g.ID, Title: g.Title, Brand: g.Brand})
+	cards := make([]GameCard, 0, len(games))
+	for _, g := range games {
+		cards = append(cards, GameCard{ID: g.ID, Title: g.Title, Brand: g.Brand})
 	}
-	var banner string
-	if h.recoverFailed {
-		banner = "起動時の復旧に失敗したゲームがあります。詳しくはログ（logs/gui.log）を見てください"
+	return HomeView{Games: cards, Banner: h.banner}, nil
+}
+
+// recoverBanner は、起動時の復旧が終わらなかったときに帯に出す文言を返す。失敗した行はジャーナルに残り、次の起動で
+// 復旧し直す。それまでの Pull はジャーナルの書き込み（仕様書 6-L3）で失敗するので、ここでは同期を止めない。
+func recoverBanner(err error, logPath string) string {
+	switch {
+	case err == nil:
+		return ""
+	case errors.Is(err, syncore.ErrSyncInProgress):
+		return "別の同期が実行中だったので、起動時の復旧をしていません。同期が終わってから起動し直してください"
+	default:
+		return "起動時の復旧に失敗したゲームがあります。詳しくはログ（" + logPath + "）を見てください"
 	}
-	return HomeView{Games: games, Banner: banner}, nil
 }

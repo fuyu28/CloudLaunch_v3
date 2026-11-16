@@ -38,6 +38,35 @@ func (s *Store) GameInfo(ctx context.Context, gameID string) (metasync.GameInfo,
 	return g, nil
 }
 
+type GameListItem struct {
+	ID    string
+	Title string
+	// Brand は、未設定なら空
+	Brand string
+}
+
+// ListGames は ID の順に返す。ID を読んでからゲームごとに読むと、間に消えたゲームで一覧全体が読めなくなるので、1 つの
+// SELECT で読む。
+func (s *Store) ListGames(ctx context.Context) ([]GameListItem, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id, title, brand FROM games ORDER BY id`)
+	if err != nil {
+		return nil, fmt.Errorf("select games: %w", err)
+	}
+	games, err := scanAll(rows, func(rows *sql.Rows) (GameListItem, error) {
+		var g GameListItem
+		var brand sql.NullString
+		if err := rows.Scan(&g.ID, &g.Title, &brand); err != nil {
+			return GameListItem{}, fmt.Errorf("scan: %w", err)
+		}
+		g.Brand = brand.String
+		return g, nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("select games: %w", err)
+	}
+	return games, nil
+}
+
 // ReplaceGameInfo は、updated_at の比較と書き換えを 1 つの UPDATE で行う。読んでから書くと、間に入った編集を消すため。
 // 日時は固定長の形で持つので、文字列の大小が日時の前後と一致する（仕様書 3 章）。title・imageSha256・日時の形が
 // 合わなければ、何も書かずにエラーを返す。

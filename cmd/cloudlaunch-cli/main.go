@@ -11,7 +11,6 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"time"
 
@@ -1094,7 +1093,7 @@ func resolveGameID(id string) (string, error) {
 // openStore は、dataDir が空なら既定の場所を使い、実際に使ったディレクトリも返す。
 func openStore(ctx context.Context, dataDir string) (*store.Store, string, error) {
 	if dataDir == "" {
-		d, err := defaultDataDir()
+		d, err := platform.DataDir()
 		if err != nil {
 			return nil, "", err
 		}
@@ -1105,22 +1104,4 @@ func openStore(ctx context.Context, dataDir string) (*store.Store, string, error
 	}
 	s, err := store.Open(ctx, filepath.Join(dataDir, "cloudlaunch.db"))
 	return s, dataDir, err
-}
-
-// defaultDataDir は Windows では仕様書 3 章の保存先、Linux では XDG Base Directory の慣例に従う。
-func defaultDataDir() (string, error) {
-	if runtime.GOOS == "windows" {
-		if d := os.Getenv("LOCALAPPDATA"); d != "" {
-			return filepath.Join(d, "CloudLaunch"), nil
-		}
-		return "", errors.New("LOCALAPPDATA is not set")
-	}
-	if d := os.Getenv("XDG_DATA_HOME"); d != "" {
-		return filepath.Join(d, "cloudlaunch"), nil
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", fmt.Errorf("home dir: %w", err)
-	}
-	return filepath.Join(home, ".local", "share", "cloudlaunch"), nil
 }
