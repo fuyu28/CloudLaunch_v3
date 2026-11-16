@@ -15,6 +15,16 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+type PushOptions struct {
+	// Overwrite が真なら、判定によらず plan を受け付ける（仕様書 7 章の上書き）
+	Overwrite bool
+	// Progress は、アップロードの前に全体の数を 1 回、object を 1 つ送り終えるごとに 1 回呼ぶ。転送するものがなければ
+	// 0/0 で 1 回だけ呼ぶ。転送の前に失敗したときは、1 回も呼ばないことがある。失敗・キャンセルの後は呼ばない。
+	// 同時に 2 つは呼ばない代わりに、呼んでいる間は、ほかの転送も、Push がエラーやキャンセルで戻るのも待つので、
+	// すぐ戻ること。nil なら呼ばない
+	Progress func(Progress)
+}
+
 // Push は、上書き（opts.Overwrite）でなければ、判定が Push の plan だけを受け付ける。手順 8（古い世代の削除と GC）の
 // 失敗とキャンセルは、ログに出すだけで、Push の結果には含めない。
 func (c *Core) Push(ctx context.Context, plan Plan, opts PushOptions) error {
@@ -41,10 +51,11 @@ func (c *Core) Push(ctx context.Context, plan Plan, opts PushOptions) error {
 		return fmt.Errorf("push %s: %w", plan.GameID, err)
 	}
 	if opts.Overwrite && plan.SameContent() {
+		startProgress(ctx, opts.Progress, 0, 0)
 		return c.finishSameContent(ctx, plan, saveFolder)
 	}
 
-	if err := c.uploadMissing(ctx, plan.GameID, saveFolder, plan.Local.Entries); err != nil {
+	if err := c.uploadMissing(ctx, plan.GameID, saveFolder, plan.Local.Entries, opts.Progress); err != nil {
 		return err
 	}
 	if err := c.ensureGameNotRunning(game.ExePath); err != nil {
@@ -94,7 +105,7 @@ func (c *Core) Push(ctx context.Context, plan Plan, opts PushOptions) error {
 }
 
 // uploadMissing は objects/ の一覧にない object だけを、sha256 の重複を除いて並列にアップロードする。
-func (c *Core) uploadMissing(ctx context.Context, gameID, root string, entries []Entry) error {
+func (c *Core) uploadMissing(ctx context.Context, gameID, root string, entries []Entry, progress func(Progress)) error {
 	keys, err := c.cfg.Remote.List(ctx, objectsPrefix(gameID))
 	if err != nil {
 		return err
@@ -103,16 +114,34 @@ func (c *Core) uploadMissing(ctx context.Context, gameID, root string, entries [
 	for _, k := range keys {
 		have[k] = true
 	}
-
-	g, ctx := errgroup.WithContext(ctx)
-	g.SetLimit(transferLimit)
+	type upload struct {
+		key   string
+		entry Entry
+	}
+	var missing []upload
+	var size int64
 	for _, e := range entries {
 		key := objectKey(gameID, e.SHA256)
 		if have[key] {
 			continue
 		}
 		have[key] = true
-		g.Go(func() error { return c.uploadObject(ctx, key, root, e) })
+		missing = append(missing, upload{key, e})
+		size += e.Size
+	}
+
+	reporter := startProgress(ctx, progress, len(missing), size)
+	g, ctx := errgroup.WithContext(ctx)
+	g.SetLimit(transferLimit)
+	for _, u := range missing {
+		g.Go(func() error {
+			if err := c.uploadObject(ctx, u.key, root, u.entry); err != nil {
+				reporter.fail()
+				return err
+			}
+			reporter.done(u.entry.Size)
+			return nil
+		})
 	}
 	return g.Wait()
 }

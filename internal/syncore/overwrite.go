@@ -14,16 +14,6 @@ var (
 	ErrRemoteMissing = errors.New("remote save is missing")
 )
 
-// PushOptions の Overwrite が真なら、判定によらず plan を受け付ける。偽なら、判定が Push の plan だけを受け付ける。
-type PushOptions struct {
-	Overwrite bool
-}
-
-// PullOptions の Overwrite が真なら、判定によらず plan を受け付ける。偽なら、判定が Pull の plan だけを受け付ける。
-type PullOptions struct {
-	Overwrite bool
-}
-
 // SameContent は、local と remote が同じことを表す。上書きでも、このときは転送しない（仕様書 7-O5）。
 func (p Plan) SameContent() bool {
 	return p.Local.Hash != "" && p.Local.Hash == p.Remote.Hash
