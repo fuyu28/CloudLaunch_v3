@@ -107,8 +107,10 @@ jobs:
             echo "CLOUDLAUNCH_TEST_S3_SECRET_ACCESS_KEY=testsecret"
           } >> "$GITHUB_ENV"
 
+      # go test はテストのない GUI のパッケージもビルドする。Wails の Linux の既定の実装は WebKitGTK のヘッダが要るので、
+      # cgo を使わない purego の実装でビルドする（.golangci.yml と同じ）。Windows には関係しない
       - name: Test
-        run: go test -race -cover ./...
+        run: go test -race -cover -tags purego ./...
 
   # 仕様書の変更（.md だけの PR）でも一覧が変わるので、changes の結果によらず走らせる
   spec-ids:
