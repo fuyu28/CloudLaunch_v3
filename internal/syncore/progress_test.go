@@ -1,6 +1,7 @@
 package syncore_test
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"sync"
@@ -43,7 +44,7 @@ func (l *progressLog) calls() []syncore.Progress {
 }
 
 // assertProgressed は、最初の 1 回で全体を知らせ、その後は 1 つずつ済んだ分が増えて、最後に全体と一致することを確かめる。
-// 並列に転送するので、object ごとの BytesDone の増え方の順は確かめない。
+// 並列に転送するので、object ごとの BytesDone の増え方の順は確かめない。サイズ 0 の object では BytesDone は増えない。
 func assertProgressed(t *testing.T, got []syncore.Progress, want syncore.Progress) {
 	t.Helper()
 	if len(got) != want.FilesTotal+1 {
@@ -53,8 +54,8 @@ func assertProgressed(t *testing.T, got []syncore.Progress, want syncore.Progres
 		t.Errorf("最初の進捗 (-want +got):\n%s", diff)
 	}
 	for i, p := range got[1:] {
-		if p.FilesDone != i+1 || p.FilesTotal != want.FilesTotal || p.BytesTotal != want.BytesTotal || p.BytesDone <= got[i].BytesDone {
-			t.Errorf("%d 回目の進捗 = %+v, 前 = %+v, want FilesDone %d で BytesDone が増える", i+2, p, got[i], i+1)
+		if p.FilesDone != i+1 || p.FilesTotal != want.FilesTotal || p.BytesTotal != want.BytesTotal || p.BytesDone < got[i].BytesDone {
+			t.Errorf("%d 回目の進捗 = %+v, 前 = %+v, want FilesDone %d で BytesDone が減らない", i+2, p, got[i], i+1)
 		}
 	}
 	if diff := cmp.Diff(want, got[len(got)-1]); diff != "" {
@@ -103,17 +104,92 @@ func TestProgress(t *testing.T) {
 
 	t.Run("5章/Push/PUT が失敗したら、その後は進捗を知らせない", func(t *testing.T) {
 		e := newEnv(t)
-		plan := approvedPush(t, e, map[string]string{"a.sav": "one"})
+		plan := approvedPush(t, e, map[string]string{"a.sav": "one", "b.sav": "two"})
 		injected := errors.New("injected")
-		failOn(e, memstore.OpPut, objectKey("one"), injected)
+		// two の PUT に入ってから one の PUT を失敗させ、two の PUT は one が失敗した後に成功させる。two が PUT に
+		// 入る前に one が失敗すると、two は errgroup のキャンセルで PUT まで進まず、失敗の後の成功が起きない
+		twoStarted := make(chan struct{})
+		failed := make(chan struct{})
+		e.remote.Before = func(op memstore.Op, key string) error {
+			switch {
+			case op == memstore.OpPut && key == objectKey("one"):
+				<-twoStarted
+				close(failed)
+				return injected
+			case op == memstore.OpPut && key == objectKey("two"):
+				close(twoStarted)
+				<-failed
+				// one の転送が失敗を記録してから、two を成功させる
+				time.Sleep(50 * time.Millisecond)
+			}
+			return nil
+		}
 		var log progressLog
 
 		if err := e.core.Push(t.Context(), plan, syncore.PushOptions{Progress: log.record}); !errors.Is(err, injected) {
 			t.Fatalf("Push error = %v, want injected", err)
 		}
-		// 失敗した object は済んだ分に数えず、最初の 1 回のほかは知らせない
+		if _, ok := e.getObject(t, objectKey("two")); !ok {
+			t.Fatal("two の PUT が成功しなかった。失敗の後の成功を確かめられない")
+		}
+		// 失敗した one も、失敗の後に成功した two も数えず、最初の 1 回のほかは知らせない
+		if diff := cmp.Diff([]syncore.Progress{{FilesTotal: 2, BytesTotal: 6}}, log.calls()); diff != "" {
+			t.Errorf("進捗 (-want +got):\n%s", diff)
+		}
+	})
+
+	t.Run("6章/Pull/キャンセルした後は、成功した転送も進捗を知らせない", func(t *testing.T) {
+		e := newEnv(t)
+		plan := approvedPull(t, e, map[string]string{"a.sav": "one"})
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		// GET が始まった後に呼び出し側がキャンセルし、GET そのものは成功させる
+		e.remote.Before = func(op memstore.Op, key string) error {
+			if op == memstore.OpGet && key == objectKey("one") {
+				cancel()
+			}
+			return nil
+		}
+		var log progressLog
+
+		if err := e.core.Pull(ctx, plan, syncore.PullOptions{Progress: log.record}); !errors.Is(err, context.Canceled) {
+			t.Fatalf("Pull error = %v, want context.Canceled", err)
+		}
 		if diff := cmp.Diff([]syncore.Progress{{FilesTotal: 1, BytesTotal: 3}}, log.calls()); diff != "" {
 			t.Errorf("進捗 (-want +got):\n%s", diff)
+		}
+	})
+
+	t.Run("7章/上書き/local と remote が同じときは、0/0 で 1 回だけ進捗を知らせる", func(t *testing.T) {
+		e := newEnv(t)
+		files := map[string]string{"a.sav": "one"}
+		e.putRemoteFiles(t, files)
+		writeFiles(t, e.saveDir, files)
+		plan, err := e.status(t)
+		if err != nil {
+			t.Fatalf("Status: %v", err)
+		}
+		if !plan.SameContent() {
+			t.Fatalf("plan = %+v, want local と remote が同じ", plan)
+		}
+		for _, tt := range []struct {
+			name string
+			run  func(progress func(syncore.Progress)) error
+		}{
+			{"Push", func(p func(syncore.Progress)) error {
+				return e.core.Push(t.Context(), plan, syncore.PushOptions{Overwrite: true, Progress: p})
+			}},
+			{"Pull", func(p func(syncore.Progress)) error {
+				return e.core.Pull(t.Context(), plan, syncore.PullOptions{Overwrite: true, Progress: p})
+			}},
+		} {
+			var log progressLog
+			if err := tt.run(log.record); err != nil {
+				t.Fatalf("%s: %v", tt.name, err)
+			}
+			if diff := cmp.Diff([]syncore.Progress{{}}, log.calls()); diff != "" {
+				t.Errorf("%s の進捗 (-want +got):\n%s", tt.name, diff)
+			}
 		}
 	})
 
