@@ -55,14 +55,14 @@ type Config struct {
 	Local      LocalStore
 	Logger     *slog.Logger
 	DeviceName string
-	// BackupsDir は、Pull で退避したセーブを置くディレクトリ。その下の {gameId}/ に置く
+	// BackupsDir は、セーブのバックアップ（Pull で退避したものと、削除の前のコピー）を置くディレクトリ。その下の {gameId}/ に置く
 	BackupsDir string
-	// Locker は、Push・Pull・Recover が実行中に握る PC 全体の同期ロック（仕様書 3 章）
+	// Locker は、PC 全体の同期ロック。仕様書 3 章「排他」に挙げた操作と、起動時の復旧（Recover）が握る
 	Locker Locker
-	// Processes は、Push・Pull がゲームの実行中を拒否するために使う（仕様書 7 章）
+	// Processes は、ゲームの実行中を拒否するために使う（仕様書 7 章の判定）
 	Processes ProcessChecker
 	// Rename は、リネームをディスクへ書き出してから戻り、移す先があれば失敗する（仕様書 3 章「ディスクへの書き出し」）。
-	// os.Rename はどちらも満たさないので既定にせず、nil なら Pull と Recover は何も変える前にエラーにする
+	// os.Rename はどちらも満たさないので既定にせず、nil なら、リネームを使う操作は何も変える前にエラーにする
 	Rename func(oldpath, newpath string) error
 	// Now・NewGeneration・SyncFile は、nil なら実際の時刻・UUIDv7 の採番・(*os.File).Sync を使う
 	Now           func() time.Time

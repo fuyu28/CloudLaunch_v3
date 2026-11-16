@@ -14,14 +14,13 @@ var (
 	ErrGameExeNotFound = errors.New("the game executable is not found")
 )
 
-// ProcessChecker は、exePath の実行ファイルのプロセスが実行中かを返す。
 type ProcessChecker interface {
 	Running(exePath string) (bool, error)
 }
 
-// ensureGameNotRunning は、Push と Pull が、ロックを取った直後と、転送の後（承認後の確認の直前）の 2 回呼ぶ。
-// 転送は長くかかることがあり、その間にゲームが起動されうるため（仕様書 7 章）。承認後の確認より先に呼ぶのは、
-// 起動されたゲームがセーブを書くと、承認後の確認が先に ErrPlanStale を返し、本当の理由が伝わらないため。
+// ensureGameNotRunning は、セーブフォルダに触れる前と、長くかかる処理（転送やバックアップのコピー）の後に呼ぶ。その間に
+// ゲームが起動されうるため（仕様書 7 章）。Push・Pull で承認後の確認より先に呼ぶのは、起動されたゲームがセーブを書くと、
+// 承認後の確認が先に ErrPlanStale を返し、本当の理由が伝わらないため。
 func (c *Core) ensureGameNotRunning(exePath string) error {
 	if c.cfg.Processes == nil {
 		return errProcessesNotSet

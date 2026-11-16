@@ -13,7 +13,7 @@ var ErrNotRemoteDeleted = errors.New("game is not recorded as deleted on remote"
 
 // ReuploadGame は、同期ロックを握ったまま、Pull ジャーナルが残っていないことと、ゲームの tombstone の記録があることを
 // 確かめてから reupload を呼ぶ。記録がなければ ErrNotRemoteDeleted で包んだエラーを返す。記録はリモートを読まずに DB で
-// 確かめる。セーブフォルダに触れないので、ゲームの実行中かは確かめない（8-U2）。
+// 確かめる。仕様書 8-U6 の、ゲームの実行中の拒否はまだ実装していない（#147）。
 func (c *Core) ReuploadGame(ctx context.Context, gameID string, reupload func(ctx context.Context) error) error {
 	if reupload == nil {
 		return fmt.Errorf("reupload game %s: reupload is not given", gameID)

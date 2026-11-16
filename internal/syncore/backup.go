@@ -1,4 +1,4 @@
-// Pull で退避したセーブのバックアップ（仕様書 3 章、6 章の手順 9）。
+// セーブのバックアップ（仕様書 3 章）。Pull で退避したセーブ（6 章の手順 9）と、ゲームの削除の前のコピー（8-X4）を置く。
 package syncore
 
 import (
@@ -133,7 +133,8 @@ func removeOld(old string) error {
 // copyTree は src の下の通常のファイルとディレクトリを dst にコピーし、mtime を合わせる。ファイルはディスクへ書き出す。
 // 通常のファイル以外があればエラーにする（仕様書 2 章のセーブフォルダの規則と揃える）。
 // ただし、ディレクトリは isPlainDir ではなく IsDir で見分け、クラウドのフォルダのような reparse point の中もコピーする。
-// ここで拒むと、手順 9 も復旧の 6-R3 も毎回同じところで失敗し、ジャーナルが残り続ける。中身を読めるなら写して残すほうがよい
+// ここで拒むと、手順 9 も復旧の 6-R3 も毎回同じところで失敗してジャーナルが残り続け、ゲームの削除（8-X4）もできなくなる。
+// 中身を読めるなら写して残すほうがよい
 func (c *Core) copyTree(ctx context.Context, src, dst string) error {
 	return filepath.WalkDir(src, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -176,7 +177,7 @@ func (c *Core) copyFile(src, dst string) error {
 	return os.Chtimes(dst, info.ModTime(), info.ModTime())
 }
 
-// pruneBackups は、名前の形に合うバックアップを名前の順で新しい 3 個まで残す。created（その Pull で作ったもの）は、
+// pruneBackups は、名前の形に合うバックアップを名前の順で新しい 3 個まで残す。created（呼び出した Pull や削除で作ったもの）は、
 // 時計が戻って名前が古くなっていても消さない（仕様書 3 章）。
 // 削除に失敗しても警告を出すだけにする。古いバックアップが残っても、セーブは失われないため（仕様書 6 章の手順 9）。
 func (c *Core) pruneBackups(ctx context.Context, gameID, created string) {

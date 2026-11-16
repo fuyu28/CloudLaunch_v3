@@ -1,5 +1,5 @@
 // ゲームの tombstone（`games/{gameId}/deleted.json`、仕様書 8 章「ゲームの tombstone の確認」）の検証・確認と、tombstone を
-// 見つけたときの DB への記録と配下の削除（8-T2）、Push・Pull の拒否（8-T7・8-T8）。
+// 見つけたときの DB への記録と配下の削除（8-T2）、Push・Pull・削除の拒否（8-T7・8-T8・8-X11）。
 package syncore
 
 import (
@@ -10,8 +10,9 @@ import (
 	"time"
 )
 
-// ErrRemoteDeleted は、ゲームがリモートで削除されていて、Push・Pull できないことを表す。呼び出し側は、HandleTombstone で
-// DB への記録とリモートの掃除（仕様書 8-T2）を行い、「リモートで削除されました」と表示する。
+// ErrRemoteDeleted は、ゲームがリモートで削除されていて、Push・Pull・削除できないことを表す。Push・Pull でこれを受け取った
+// 呼び出し側は、HandleTombstone で DB への記録とリモートの掃除（仕様書 8-T2）を行い、「リモートで削除されました」と表示する。
+// 削除で受け取ったときは、登録だけの解除を案内する（8-X11）。
 var ErrRemoteDeleted = errors.New("game is deleted on remote")
 
 // ErrInvalidTombstone は、deleted.json が仕様書 8-T4〜8-T6 に当たることを表す。削除されたとも、削除されていないとも
@@ -77,7 +78,7 @@ func (c *Core) ReadRemoteTombstone(ctx context.Context, gameID string) (Tombston
 	return t, true, nil
 }
 
-// CheckTombstone は、何も書かずにゲームの tombstone を確かめる。CLI の status と、判定の前・承認の後の読み直しが使う。
+// CheckTombstone は、何も書かずにゲームの tombstone を確かめる。
 // DB に記録があれば、リモートを読まずに記録を返す（8-T8）。
 func (c *Core) CheckTombstone(ctx context.Context, gameID string) (Tombstone, bool, error) {
 	recorded, ok, err := c.cfg.Local.RemoteDeleted(ctx, gameID)

@@ -9,7 +9,7 @@ import (
 	"golang.org/x/text/unicode/norm"
 )
 
-// processEntry は実行中のプロセス 1 つ。path は、プロセスを開けずに実行ファイルのパスを読めなければ空。
+// processEntry の path は、プロセスを開けずに実行ファイルのパスを読めなければ空。
 type processEntry struct {
 	name string
 	path string
