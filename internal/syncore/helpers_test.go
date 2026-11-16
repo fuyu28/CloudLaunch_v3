@@ -291,8 +291,8 @@ func newEnvWithRemote(t *testing.T, remote *memstore.Store) env {
 	return env{core: syncore.New(cfg), cfg: cfg, store: st, remote: remote, saveDir: saveDir, dbPath: dbPath, backupsDir: backupsDir, rename: hook, ops: ops, lock: lock, procs: procs, exePath: exePath}
 }
 
-// coreWithout は、e のコアと同じ設定から edit で 1 項目だけ外したコアを作る。必須の項目がないときの確認で、
-// 外した項目のほかは揃っているようにするため（別の必須の項目がないことで先に止まると、確認したいことを確かめない）。
+// coreWithout は、e のコアと同じ設定から edit で 1 項目だけ外したコアを作る。外した項目のほかは揃っているようにするため
+// （必須の項目がないときの確認で、別の必須の項目がないことで先に止まると、確認したいことを確かめない）。
 func (e env) coreWithout(edit func(cfg *syncore.Config)) *syncore.Core {
 	cfg := e.cfg
 	edit(&cfg)

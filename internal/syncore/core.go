@@ -51,13 +51,14 @@ type LocalStore interface {
 }
 
 type Config struct {
-	Remote     ObjectStore
-	Local      LocalStore
+	Remote ObjectStore
+	Local  LocalStore
+	// Logger は、nil ならログを捨てる
 	Logger     *slog.Logger
 	DeviceName string
 	// BackupsDir は、セーブのバックアップ（Pull で退避したものと、削除の前のコピー）を置くディレクトリ。その下の {gameId}/ に置く
 	BackupsDir string
-	// Locker は、PC 全体の同期ロック。仕様書 3 章「排他」に挙げた操作と、起動時の復旧（Recover）が握る
+	// Locker は、PC 全体の同期ロック。どの操作が握るかは、仕様書 3 章「排他」で決める
 	Locker Locker
 	// Processes は、ゲームの実行中を拒否するために使う（仕様書 7 章の判定）
 	Processes ProcessChecker
@@ -75,6 +76,9 @@ type Core struct {
 }
 
 func New(cfg Config) *Core {
+	if cfg.Logger == nil {
+		cfg.Logger = slog.New(slog.DiscardHandler)
+	}
 	if cfg.Now == nil {
 		cfg.Now = time.Now
 	}
