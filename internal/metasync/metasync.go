@@ -107,7 +107,8 @@ type Config struct {
 	Local  LocalStore
 	// Tombstones は、取り込み（RemoteGames・ImportGame）が使う。nil なら、取り込みはリモートを読まずにエラーにする
 	Tombstones TombstoneReader
-	Logger     *slog.Logger
+	// Logger は、nil ならログを捨てる
+	Logger *slog.Logger
 	// ImageDir は、画像のキャッシュのフォルダ。なければ作る
 	ImageDir string
 }
@@ -117,6 +118,9 @@ type Core struct {
 }
 
 func New(cfg Config) *Core {
+	if cfg.Logger == nil {
+		cfg.Logger = slog.New(slog.DiscardHandler)
+	}
 	return &Core{cfg: cfg}
 }
 
