@@ -1,0 +1,5 @@
+node_modules
+# ビルド結果は //go:embed で取り込むが git には入れない。.gitkeep は、フロントをビルドしなくても embed の対象があるように残す。
+# Vite はビルドのたびに dist を空にするので、public/.gitkeep を写して戻す
+dist/*
+!dist/.gitkeep
