@@ -7,7 +7,7 @@ import (
 )
 
 func TestNew(t *testing.T) {
-	t.Run("コアの設定/Logger を省いても、ログを捨てて Push を終える", func(t *testing.T) {
+	t.Run("5章/Push/Logger を省いても、ログを捨てて最後まで終える", func(t *testing.T) {
 		e := newEnv(t)
 		plan := approvedPush(t, e, map[string]string{"slot.sav": "one"})
 		core := e.coreWithout(func(cfg *syncore.Config) { cfg.Logger = nil })

@@ -4,11 +4,12 @@ import (
 	"testing"
 
 	"github.com/fuyu28/CloudLaunch_v3/internal/metasync"
+	"github.com/fuyu28/CloudLaunch_v3/internal/objstore/memstore"
 )
 
 func TestNew(t *testing.T) {
-	t.Run("コアの設定/Logger を省いても、ログを捨てて不正な game.json を飛ばす", func(t *testing.T) {
-		e := newBareEnv(t)
+	t.Run("8章/ゲーム情報/Logger を省いても、ログを捨てて不正な game.json を飛ばす", func(t *testing.T) {
+		e := newEnvOn(t, memstore.New())
 		e.putRemote(gameKey, `{"id":`)
 		core := metasync.New(metasync.Config{Remote: e.remote, Local: e.store, ImageDir: e.imageDir})
 
