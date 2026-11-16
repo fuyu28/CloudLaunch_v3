@@ -185,9 +185,10 @@ func TestPushGC(t *testing.T) {
 		e := newEnv(t)
 		putOldGenerations(t, e, 11, nil)
 		// Push が HEAD を書いた後、GC が世代を一覧する前に、時計の遅れた別の PC が HEAD を書き換えたものとする
+		rewritten := false
 		e.remote.Before = func(op memstore.Op, key string) error {
-			if op == memstore.OpList && strings.HasSuffix(key, "/manifests/") {
-				e.remote.Before = nil
+			if !rewritten && op == memstore.OpList && strings.HasSuffix(key, "/manifests/") {
+				rewritten = true
 				e.putObject(t, headKey(), oldGeneration(1))
 			}
 			return nil
@@ -217,7 +218,6 @@ func TestPushGC(t *testing.T) {
 			}
 			lists++
 			if lists == 2 {
-				e.remote.Before = nil
 				e.putObject(t, objectKey("concurrent"), "concurrent")
 				e.putManifest(t, otherGeneration, entriesOf(map[string]string{"slot.sav": "concurrent"}))
 			}

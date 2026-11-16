@@ -27,8 +27,7 @@ type remoteDeletion struct {
 	check func()
 }
 
-// watchDeletion は、それまでの Before を続けて呼ぶので、failOn などで Before を差し替えた後に呼ぶ。putTombstoneOnGet よりは
-// 先に呼ぶ。後に呼ぶと、putTombstoneOnGet が自分で置く PUT も数える。
+// watchDeletion は、それまでの Before を続けて呼ぶので、failOn などで Before を差し替えた後に呼ぶ。
 func (e env) watchDeletion() *remoteDeletion {
 	d := &remoteDeletion{}
 	prev := e.remote.Before

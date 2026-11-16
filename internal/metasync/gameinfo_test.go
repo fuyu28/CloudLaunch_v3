@@ -82,7 +82,7 @@ func TestSyncGameInfo(t *testing.T) {
 
 	t.Run("8-G2 ローカルの updatedAt が大きければ、ローカルのものを PUT する", func(t *testing.T) {
 		e := newBareEnv(t)
-		e.putRemote(t, gameKey, remoteGameJSON(olderStamp))
+		e.putRemote(gameKey, remoteGameJSON(olderStamp))
 
 		got, err := e.core.Sync(ctx, testGameID)
 		if err != nil {
@@ -103,8 +103,8 @@ func TestSyncGameInfo(t *testing.T) {
 		e := newBareEnv(t)
 		remote := fmt.Sprintf(`{"id":%q,"title":"Remote","brand":"Brand","imageSha256":%q,"createdAt":%q,"updatedAt":%q}`,
 			testGameID, testImage, olderStamp, newerStamp)
-		e.putRemote(t, gameKey, remote)
-		e.putRemote(t, imageKey(testImage), string(testPNG))
+		e.putRemote(gameKey, remote)
+		e.putRemote(imageKey(testImage), string(testPNG))
 
 		got, err := e.core.Sync(ctx, testGameID)
 		if err != nil {
@@ -131,7 +131,7 @@ func TestSyncGameInfo(t *testing.T) {
 	t.Run("8-G4 updatedAt が等しければ、中身が違っても何もしない", func(t *testing.T) {
 		e := newBareEnv(t)
 		remote := remoteGameJSON(localStamp)
-		e.putRemote(t, gameKey, remote)
+		e.putRemote(gameKey, remote)
 
 		got, err := e.core.Sync(ctx, testGameID)
 		if err != nil {
@@ -185,7 +185,7 @@ func TestSyncGameInfo(t *testing.T) {
 	for _, tt := range invalid {
 		t.Run(tt.name, func(t *testing.T) {
 			e := newBareEnv(t)
-			e.putRemote(t, gameKey, tt.body)
+			e.putRemote(gameKey, tt.body)
 
 			got, err := e.core.Sync(ctx, testGameID)
 			if err != nil {
@@ -207,7 +207,7 @@ func TestSyncGameInfo(t *testing.T) {
 		e := newBareEnv(t)
 		execDB(t, e.dbPath, `UPDATE games SET brand = ?, image_sha256 = ? WHERE id = ?`, "Brand", testImage, testGameID)
 		// 指す画像がリモートになければ、game.json を PUT しない（8-I1）
-		e.putRemote(t, imageKey(testImage), string(testPNG))
+		e.putRemote(imageKey(testImage), string(testPNG))
 
 		if _, err := e.core.Sync(ctx, testGameID); err != nil {
 			t.Fatalf("Sync: %v", err)
@@ -233,7 +233,7 @@ func TestSyncGameInfo(t *testing.T) {
 	t.Run("8章/ゲーム情報/brand が空文字、imageSha256 が null なら、未設定として取り込む", func(t *testing.T) {
 		e := newBareEnv(t)
 		execDB(t, e.dbPath, `UPDATE games SET brand = ?, image_sha256 = ? WHERE id = ?`, "Brand", testImage, testGameID)
-		e.putRemote(t, gameKey, gameJSONWith(id, title, field("brand", q("")), field("imageSha256", "null"), created, updated))
+		e.putRemote(gameKey, gameJSONWith(id, title, field("brand", q("")), field("imageSha256", "null"), created, updated))
 
 		got, err := e.core.Sync(ctx, testGameID)
 		if err != nil {
@@ -250,7 +250,7 @@ func TestSyncGameInfo(t *testing.T) {
 
 	t.Run("8章/ゲーム情報/知らない項目があっても取り込む", func(t *testing.T) {
 		e := newBareEnv(t)
-		e.putRemote(t, gameKey, gameJSONWith(id, title, created, updated, field("note", q("x"))))
+		e.putRemote(gameKey, gameJSONWith(id, title, created, updated, field("note", q("x"))))
 
 		got, err := e.core.Sync(ctx, testGameID)
 		if err != nil {
@@ -266,9 +266,9 @@ func TestSyncGameInfo(t *testing.T) {
 
 	t.Run("8章/ゲーム情報/取り込んだ後にもう一度同期しても PUT しない", func(t *testing.T) {
 		e := newBareEnv(t)
-		e.putRemote(t, gameKey, fmt.Sprintf(`{"id":%q,"title":"Remote","brand":"Brand","imageSha256":%q,"createdAt":%q,"updatedAt":%q}`,
+		e.putRemote(gameKey, fmt.Sprintf(`{"id":%q,"title":"Remote","brand":"Brand","imageSha256":%q,"createdAt":%q,"updatedAt":%q}`,
 			testGameID, testImage, olderStamp, newerStamp))
-		e.putRemote(t, imageKey(testImage), string(testPNG))
+		e.putRemote(imageKey(testImage), string(testPNG))
 
 		if _, err := e.core.Sync(ctx, testGameID); err != nil {
 			t.Fatalf("Sync 1: %v", err)
@@ -287,7 +287,7 @@ func TestSyncGameInfo(t *testing.T) {
 
 	t.Run("8章/ゲーム情報/不正な game.json があっても、プレイ履歴は同期する", func(t *testing.T) {
 		e := newBareEnv(t)
-		e.putRemote(t, gameKey, `{"id":`)
+		e.putRemote(gameKey, `{"id":`)
 		e.addSession(t, sessionA, 60)
 		e.putRemoteSession(t, sessionB, 0)
 

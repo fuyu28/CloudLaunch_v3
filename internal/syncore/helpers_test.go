@@ -7,7 +7,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"io/fs"
 	"log/slog"
@@ -184,33 +183,19 @@ func (e env) putTombstone(t *testing.T) {
 }
 
 // putTombstoneOnGet は、deleted.json の n 回目の GET の直前に deleted.json を置く。2 なら、Status の確認は通り、承認の後の
-// 読み直しで見つかる。それまでの Before は続けて呼ぶので、failOn などで Before を差し替えた後に呼ぶ。自分で置く PUT は、
-// コアの PUT として数えられないよう、それまでの Before に渡さない。
+// 読み直しで見つかる。それまでの Before は続けて呼ぶので、failOn などで Before を差し替えた後に呼ぶ。
 func (e env) putTombstoneOnGet(n int) {
 	prev := e.remote.Before
 	var mu sync.Mutex
 	calls := 0
-	placing := false
 	e.remote.Before = func(op memstore.Op, key string) error {
-		mu.Lock()
-		if placing && op == memstore.OpPut && key == tombstoneKey() {
-			mu.Unlock()
-			return nil
-		}
-		hit := false
 		if op == memstore.OpGet && key == tombstoneKey() {
-			calls++
-			hit = calls == n
-		}
-		placing = hit
-		mu.Unlock()
-		if hit {
-			err := e.remote.Put(context.Background(), key, strings.NewReader(testTombstoneJSON), int64(len(testTombstoneJSON)))
 			mu.Lock()
-			placing = false
+			calls++
+			hit := calls == n
 			mu.Unlock()
-			if err != nil {
-				return fmt.Errorf("put deleted.json: %w", err)
+			if hit {
+				e.remote.Set(key, []byte(testTombstoneJSON))
 			}
 		}
 		if prev != nil {
@@ -398,11 +383,10 @@ func objectKey(content string) string {
 	return "games/" + testGameID + "/objects/" + sha256Hex(content)
 }
 
+// putObject は、Before を通さずに置くので、仕込んだ失敗にも操作の記録にも数えない。
 func (e env) putObject(t *testing.T, key, body string) {
 	t.Helper()
-	if err := e.remote.Put(context.Background(), key, strings.NewReader(body), int64(len(body))); err != nil {
-		t.Fatalf("put %s: %v", key, err)
-	}
+	e.remote.Set(key, []byte(body))
 }
 
 // getObject は key がなければ ok に false を返す。

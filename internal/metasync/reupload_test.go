@@ -37,7 +37,7 @@ func newReuploadEnv(t *testing.T) *env {
 	if err := e.store.SetBase(context.Background(), testGameID, reuploadBase); err != nil {
 		t.Fatalf("SetBase: %v", err)
 	}
-	markRemoteDeleted(t, e.dbPath)
+	e.markRemoteDeleted(t)
 	return e
 }
 

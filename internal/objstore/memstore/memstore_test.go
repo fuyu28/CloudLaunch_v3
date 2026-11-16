@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"io/fs"
 	"testing"
 
@@ -36,6 +37,31 @@ func TestBefore(t *testing.T) {
 		}
 		if err := s.Put(ctx, "games/x/objects/a", bytes.NewReader(body), int64(len(body))); err != nil {
 			t.Errorf("Put other key: %v", err)
+		}
+	})
+
+	t.Run("memstore/Set は Before を呼ばずに、渡した本文の写しを置く", func(t *testing.T) {
+		s := memstore.New()
+		called := false
+		s.Before = func(memstore.Op, string) error {
+			called = true
+			return nil
+		}
+
+		body := []byte("gen")
+		s.Set("games/x/HEAD", body)
+		body[0] = 'X'
+
+		if called {
+			t.Error("Set が Before を呼んだ")
+		}
+		s.Before = nil
+		r, err := s.Get(context.Background(), "games/x/HEAD")
+		if err != nil {
+			t.Fatalf("Get: %v", err)
+		}
+		if got, _ := io.ReadAll(r); string(got) != "gen" {
+			t.Errorf("Get = %q, want %q", got, "gen")
 		}
 	})
 }

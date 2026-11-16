@@ -20,6 +20,7 @@ import (
 	"github.com/fuyu28/CloudLaunch_v3/internal/metasync"
 	"github.com/fuyu28/CloudLaunch_v3/internal/objstore/memstore"
 	"github.com/fuyu28/CloudLaunch_v3/internal/store"
+	"github.com/fuyu28/CloudLaunch_v3/internal/syncore"
 )
 
 const (
@@ -50,7 +51,7 @@ type env struct {
 func newEnv(t *testing.T) *env {
 	t.Helper()
 	e := newBareEnv(t)
-	e.putRemote(t, gameKey, localGameJSON)
+	e.putRemote(gameKey, localGameJSON)
 	return e
 }
 
@@ -115,20 +116,15 @@ func (e *env) addSession(t *testing.T, id string, durationSec int64) {
 	}
 }
 
-func (e *env) putRemote(t *testing.T, key, body string) {
-	t.Helper()
-	if err := e.remote.Put(context.Background(), key, strings.NewReader(body), int64(len(body))); err != nil {
-		t.Fatalf("put %s: %v", key, err)
-	}
-	e.mu.Lock()
-	e.puts = nil
-	e.mu.Unlock()
+// putRemote は、Before を通さずに置くので、puts・gets の記録に数えない。
+func (e *env) putRemote(key, body string) {
+	e.remote.Set(key, []byte(body))
 }
 
 // putRemoteSession は、#95 の PUT と同じ形のセッションをリモートに置く。
 func (e *env) putRemoteSession(t *testing.T, id string, durationSec int64) {
 	t.Helper()
-	e.putRemote(t, sessionKey(id), sessionJSON(id, testGameID, durationSec))
+	e.putRemote(sessionKey(id), sessionJSON(id, testGameID, durationSec))
 }
 
 func sessionJSON(id, gameID string, durationSec int64) string {
@@ -241,7 +237,7 @@ func TestSyncSessions(t *testing.T) {
 					id, testGameID, "2026-11-03T01:02:03.004Z", 60)
 			}
 			for _, key := range tt.remote {
-				e.putRemote(t, key, `{"remote":true}`)
+				e.putRemote(key, `{"remote":true}`)
 			}
 
 			got, err := e.core.Sync(ctx, testGameID)
@@ -283,8 +279,8 @@ func TestSyncSessions(t *testing.T) {
 		e := newBareEnv(t)
 		e.addSession(t, sessionA, 60)
 		// 同期すれば 8-G3 で DB が書き換わる game.json を置いておく
-		e.putRemote(t, gameKey, remoteGameJSON(newerStamp))
-		markRemoteDeleted(t, e.dbPath)
+		e.putRemote(gameKey, remoteGameJSON(newerStamp))
+		e.markRemoteDeleted(t)
 		e.remote.Before = func(op memstore.Op, key string) error {
 			t.Errorf("リモートを操作した: op %d, key %s", op, key)
 			return nil
@@ -402,7 +398,7 @@ func TestDownloadSessions(t *testing.T) {
 		e := newEnv(t)
 		e.addSession(t, sessionA, 60)
 		remote := sessionJSON(sessionA, testGameID, 999)
-		e.putRemote(t, sessionKey(sessionA), remote)
+		e.putRemote(sessionKey(sessionA), remote)
 
 		got, err := e.core.Sync(ctx, testGameID)
 		if err != nil {
@@ -478,7 +474,7 @@ func TestDownloadSessions(t *testing.T) {
 	for _, tt := range invalid {
 		t.Run(tt.name, func(t *testing.T) {
 			e := newEnv(t)
-			e.putRemote(t, sessionKey(sessionA), tt.body)
+			e.putRemote(sessionKey(sessionA), tt.body)
 			e.putRemoteSession(t, sessionB, 0)
 
 			got, err := e.core.Sync(ctx, testGameID)
@@ -496,7 +492,7 @@ func TestDownloadSessions(t *testing.T) {
 
 	t.Run("8章/プレイ履歴/知らない項目があっても取り込む", func(t *testing.T) {
 		e := newEnv(t)
-		e.putRemote(t, sessionKey(sessionA),
+		e.putRemote(sessionKey(sessionA),
 			fmt.Sprintf(`{"id":%q,"gameId":%q,"playedAt":"2026-11-03T01:02:03.004Z","durationSec":60,"note":"x"}`, sessionA, testGameID))
 
 		if _, err := e.core.Sync(ctx, testGameID); err != nil {
@@ -573,11 +569,13 @@ func TestDownloadSessions(t *testing.T) {
 	})
 }
 
-// markRemoteDeleted は、ゲームの tombstone の記録（8-T2）を、リモートの deleted.json と違う値で DB に直接書く。
-func markRemoteDeleted(t *testing.T, dbPath string) {
+// markRemoteDeleted は、ゲームの tombstone の記録（8-T2）を、リモートの deleted.json（deletedJSON）と違う値で DB にだけ書く。
+func (e *env) markRemoteDeleted(t *testing.T) {
 	t.Helper()
-	execDB(t, dbPath, `UPDATE game_locals SET remote_deleted_at = ?, remote_deleted_by = ? WHERE game_id = ?`,
-		"2026-11-03T00:00:00.000Z", "Laptop", testGameID)
+	ts := syncore.Tombstone{DeletedAt: time.Date(2026, 11, 3, 0, 0, 0, 0, time.UTC), DeviceName: "Laptop"}
+	if err := e.store.RecordRemoteDeleted(context.Background(), testGameID, ts); err != nil {
+		t.Fatalf("RecordRemoteDeleted: %v", err)
+	}
 }
 
 func execDB(t *testing.T, dbPath, query string, args ...any) {
