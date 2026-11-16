@@ -24,10 +24,6 @@ var (
 	jpegMagic = []byte{0xff, 0xd8, 0xff}
 )
 
-func imagesPrefix(gameID string) string {
-	return "games/" + gameID + "/images/"
-}
-
 func (c *Core) imagePath(sha string) string {
 	return filepath.Join(c.cfg.ImageDir, sha)
 }
@@ -104,24 +100,24 @@ func (c *Core) uploadImage(ctx context.Context, g GameInfo) (ImageOutcome, error
 	if g.ImageSha256 == "" {
 		return ImageNone, nil
 	}
-	prefix := imagesPrefix(g.ID)
-	key := prefix + g.ImageSha256
-	keys, err := c.cfg.Remote.List(ctx, prefix)
+	// 画像は増える一方なので、配下の全部ではなく、キーそのものを接頭辞にして一覧する
+	key := imagesPrefix(g.ID) + g.ImageSha256
+	keys, err := c.cfg.Remote.List(ctx, key)
 	if err != nil {
 		return 0, fmt.Errorf("list images: %w", err)
 	}
 	if slices.Contains(keys, key) {
 		return ImageUnchanged, nil
 	}
-	body, err := os.ReadFile(c.imagePath(g.ImageSha256))
-	if errors.Is(err, fs.ErrNotExist) {
+	body, state, err := c.readCachedImage(g.ImageSha256)
+	if err != nil {
+		return 0, err
+	}
+	switch state {
+	case cacheMissing:
 		c.cfg.Logger.Warn("skip image upload: image is neither cached nor in remote", "gameId", g.ID, "imageSha256", g.ImageSha256)
 		return ImageMissing, nil
-	}
-	if err != nil {
-		return 0, fmt.Errorf("read cached image: %w", err)
-	}
-	if sha256Hex(body) != g.ImageSha256 {
+	case cacheCorrupted:
 		c.cfg.Logger.Warn("skip image upload: cached image is corrupted", "gameId", g.ID, "imageSha256", g.ImageSha256)
 		if err := os.Remove(c.imagePath(g.ImageSha256)); err != nil {
 			return 0, fmt.Errorf("remove corrupted cached image: %w", err)
@@ -132,6 +128,32 @@ func (c *Core) uploadImage(ctx context.Context, g GameInfo) (ImageOutcome, error
 		return 0, fmt.Errorf("put image: %w", err)
 	}
 	return ImageUploaded, nil
+}
+
+type cacheState int
+
+const (
+	// cacheUnknown は、読めなかったときに返す。ゼロ値を cacheMissing にすると、err を見ずに state だけを見た呼び出し側が、
+	// 読めないキャッシュを「ない」と扱うため
+	cacheUnknown cacheState = iota
+	cacheMissing
+	cacheCorrupted
+	cacheValid
+)
+
+// readCachedImage は、中身の sha256 が sha と一致するときだけ cacheValid と中身を返す。一致しないファイルは消さない。
+func (c *Core) readCachedImage(sha string) ([]byte, cacheState, error) {
+	body, err := os.ReadFile(c.imagePath(sha))
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, cacheMissing, nil
+	}
+	if err != nil {
+		return nil, cacheUnknown, fmt.Errorf("read cached image: %w", err)
+	}
+	if sha256Hex(body) != sha {
+		return nil, cacheCorrupted, nil
+	}
+	return body, cacheValid, nil
 }
 
 // cacheRemoteImage は、sha の画像がキャッシュになければ取得して入れる（8-I3）。リモートにないものと、不正なもの
@@ -145,18 +167,13 @@ func (c *Core) cacheRemoteImage(ctx context.Context, gameID, sha string) (ImageO
 	} else if !errors.Is(err, fs.ErrNotExist) {
 		return 0, fmt.Errorf("stat cached image: %w", err)
 	}
-	r, err := c.cfg.Remote.Get(ctx, imagesPrefix(gameID)+sha)
-	if errors.Is(err, fs.ErrNotExist) {
+	body, found, err := c.getLimited(ctx, imagesPrefix(gameID)+sha, maxImageSize)
+	if err != nil {
+		return 0, err
+	}
+	if !found {
 		c.cfg.Logger.Warn("skip image missing in remote", "gameId", gameID, "imageSha256", sha)
 		return ImageMissing, nil
-	}
-	if err != nil {
-		return 0, fmt.Errorf("get image: %w", err)
-	}
-	defer func() { _ = r.Close() }()
-	body, err := io.ReadAll(io.LimitReader(r, maxImageSize+1))
-	if err != nil {
-		return 0, fmt.Errorf("read image: %w", err)
 	}
 	if err := validateRemoteImage(body, sha); err != nil {
 		c.cfg.Logger.Warn("skip invalid remote image", "gameId", gameID, "imageSha256", sha, "err", err)

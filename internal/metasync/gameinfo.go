@@ -5,27 +5,16 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
-	"io/fs"
 	"regexp"
 	"time"
 )
-
-// maxGameInfoSize は、読む game.json の本文の上限。正しい本文は 1 KiB に満たないので、超えるものは壊れた object として
-// 8-V7 で扱う。
-const maxGameInfoSize = 64 << 10
 
 var sha256Pattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
 // ValidSHA256 は、2 章の sha256 の表記（小文字の 16 進 64 文字）に当たる。
 func ValidSHA256(s string) bool {
 	return sha256Pattern.MatchString(s)
-}
-
-func gameKey(gameID string) string {
-	return "games/" + gameID + "/game.json"
 }
 
 // gameInfoJSON の項目の順が、PUT する本文の項目の順になる。未設定の brand・imageSha256 は項目ごと省く。
@@ -50,12 +39,12 @@ func (c *Core) syncGameInfo(ctx context.Context, gameID string) (GameInfoOutcome
 	var outcome GameInfoOutcome
 	current := local
 	upload := false
-	body, err := c.getGameJSON(ctx, gameID)
+	body, found, err := c.getLimited(ctx, gameKey(gameID), maxMetaJSONSize)
 	switch {
-	case errors.Is(err, fs.ErrNotExist): // 8-G1
-		upload = true
 	case err != nil:
 		return 0, 0, err
+	case !found: // 8-G1
+		upload = true
 	default:
 		remote, err := parseGameInfo(body, gameID)
 		if err != nil {
@@ -80,21 +69,19 @@ func (c *Core) syncGameInfo(ctx context.Context, gameID string) (GameInfoOutcome
 			}
 		}
 	}
-	var uploaded ImageOutcome
 	if upload {
-		if uploaded, err = c.uploadGameInfo(ctx, local); err != nil {
+		uploaded, err := c.uploadGameInfo(ctx, local)
+		if err != nil {
 			return 0, 0, err
 		}
 		outcome = GameInfoUploaded
-		if uploaded == ImageMissing { // 8-I4: 画像はどこにもないので、取得も試さない
+		// PUT するのは 8-G1・8-G2 のときだけで、current は local のままなので、PUT した画像が最後に確かめる画像である。
+		// キャッシュから送ったものなので、取得し直さない。ImageMissing（8-I4）は、画像がどこにもないので、取得も試さない
+		if uploaded == ImageUploaded || uploaded == ImageMissing {
 			return outcome, uploaded, nil
 		}
 	}
 	img, err := c.cacheRemoteImage(ctx, gameID, current.ImageSha256)
-	// PUT した画像はキャッシュから送ったものなので、取得の確かめは ImageUnchanged を返す。結果には PUT したことを出す
-	if uploaded == ImageUploaded {
-		img = ImageUploaded
-	}
 	return outcome, img, err
 }
 
@@ -110,26 +97,6 @@ func (c *Core) uploadGameInfo(ctx context.Context, g GameInfo) (ImageOutcome, er
 		return 0, err
 	}
 	return img, nil
-}
-
-// getGameJSON は、game.json がなければ fs.ErrNotExist で包んだエラーを返す。
-func (c *Core) getGameJSON(ctx context.Context, gameID string) ([]byte, error) {
-	return c.getLimited(ctx, gameKey(gameID), maxGameInfoSize)
-}
-
-// getLimited は、キーがなければ fs.ErrNotExist で包んだエラーを返す。limit を超える本文は、limit の 1 バイト先までしか
-// 読まないので、呼び出し側は長さで超えたことを判定できる。
-func (c *Core) getLimited(ctx context.Context, key string, limit int64) ([]byte, error) {
-	r, err := c.cfg.Remote.Get(ctx, key)
-	if err != nil {
-		return nil, fmt.Errorf("get %s: %w", key, err)
-	}
-	defer func() { _ = r.Close() }()
-	body, err := io.ReadAll(io.LimitReader(r, limit+1))
-	if err != nil {
-		return nil, fmt.Errorf("read %s: %w", key, err)
-	}
-	return body, nil
 }
 
 func (c *Core) putGameInfo(ctx context.Context, g GameInfo) error {
@@ -153,8 +120,8 @@ func (c *Core) putGameInfo(ctx context.Context, g GameInfo) error {
 // parseGameInfo は、仕様書 8-V7〜8-V11・8-V15 で検証する。知らない項目は無視する。parseSession と同じ理由で、構造体に
 // Unmarshal せず項目ごとに読む。brand・imageSha256 は、ないか null なら未設定とし、brand の空文字も未設定とする。
 func parseGameInfo(body []byte, gameID string) (GameInfo, error) {
-	if len(body) > maxGameInfoSize {
-		return GameInfo{}, fmt.Errorf("8-V7: body exceeds %d bytes", maxGameInfoSize)
+	if len(body) > maxMetaJSONSize {
+		return GameInfo{}, fmt.Errorf("8-V7: body exceeds %d bytes", maxMetaJSONSize)
 	}
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(body, &fields); err != nil {
@@ -190,31 +157,7 @@ func parseGameInfo(body []byte, gameID string) (GameInfo, error) {
 	return g, nil
 }
 
-// optionalString は、項目がないか null なら空文字を返し、文字列でなければエラーにする。
-func optionalString(v json.RawMessage) (string, error) {
-	if v == nil {
-		return "", nil
-	}
-	var p *string
-	if err := json.Unmarshal(v, &p); err != nil {
-		return "", err
-	}
-	if p == nil {
-		return "", nil
-	}
-	return *p, nil
-}
-
 func sameGameInfo(a, b GameInfo) bool {
 	return a.ID == b.ID && a.Title == b.Title && a.Brand == b.Brand && a.ImageSha256 == b.ImageSha256 &&
 		a.CreatedAt.Equal(b.CreatedAt) && a.UpdatedAt.Equal(b.UpdatedAt)
-}
-
-// unmarshalString は、項目がないか null か、文字列でなければエラーにする。
-func unmarshalString(fields map[string]json.RawMessage, name string, dst *string) error {
-	v, ok := fields[name]
-	if !ok || string(v) == "null" {
-		return fmt.Errorf("%s is missing or null", name)
-	}
-	return json.Unmarshal(v, dst)
 }
