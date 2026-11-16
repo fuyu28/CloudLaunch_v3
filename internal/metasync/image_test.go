@@ -18,7 +18,6 @@ import (
 
 	"github.com/fuyu28/CloudLaunch_v3/internal/metasync"
 	"github.com/fuyu28/CloudLaunch_v3/internal/objstore/memstore"
-	"github.com/fuyu28/CloudLaunch_v3/internal/store"
 )
 
 // maxImageSize は、仕様書 8-I2・8-V13 の 10 MiB。
@@ -85,15 +84,11 @@ func (e *env) cacheFiles(t *testing.T) []string {
 	return names
 }
 
-// setImage は、set-image と同じく、画像をキャッシュに入れてから DB の imageSha256 を書き換える。
 func (e *env) setImage(t *testing.T, body []byte, now time.Time) string {
 	t.Helper()
-	sha, err := e.core.CacheImage(bytes.NewReader(body))
+	sha, err := e.core.SetImage(context.Background(), testGameID, bytes.NewReader(body), now)
 	if err != nil {
-		t.Fatalf("CacheImage: %v", err)
-	}
-	if err := e.store.EditGame(context.Background(), testGameID, store.GameEdit{ImageSha256: &sha}, now); err != nil {
-		t.Fatalf("EditGame: %v", err)
+		t.Fatalf("SetImage: %v", err)
 	}
 	return sha
 }
@@ -415,6 +410,37 @@ func TestCacheImage(t *testing.T) {
 		}
 		if !info.ModTime().Equal(old) {
 			t.Errorf("書き直した: mtime %v", info.ModTime())
+		}
+	})
+}
+
+func TestSetImage(t *testing.T) {
+	later := testPlayedAt.Add(time.Hour)
+
+	t.Run("8章/画像/登録していないゲームには、画像をキャッシュに残さない", func(t *testing.T) {
+		e := newBareEnv(t)
+
+		if _, err := e.core.SetImage(t.Context(), "0192d4e8-0000-7000-8000-0000000000ff", bytes.NewReader(testPNG), later); err == nil {
+			t.Error("SetImage がエラーを返さなかった")
+		}
+		if files := e.cacheFiles(t); len(files) != 0 {
+			t.Errorf("キャッシュに入れた: %v", files)
+		}
+	})
+
+	t.Run("8章/画像/nil を渡すと画像を外す", func(t *testing.T) {
+		e := newBareEnv(t)
+		e.setImage(t, testPNG, later)
+
+		sha, err := e.core.SetImage(t.Context(), testGameID, nil, later.Add(time.Hour))
+		if err != nil {
+			t.Fatalf("SetImage: %v", err)
+		}
+		if sha != "" {
+			t.Errorf("sha256 = %q, want 空", sha)
+		}
+		if got := e.localGameInfo(t).ImageSha256; got != "" {
+			t.Errorf("imageSha256 = %q, want 空", got)
 		}
 	})
 }
