@@ -173,7 +173,11 @@ func recordBaseIfNeeded(ctx context.Context, core *syncore.Core, plan syncore.Pl
 	if err := core.RecordBase(ctx, plan); err != nil {
 		return err
 	}
-	_, err := fmt.Fprintln(stdout, recordBaseLabel(plan)+"しました")
+	return printRecordedBase(stdout, plan)
+}
+
+func printRecordedBase(w io.Writer, plan syncore.Plan) error {
+	_, err := fmt.Fprintln(w, recordBaseLabel(plan)+"しました")
 	return err
 }
 
@@ -235,7 +239,8 @@ func transfer(ctx context.Context, args []string, stdout io.Writer, cmd transfer
 	return errors.Join(err, printMeta(stdout, res))
 }
 
-// printMeta は、メタ情報を同期しなかったとき（tombstone を確かめ直せなかったとき）は何も出さない。
+// printMeta は、メタ情報を同期しなかったとき（tombstone を確かめ直せなかったときと、セーブの同期が削除済みで止まったとき）は
+// 何も出さない。
 func printMeta(stdout io.Writer, res gamesync.Result) error {
 	switch {
 	case res.MetaErr != nil:
@@ -297,8 +302,7 @@ func syncSave(ctx context.Context, g *gamesync.Core, plan syncore.Plan, stdout i
 		if err != nil || !plan.RecordBase {
 			return res, err
 		}
-		_, err = fmt.Fprintln(stdout, recordBaseLabel(plan)+"しました")
-		return res, err
+		return res, printRecordedBase(stdout, plan)
 	}
 	res, err := cmd.exec(ctx, g, plan, overwrite)
 	if err != nil {

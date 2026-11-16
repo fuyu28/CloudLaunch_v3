@@ -51,7 +51,11 @@ func (c *Core) Check(ctx context.Context, gameID string) (syncore.Plan, error) {
 		return plan, err
 	}
 	// 確かめた後に削除された。Status は記録も削除もしないので、もう一度扱う
-	plan, _, err = c.handleTombstone(ctx, gameID)
+	plan, deleted, err := c.handleTombstone(ctx, gameID)
+	if !deleted && err == nil {
+		// Status が見た tombstone が見えなくなった。削除されたかどうか分からないので、判定を止める
+		return syncore.Plan{GameID: gameID}, syncore.ErrRemoteDeleted
+	}
 	return plan, err
 }
 
@@ -63,12 +67,10 @@ func (c *Core) handleTombstone(ctx context.Context, gameID string) (syncore.Plan
 	return syncore.Plan{GameID: gameID, RemoteDeleted: &t}, true, err
 }
 
-// Push は、承認した plan で Push してから、SyncMeta を呼ぶ。
 func (c *Core) Push(ctx context.Context, plan syncore.Plan, opts syncore.PushOptions) (Result, error) {
 	return c.SyncMeta(ctx, plan.GameID, c.cfg.Save.Push(ctx, plan, opts))
 }
 
-// Pull は、承認した plan で Pull してから、SyncMeta を呼ぶ。
 func (c *Core) Pull(ctx context.Context, plan syncore.Plan, opts syncore.PullOptions) (Result, error) {
 	return c.SyncMeta(ctx, plan.GameID, c.cfg.Save.Pull(ctx, plan, opts))
 }
