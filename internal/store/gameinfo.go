@@ -95,6 +95,11 @@ func (s *Store) EditGame(ctx context.Context, gameID string, edit GameEdit, now 
 		title, edit.Brand != nil, brand, edit.ImageSha256 != nil, image, nowStr, gameID)
 }
 
+// SetImageSha256 は、sha が空なら画像を外す。updated_at は EditGame と同じく進める。
+func (s *Store) SetImageSha256(ctx context.Context, gameID, sha string, now time.Time) error {
+	return s.EditGame(ctx, gameID, GameEdit{ImageSha256: &sha}, now)
+}
+
 // gameRow は、games の 1 行に書く値。newGameRow で作り、トランザクションを始める前に入力を確かめ終える。
 type gameRow struct {
 	id, title            string

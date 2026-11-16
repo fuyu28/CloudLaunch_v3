@@ -47,6 +47,8 @@ type LocalStore interface {
 	// ゲームの tombstone の記録を除く）を g.ID に移し、oldID のゲーム情報を消す（仕様書 8-U4）。oldID にゲームの tombstone の
 	// 記録がなければ、何も変えずにエラーを返す
 	ReuploadGame(ctx context.Context, oldID string, g GameInfo) error
+	// SetImageSha256 は、sha が空なら画像を外す。updatedAt を now 以降に進め、次の同期で game.json を PUT させる（仕様書 8-G2）
+	SetImageSha256(ctx context.Context, gameID, sha string, now time.Time) error
 }
 
 // GameInfo は game.json と同じ項目（仕様書 8 章）。Brand と ImageSha256 は空文字を未設定とする。
