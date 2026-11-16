@@ -56,40 +56,31 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 	if len(args) == 0 {
 		return errors.New(usage)
 	}
-	switch args[0] {
-	case "game":
-		if len(args) >= 2 && args[1] == "add" {
+	if len(args) >= 2 {
+		switch args[0] + " " + args[1] {
+		case "game add":
 			return gameAdd(ctx, args[2:], stdout)
-		}
-		if len(args) >= 2 && args[1] == "edit" {
+		case "game edit":
 			return gameEdit(ctx, args[2:], stdout)
-		}
-		if len(args) >= 2 && args[1] == "set-image" {
+		case "game set-image":
 			return gameSetImage(ctx, args[2:], stdout)
-		}
-		if len(args) >= 2 && args[1] == "remote" {
+		case "game remote":
 			return gameRemote(ctx, args[2:], stdout)
-		}
-		if len(args) >= 2 && args[1] == "import" {
+		case "game import":
 			return gameImport(ctx, args[2:], stdout)
-		}
-		if len(args) >= 2 && args[1] == "delete" {
+		case "game delete":
 			return gameDelete(ctx, args[2:], stdout)
-		}
-		if len(args) >= 2 && args[1] == "reupload" {
+		case "game reupload":
 			return gameReupload(ctx, args[2:], stdout)
-		}
-	case "session":
-		if len(args) >= 2 && args[1] == "add" {
+		case "session add":
 			return sessionAdd(ctx, args[2:], stdout)
-		}
-	case "legacy":
-		if len(args) >= 2 && args[1] == "import" {
+		case "legacy import":
 			return legacyImport(ctx, args[2:], stdout)
-		}
-		if len(args) >= 2 && args[1] == "link" {
+		case "legacy link":
 			return legacyLink(ctx, args[2:], stdout)
 		}
+	}
+	switch args[0] {
 	case "status":
 		return status(ctx, args[1:], stdout)
 	case "push":
@@ -105,17 +96,17 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 // recoverPulls は、復旧できた行を出してから、失敗した行のエラーを返す。リモートには触れないので、接続先を読まない。
 func recoverPulls(ctx context.Context, args []string, stdout io.Writer) error {
 	fs := flag.NewFlagSet("recover", flag.ContinueOnError)
-	dataDir := fs.String("data-dir", "", "DB などを置くディレクトリ")
+	dataDir := addDataDirFlag(fs)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	s, dir, err := openStore(ctx, *dataDir)
+	c, err := openCores(ctx, *dataDir, nil, "")
 	if err != nil {
 		return err
 	}
-	defer func() { _ = s.Close() }()
+	defer c.close()
 
-	recovered, err := syncore.New(localConfig(s, dir)).Recover(ctx)
+	recovered, err := c.sync.Recover(ctx)
 	for _, r := range recovered {
 		if _, werr := fmt.Fprintf(stdout, "%s: game %s, op %s\n", recoveryLabel(r.Case), r.GameID, r.OpID); werr != nil {
 			return errors.Join(err, werr)
@@ -170,8 +161,8 @@ func handleTombstone(ctx context.Context, c cores, stdout io.Writer) error {
 		return errors.Join(err, werr)
 	}
 	// 仕様書 8 章「リモートで削除されたゲーム」は、登録の解除か上げ直しを利用者に選ばせる。記録はしたので、どちらも実行できる
-	if _, werr := fmt.Fprintf(stdout, "この PC の登録を解除するときは cloudlaunch-cli game delete%[1]s --game %[2]s、新しいゲームとして上げ直すときは cloudlaunch-cli game reupload%[1]s --game %[2]s を実行してください\n",
-		dataDirFlag(c.dataDir), c.gameID); werr != nil {
+	if _, werr := fmt.Fprintf(stdout, "この PC の登録を解除するときは %s、新しいゲームとして上げ直すときは %s を実行してください\n",
+		cliCommand(c.dataDir, "game delete", "--game", c.gameID), cliCommand(c.dataDir, "game reupload", "--game", c.gameID)); werr != nil {
 		return errors.Join(err, werr)
 	}
 	return errors.Join(errRemoteDeleted, err)
@@ -336,16 +327,20 @@ func printTransferred(w io.Writer, plan syncore.Plan, overwrite bool, done strin
 	return err
 }
 
-// cores は、リモートと DB につないだ同期コアとメタ情報の同期。close は呼び出し側が必ず呼ぶ。
+// cores は、DB につないだ同期コアとメタ情報の同期。close は呼び出し側が必ず呼ぶ。
 type cores struct {
 	sync   *syncore.Core
 	meta   *metasync.Core
 	store  *store.Store
 	logger *slog.Logger
+	// gameID は openSyncCores だけが入れ、openCores で開いたときは空のまま
 	gameID string
 	// dataDir は --data-dir に渡された値。案内するコマンドに引き継ぐので、空なら既定の場所に置き換えずに空のまま持つ
 	dataDir string
-	close   func()
+}
+
+func (c cores) close() {
+	_ = c.store.Close()
 }
 
 // openCore は --game と --data-dir を読み、リモートと DB につないだコアを返す。overwrite が nil でなければ、
@@ -353,20 +348,21 @@ type cores struct {
 func openCore(ctx context.Context, name string, args []string, overwrite *bool) (cores, error) {
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
 	game := fs.String("game", "", "ゲーム ID")
-	dataDir := fs.String("data-dir", "", "DB などを置くディレクトリ")
+	dataDir := addDataDirFlag(fs)
 	if overwrite != nil {
 		fs.BoolVar(overwrite, "overwrite", false, "判定によらず上書きする")
 	}
 	if err := fs.Parse(args); err != nil {
 		return cores{}, err
 	}
-	if *game == "" {
-		return cores{}, errors.New("--game is required")
+	if err := requireFlag("game", *game); err != nil {
+		return cores{}, err
 	}
-	return connectCores(ctx, *game, *dataDir)
+	return openSyncCores(ctx, *game, *dataDir)
 }
 
-func connectCores(ctx context.Context, gameID, dataDir string) (cores, error) {
+// openSyncCores は、セーブの同期と削除のために、deviceName も設定してリモートにつなぐ。
+func openSyncCores(ctx context.Context, gameID, dataDir string) (cores, error) {
 	remote, err := openRemote()
 	if err != nil {
 		return cores{}, err
@@ -376,25 +372,55 @@ func connectCores(ctx context.Context, gameID, dataDir string) (cores, error) {
 	if err != nil {
 		return cores{}, fmt.Errorf("hostname: %w", err)
 	}
+	c, err := openCores(ctx, dataDir, remote, host)
+	if err != nil {
+		return cores{}, err
+	}
+	c.gameID = gameID
+	return c, nil
+}
+
+// openMetaCores は、セーブを同期しない game remote・game import のために、リモートにつなぐ。manifest も tombstone も
+// 書かないので、deviceName を読まない。
+func openMetaCores(ctx context.Context, dataDir string) (cores, error) {
+	remote, err := openRemote()
+	if err != nil {
+		return cores{}, err
+	}
+	return openCores(ctx, dataDir, remote, "")
+}
+
+// openCores は、remote が nil なら、リモートにつながないコアを返す。そのコアでは、リモートに触れる操作を呼ばない。
+// deviceName は、manifest や tombstone を書かないコマンドでは空でよい。バックアップの置き場所と同期ロックを、どのコマンド
+// でも揃えるために 1 か所で組み立てる。
+func openCores(ctx context.Context, dataDir string, remote *objstore.S3, deviceName string) (cores, error) {
 	s, dir, err := openStore(ctx, dataDir)
 	if err != nil {
 		return cores{}, err
 	}
 
-	cfg := localConfig(s, dir)
-	cfg.Remote = remote
-	cfg.DeviceName = host
-	cfg.Processes = platform.Processes{}
+	logger := newLogger()
+	cfg := syncore.Config{
+		Local:      s,
+		Logger:     logger,
+		DeviceName: deviceName,
+		BackupsDir: filepath.Join(dir, "backups"),
+		Locker:     platform.NewFileLock(filepath.Join(dir, "sync.lock")),
+		Processes:  platform.Processes{},
+		Rename:     platform.Rename,
+	}
+	metaCfg := metasync.Config{Local: s, Logger: logger, ImageDir: filepath.Join(dir, "images")}
+	// nil の *objstore.S3 をインターフェースに入れると nil と比べて等しくならず、コアが設定がないことを見つけられない。
+	// Tombstones も入れないので、metasync の取り込みはリモートを読まずにエラーで止まる
+	if remote != nil {
+		cfg.Remote = remote
+		metaCfg.Remote = remote
+	}
 	core := syncore.New(cfg)
-	return cores{
-		sync:    core,
-		meta:    newMeta(remote, s, cfg.Logger, dir, core),
-		store:   s,
-		logger:  cfg.Logger,
-		gameID:  gameID,
-		dataDir: dataDir,
-		close:   func() { _ = s.Close() },
-	}, nil
+	if remote != nil {
+		metaCfg.Tombstones = tombstoneReader{core}
+	}
+	return cores{sync: core, meta: metasync.New(metaCfg), store: s, logger: logger, dataDir: dataDir}, nil
 }
 
 func openRemote() (*objstore.S3, error) {
@@ -404,34 +430,6 @@ func openRemote() (*objstore.S3, error) {
 		Bucket:          os.Getenv("CLOUDLAUNCH_S3_BUCKET"),
 		AccessKeyID:     os.Getenv("CLOUDLAUNCH_S3_ACCESS_KEY_ID"),
 		SecretAccessKey: os.Getenv("CLOUDLAUNCH_S3_SECRET_ACCESS_KEY"),
-	})
-}
-
-// openMeta は、セーブを同期しない game remote・game import のために、メタ情報の同期をリモートと DB につなぐ。syncore は
-// tombstone の確認のためだけに使う。
-// 返す store は、game import の後の照合（仕様書 9-K4）に使う。store は呼び出し側が必ず閉じる。
-func openMeta(ctx context.Context, dataDir string) (*metasync.Core, *store.Store, error) {
-	remote, err := openRemote()
-	if err != nil {
-		return nil, nil, err
-	}
-	s, dir, err := openStore(ctx, dataDir)
-	if err != nil {
-		return nil, nil, err
-	}
-	logger := newLogger()
-	// 取り込みの tombstone の確認（仕様書 8-N7）はリモートだけを読むので、同期ロックなどの設定は要らない
-	tombstones := syncore.New(syncore.Config{Remote: remote, Local: s, Logger: logger})
-	return newMeta(remote, s, logger, dir, tombstones), s, nil
-}
-
-func newMeta(remote *objstore.S3, s *store.Store, logger *slog.Logger, dataDir string, tombstones *syncore.Core) *metasync.Core {
-	return metasync.New(metasync.Config{
-		Remote:     remote,
-		Local:      s,
-		Tombstones: tombstoneReader{tombstones},
-		Logger:     logger,
-		ImageDir:   imageDir(dataDir),
 	})
 }
 
@@ -457,17 +455,17 @@ func newLogger() *slog.Logger {
 // 書いた値で、タブ・改行・端末の制御文字を含みうるので、Go の引用符つきの表記にして列と行を崩さない。
 func gameRemote(ctx context.Context, args []string, stdout io.Writer) error {
 	fs := flag.NewFlagSet("game remote", flag.ContinueOnError)
-	dataDir := fs.String("data-dir", "", "DB などを置くディレクトリ")
+	dataDir := addDataDirFlag(fs)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	meta, s, err := openMeta(ctx, *dataDir)
+	c, err := openMetaCores(ctx, *dataDir)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = s.Close() }()
+	defer c.close()
 
-	res, err := meta.RemoteGames(ctx)
+	res, err := c.meta.RemoteGames(ctx)
 	if err != nil {
 		return err
 	}
@@ -501,23 +499,23 @@ func gameImport(ctx context.Context, args []string, stdout io.Writer) error {
 	game := fs.String("game", "", "取り込むゲームの ID（game remote で確かめる）")
 	saveDir := fs.String("save-dir", "", "セーブフォルダの絶対パス")
 	exe := fs.String("exe", "", "実行ファイルの絶対パス")
-	dataDir := fs.String("data-dir", "", "DB などを置くディレクトリ")
+	dataDir := addDataDirFlag(fs)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	if *game == "" {
-		return errors.New("--game is required")
+	if err := requireFlag("game", *game); err != nil {
+		return err
 	}
 	if err := checkAbsPaths(*saveDir, *exe); err != nil {
 		return err
 	}
-	meta, s, err := openMeta(ctx, *dataDir)
+	c, err := openMetaCores(ctx, *dataDir)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = s.Close() }()
+	defer c.close()
 
-	g, err := meta.ImportGame(ctx, *game, filepath.Clean(*saveDir), filepath.Clean(*exe))
+	g, err := c.meta.ImportGame(ctx, *game, filepath.Clean(*saveDir), filepath.Clean(*exe))
 	if err != nil {
 		return err
 	}
@@ -526,7 +524,7 @@ func gameImport(ctx context.Context, args []string, stdout io.Writer) error {
 		return err
 	}
 	// 読み直した game.json のタイトルで照合する
-	return printLegacyMatch(ctx, s, g.ID, g.Title, *dataDir, stdout)
+	return printLegacyMatch(ctx, c.store, g.ID, g.Title, *dataDir, stdout)
 }
 
 // gameDelete は、--remote がなければ登録だけを解除し、リモートには接続しない（仕様書 8-X1）。--remote なら、--confirm-title を
@@ -537,12 +535,12 @@ func gameDelete(ctx context.Context, args []string, stdout io.Writer) error {
 	game := fs.String("game", "", "削除するゲームの ID")
 	remote := fs.Bool("remote", false, "リモートのデータも削除する")
 	confirmTitle := fs.String("confirm-title", "", "--remote で、確認のために打つゲームのタイトル")
-	dataDir := fs.String("data-dir", "", "DB などを置くディレクトリ")
+	dataDir := addDataDirFlag(fs)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	if *game == "" {
-		return errors.New("--game is required")
+	if err := requireFlag("game", *game); err != nil {
+		return err
 	}
 	confirmGiven := false
 	fs.Visit(func(f *flag.Flag) { confirmGiven = confirmGiven || f.Name == "confirm-title" })
@@ -556,7 +554,7 @@ func gameDelete(ctx context.Context, args []string, stdout io.Writer) error {
 		return errors.New("--remote requires --confirm-title")
 	}
 
-	c, err := connectCores(ctx, *game, *dataDir)
+	c, err := openSyncCores(ctx, *game, *dataDir)
 	if err != nil {
 		return err
 	}
@@ -596,8 +594,7 @@ func unregisterGame(ctx context.Context, gameID, dataDir string, stdout io.Write
 
 // explainDeleteError は、ゲームの削除が止まった場所（仕様書 8-X8〜8-X10）ごとに、利用者がすることを添える。
 func explainDeleteError(err error, gameID, dataDir string) error {
-	unregister := "cloudlaunch-cli game delete" + dataDirFlag(dataDir) + " --game " + gameID
-	recoverCmd := "cloudlaunch-cli recover" + dataDirFlag(dataDir)
+	unregister := cliCommand(dataDir, "game delete", "--game", gameID)
 	switch {
 	case errors.Is(err, syncore.ErrUnregisterFailed):
 		return fmt.Errorf("リモートのデータは削除しましたが、この PC の登録を解除できませんでした。%s で解除してください: %w", unregister, err)
@@ -607,10 +604,19 @@ func explainDeleteError(err error, gameID, dataDir string) error {
 		return fmt.Errorf("リモートの削除に失敗しました。削除が届いたかは分かりません。status で確かめてから、もう一度実行してください: %w", err)
 	case errors.Is(err, syncore.ErrRemoteDeleted):
 		return fmt.Errorf("このゲームはリモートで削除済みです。この PC の登録を解除するときは %s を実行してください: %w", unregister, err)
-	case errors.Is(err, syncore.ErrPullPending), errors.Is(err, store.ErrPullInProgress):
-		return fmt.Errorf("途中で止まった Pull が残っています。%s を実行してから、もう一度実行してください: %w", recoverCmd, err)
+	case isPullPending(err):
+		return explainPullPending(err, dataDir)
 	}
 	return explainSyncError(err)
+}
+
+func isPullPending(err error) bool {
+	return errors.Is(err, syncore.ErrPullPending) || errors.Is(err, store.ErrPullInProgress)
+}
+
+func explainPullPending(err error, dataDir string) error {
+	return fmt.Errorf("途中で止まった Pull が残っています。%s を実行してから、もう一度実行してください: %w",
+		cliCommand(dataDir, "recover"), err)
 }
 
 // gameReupload は DB だけを書き換え、リモートには次の push・pull で新しい gameId の下に PUT する（仕様書 8 章
@@ -618,29 +624,27 @@ func explainDeleteError(err error, gameID, dataDir string) error {
 func gameReupload(ctx context.Context, args []string, stdout io.Writer) error {
 	fs := flag.NewFlagSet("game reupload", flag.ContinueOnError)
 	game := fs.String("game", "", "上げ直すゲームの ID")
-	dataDir := fs.String("data-dir", "", "DB などを置くディレクトリ")
+	dataDir := addDataDirFlag(fs)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	if *game == "" {
-		return errors.New("--game is required")
+	if err := requireFlag("game", *game); err != nil {
+		return err
 	}
 	newGameID, err := resolveGameID("")
 	if err != nil {
 		return err
 	}
-	s, dir, err := openStore(ctx, *dataDir)
+	c, err := openCores(ctx, *dataDir, nil, "")
 	if err != nil {
 		return err
 	}
-	defer func() { _ = s.Close() }()
+	defer c.close()
 
-	cfg := localConfig(s, dir)
-	meta := metasync.New(metasync.Config{Local: s, Logger: cfg.Logger, ImageDir: imageDir(dir)})
 	var res metasync.ReuploadResult
-	err = syncore.New(cfg).ReuploadGame(ctx, *game, func(ctx context.Context) error {
+	err = c.sync.ReuploadGame(ctx, *game, func(ctx context.Context) error {
 		var err error
-		res, err = meta.ReuploadGame(ctx, *game, newGameID, time.Now())
+		res, err = c.meta.ReuploadGame(ctx, *game, newGameID, time.Now())
 		return err
 	})
 	if err != nil {
@@ -650,8 +654,8 @@ func gameReupload(ctx context.Context, args []string, stdout io.Writer) error {
 		return err
 	}
 	if res.ImageDropped {
-		_, err = fmt.Fprintf(stdout, "画像がキャッシュにないので引き継いでいません。cloudlaunch-cli game set-image%s --game %s で設定し直してください\n",
-			dataDirFlag(*dataDir), newGameID)
+		_, err = fmt.Fprintf(stdout, "画像がキャッシュにないので引き継いでいません。%s で設定し直してください\n",
+			cliCommand(*dataDir, "game set-image", "--game", newGameID))
 	}
 	return err
 }
@@ -659,11 +663,10 @@ func gameReupload(ctx context.Context, args []string, stdout io.Writer) error {
 func explainReuploadError(err error, gameID, dataDir string) error {
 	switch {
 	case errors.Is(err, syncore.ErrNotRemoteDeleted):
-		return fmt.Errorf("このゲームはリモートで削除された記録がないので、上げ直しません。cloudlaunch-cli status%s --game %s で確かめ、削除されていれば push か pull で記録してから、もう一度実行してください: %w",
-			dataDirFlag(dataDir), gameID, err)
-	case errors.Is(err, syncore.ErrPullPending), errors.Is(err, store.ErrPullInProgress):
-		return fmt.Errorf("途中で止まった Pull が残っています。cloudlaunch-cli recover%s を実行してから、もう一度実行してください: %w",
-			dataDirFlag(dataDir), err)
+		return fmt.Errorf("このゲームはリモートで削除された記録がないので、上げ直しません。%s で確かめ、削除されていれば push か pull で記録してから、もう一度実行してください: %w",
+			cliCommand(dataDir, "status", "--game", gameID), err)
+	case isPullPending(err):
+		return explainPullPending(err, dataDir)
 	case errors.Is(err, sql.ErrNoRows):
 		return fmt.Errorf("ゲーム %s は登録されていません: %w", gameID, err)
 	}
@@ -706,17 +709,33 @@ func printLegacyMatch(ctx context.Context, s *store.Store, gameID, title, dataDi
 		return err
 	}
 	// 照合に使った DB と同じ DB で取り込むよう、--data-dir を引き継ぐ
-	_, err = fmt.Fprintf(stdout, "取り込むには: cloudlaunch-cli legacy link%s --game %s --legacy-game %s\n",
-		dataDirFlag(dataDir), gameID, legacyGameID)
+	_, err = fmt.Fprintf(stdout, "取り込むには: %s\n",
+		cliCommand(dataDir, "legacy link", "--game", gameID, "--legacy-game", legacyGameID))
 	return err
 }
 
-// dataDirFlag は、案内するコマンドに --data-dir を引用して引き継ぐ。落とすと、既定の DB を相手に実行されてしまう。
-func dataDirFlag(dataDir string) string {
-	if dataDir == "" {
-		return ""
+// cliCommand は、--data-dir を引用して引き継ぐ。落とすと、既定の DB を相手に実行されてしまう。args は引用しないので、
+// 外から来た値は呼び出し側が引用する。
+func cliCommand(dataDir, sub string, args ...string) string {
+	cmd := "cloudlaunch-cli " + sub
+	if dataDir != "" {
+		cmd += " --data-dir " + strconv.Quote(dataDir)
 	}
-	return " --data-dir " + strconv.Quote(dataDir)
+	for _, a := range args {
+		cmd += " " + a
+	}
+	return cmd
+}
+
+func addDataDirFlag(fs *flag.FlagSet) *string {
+	return fs.String("data-dir", "", "DB などを置くディレクトリ")
+}
+
+func requireFlag(name, value string) error {
+	if value == "" {
+		return fmt.Errorf("--%s is required", name)
+	}
+	return nil
 }
 
 func printLegacyGames(w io.Writer, heading string, games []legacy.Game) error {
@@ -779,17 +798,6 @@ func explainSyncError(err error) error {
 	return err
 }
 
-// localConfig は、recover と、リモートを使うコマンドで、バックアップの置き場所と同期ロックを揃えるために 1 か所で組み立てる。
-func localConfig(s *store.Store, dataDir string) syncore.Config {
-	return syncore.Config{
-		Local:      s,
-		Logger:     newLogger(),
-		BackupsDir: filepath.Join(dataDir, "backups"),
-		Locker:     platform.NewFileLock(filepath.Join(dataDir, "sync.lock")),
-		Rename:     platform.Rename,
-	}
-}
-
 func printPlan(w io.Writer, plan syncore.Plan) error {
 	decision := map[syncore.Decision]string{
 		syncore.DecisionNoChange: "変更なし",
@@ -829,13 +837,13 @@ func gameAdd(ctx context.Context, args []string, stdout io.Writer) error {
 	saveDir := fs.String("save-dir", "", "セーブフォルダの絶対パス")
 	exe := fs.String("exe", "", "実行ファイルの絶対パス")
 	id := fs.String("id", "", "ゲーム ID（UUIDv7）。省くと新しく振る")
-	dataDir := fs.String("data-dir", "", "DB などを置くディレクトリ")
+	dataDir := addDataDirFlag(fs)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 
-	if *title == "" {
-		return errors.New("--title is required")
+	if err := requireFlag("title", *title); err != nil {
+		return err
 	}
 	if err := checkAbsPaths(*saveDir, *exe); err != nil {
 		return err
@@ -874,26 +882,26 @@ func gameSetImage(ctx context.Context, args []string, stdout io.Writer) error {
 	game := fs.String("game", "", "ゲーム ID")
 	file := fs.String("file", "", "画像のファイル（PNG・JPEG・WebP、10 MiB まで）")
 	clearImage := fs.Bool("clear", false, "画像を外す")
-	dataDir := fs.String("data-dir", "", "DB などを置くディレクトリ")
+	dataDir := addDataDirFlag(fs)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 
-	if *game == "" {
-		return errors.New("--game is required")
+	if err := requireFlag("game", *game); err != nil {
+		return err
 	}
 	if (*file == "") == !*clearImage {
 		return errors.New("specify either --file or --clear")
 	}
 
-	s, dir, err := openStore(ctx, *dataDir)
+	c, err := openCores(ctx, *dataDir, nil, "")
 	if err != nil {
 		return err
 	}
-	defer func() { _ = s.Close() }()
+	defer c.close()
 
 	// 登録していないゲームの ID を打ち間違えたときに、どこからも参照されない画像をキャッシュに残さない
-	if _, err := s.GameInfo(ctx, *game); err != nil {
+	if _, err := c.store.GameInfo(ctx, *game); err != nil {
 		return err
 	}
 	var sha string
@@ -903,21 +911,16 @@ func gameSetImage(ctx context.Context, args []string, stdout io.Writer) error {
 			return fmt.Errorf("open image: %w", err)
 		}
 		defer func() { _ = f.Close() }()
-		// CacheImage はリモートに触れないので、接続先を読まずに Core を作る
-		sha, err = metasync.New(metasync.Config{ImageDir: imageDir(dir)}).CacheImage(f)
+		sha, err = c.meta.CacheImage(f)
 		if err != nil {
 			return err
 		}
 	}
-	if err := s.EditGame(ctx, *game, store.GameEdit{ImageSha256: &sha}, time.Now()); err != nil {
+	if err := c.store.EditGame(ctx, *game, store.GameEdit{ImageSha256: &sha}, time.Now()); err != nil {
 		return err
 	}
 	_, err = fmt.Fprintf(stdout, "imageSha256: %s\n", orDash(sha))
 	return err
-}
-
-func imageDir(dataDir string) string {
-	return filepath.Join(dataDir, "images")
 }
 
 // gameEdit は DB にだけ書き、リモートには次の push・pull で反映する（仕様書 8-M2）。指定した flag の項目だけを変えるので、
@@ -927,13 +930,13 @@ func gameEdit(ctx context.Context, args []string, stdout io.Writer) error {
 	game := fs.String("game", "", "ゲーム ID")
 	title := fs.String("title", "", "ゲームのタイトル")
 	brand := fs.String("brand", "", "ブランド名。空文字で消す")
-	dataDir := fs.String("data-dir", "", "DB などを置くディレクトリ")
+	dataDir := addDataDirFlag(fs)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 
-	if *game == "" {
-		return errors.New("--game is required")
+	if err := requireFlag("game", *game); err != nil {
+		return err
 	}
 	var edit store.GameEdit
 	fs.Visit(func(f *flag.Flag) {
@@ -971,13 +974,13 @@ func sessionAdd(ctx context.Context, args []string, stdout io.Writer) error {
 	game := fs.String("game", "", "ゲーム ID")
 	duration := fs.Int64("duration", -1, "プレイ時間（秒）")
 	playedAt := fs.String("played-at", "", "プレイした日時（RFC3339）。省くと今の時刻")
-	dataDir := fs.String("data-dir", "", "DB などを置くディレクトリ")
+	dataDir := addDataDirFlag(fs)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 
-	if *game == "" {
-		return errors.New("--game is required")
+	if err := requireFlag("game", *game); err != nil {
+		return err
 	}
 	if *duration < 0 {
 		return errors.New("--duration is required and must be >= 0")
@@ -1015,7 +1018,7 @@ func sessionAdd(ctx context.Context, args []string, stdout io.Writer) error {
 
 func legacyImport(ctx context.Context, args []string, stdout io.Writer) error {
 	fs := flag.NewFlagSet("legacy import", flag.ContinueOnError)
-	dataDir := fs.String("data-dir", "", "DB などを置くディレクトリ")
+	dataDir := addDataDirFlag(fs)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -1053,7 +1056,7 @@ func legacyLink(ctx context.Context, args []string, stdout io.Writer) error {
 	fs := flag.NewFlagSet("legacy link", flag.ContinueOnError)
 	game := fs.String("game", "", "取り込み先のゲームの ID")
 	legacyGame := fs.String("legacy-game", "", "取り込む旧版のゲームの ID")
-	dataDir := fs.String("data-dir", "", "DB などを置くディレクトリ")
+	dataDir := addDataDirFlag(fs)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
