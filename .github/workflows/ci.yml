@@ -107,10 +107,16 @@ jobs:
             echo "CLOUDLAUNCH_TEST_S3_SECRET_ACCESS_KEY=testsecret"
           } >> "$GITHUB_ENV"
 
-      # go test はテストのない GUI のパッケージもビルドする。Wails の Linux の既定の実装は WebKitGTK のヘッダが要るので、
-      # cgo を使わない purego の実装でビルドする（.golangci.yml と同じ）。Windows には関係しない
+      # go test はテストのない GUI のパッケージもビルドし、Wails の Linux の実装は WebKitGTK のヘッダが要るので、Linux では
+      # GUI を外す（Linux 向けの GUI のコードはリントが purego で型検査する）。テストに purego のタグを付けないのは、標準ライブラリの
+      # crypto もアセンブリのない実装に変わり、本番と違うコードでテストすることになるため
       - name: Test
-        run: go test -race -cover -tags purego ./...
+        if: runner.os == 'Linux'
+        run: go test -race -cover $(go list ./... | grep -v '/cmd/cloudlaunch-gui$')
+
+      - name: Test
+        if: runner.os == 'Windows'
+        run: go test -race -cover ./...
 
   # 仕様書の変更（.md だけの PR）でも一覧が変わるので、changes の結果によらず走らせる
   spec-ids:
