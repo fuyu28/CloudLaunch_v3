@@ -8,7 +8,6 @@ import (
 	"io"
 	"io/fs"
 	"slices"
-	"sort"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials"
@@ -90,19 +89,16 @@ func (s *S3) List(ctx context.Context, prefix string) ([]string, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	keys := []string{}
-	pages := s3.NewListObjectsV2Paginator(s.client, &s3.ListObjectsV2Input{Bucket: &s.bucket, Prefix: &prefix})
-	for pages.HasMorePages() {
-		page, err := pages.NextPage(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("list %q: %w", prefix, err)
-		}
+	in := &s3.ListObjectsV2Input{Bucket: &s.bucket, Prefix: &prefix}
+	keys, err := s.listPages(ctx, in, func(keys []string, page *s3.ListObjectsV2Output) []string {
 		for _, o := range page.Contents {
 			keys = append(keys, aws.ToString(o.Key))
 		}
+		return keys
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list %q: %w", prefix, err)
 	}
-	// S3 は辞書順で返すと定めているが、S3 互換サーバーの実装に順序を委ねず、契約としてここで揃える
-	sort.Strings(keys)
 	return keys, nil
 }
 
@@ -111,23 +107,34 @@ func (s *S3) ListPrefixes(ctx context.Context, prefix string) ([]string, error) 
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	prefixes := []string{}
-	pages := s3.NewListObjectsV2Paginator(s.client, &s3.ListObjectsV2Input{
-		Bucket:    &s.bucket,
-		Prefix:    &prefix,
-		Delimiter: aws.String("/"),
-	})
-	for pages.HasMorePages() {
-		page, err := pages.NextPage(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("list prefixes %q: %w", prefix, err)
-		}
+	in := &s3.ListObjectsV2Input{Bucket: &s.bucket, Prefix: &prefix, Delimiter: aws.String("/")}
+	prefixes, err := s.listPages(ctx, in, func(prefixes []string, page *s3.ListObjectsV2Output) []string {
 		for _, p := range page.CommonPrefixes {
 			prefixes = append(prefixes, aws.ToString(p.Prefix))
 		}
+		return prefixes
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list prefixes %q: %w", prefix, err)
 	}
-	sort.Strings(prefixes)
 	return prefixes, nil
+}
+
+// listPages は、ページごとに pick で values に値を足し、全ページの値を辞書順に並べて返す。該当がなければ nil ではなく空を
+// 返す。
+func (s *S3) listPages(ctx context.Context, in *s3.ListObjectsV2Input, pick func(values []string, page *s3.ListObjectsV2Output) []string) ([]string, error) {
+	values := []string{}
+	pages := s3.NewListObjectsV2Paginator(s.client, in)
+	for pages.HasMorePages() {
+		page, err := pages.NextPage(ctx)
+		if err != nil {
+			return nil, err
+		}
+		values = pick(values, page)
+	}
+	// S3 は辞書順で返すと定めているが、S3 互換サーバーの実装に順序を委ねず、契約としてここで揃える
+	slices.Sort(values)
+	return values, nil
 }
 
 // Delete はキーがなくてもエラーにしない。

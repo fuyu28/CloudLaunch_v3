@@ -7,7 +7,8 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"sort"
+	"maps"
+	"slices"
 	"strings"
 	"sync"
 )
@@ -87,7 +88,7 @@ func (s *Store) List(ctx context.Context, prefix string) ([]string, error) {
 			keys = append(keys, k)
 		}
 	}
-	sort.Strings(keys)
+	slices.Sort(keys)
 	return keys, nil
 }
 
@@ -99,22 +100,25 @@ func (s *Store) ListPrefixes(ctx context.Context, prefix string) ([]string, erro
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	seen := map[string]bool{}
-	prefixes := []string{}
 	for k := range s.objects {
 		rest, ok := strings.CutPrefix(k, prefix)
 		if !ok {
 			continue
 		}
 		if i := strings.Index(rest, "/"); i >= 0 {
-			p := prefix + rest[:i+1]
-			if !seen[p] {
-				seen[p] = true
-				prefixes = append(prefixes, p)
-			}
+			seen[prefix+rest[:i+1]] = true
 		}
 	}
-	sort.Strings(prefixes)
+	prefixes := slices.AppendSeq([]string{}, maps.Keys(seen))
+	slices.Sort(prefixes)
 	return prefixes, nil
+}
+
+// Set は、Before を通さずに置く。テストで、仕込んだ失敗や操作の記録に数えずにリモートの状態を作るために使う。
+func (s *Store) Set(key string, body []byte) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.objects[key] = bytes.Clone(body)
 }
 
 func (s *Store) Delete(ctx context.Context, key string) error {

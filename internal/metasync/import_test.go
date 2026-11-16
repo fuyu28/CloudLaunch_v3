@@ -78,8 +78,8 @@ func fullGameInfo(t *testing.T, gameID, title string) metasync.GameInfo {
 // あることを表す。
 func (e *env) putRemoteGame(t *testing.T, gameID, title string) {
 	t.Helper()
-	e.putRemote(t, remoteGameKey(gameID, "game.json"), fullGameJSON(gameID, title))
-	e.putRemote(t, remoteGameKey(gameID, "HEAD"), "0192d4e8-0000-7000-8000-0000000000ff")
+	e.putRemote(remoteGameKey(gameID, "game.json"), fullGameJSON(gameID, title))
+	e.putRemote(remoteGameKey(gameID, "HEAD"), "0192d4e8-0000-7000-8000-0000000000ff")
 }
 
 // failOn は、PUT・GET の記録を続けたまま、op で key を扱うときに errInjected を返す。
@@ -133,7 +133,7 @@ func TestRemoteGames(t *testing.T) {
 			t.Fatalf("CreateGame: %v", err)
 		}
 		// ゲームの tombstone の記録があるゲームも、登録済みとして除く
-		markRemoteDeleted(t, e.dbPath)
+		e.markRemoteDeleted(t)
 		e.putRemoteGame(t, testGameID, "Game")
 		e.putRemoteGame(t, otherLocalGame, "Other")
 
@@ -152,7 +152,7 @@ func TestRemoteGames(t *testing.T) {
 	t.Run("8-N6 gameId が UUIDv7 の形でない接頭辞は、リモートを読まずに除く", func(t *testing.T) {
 		e := newBareEnv(t)
 		for _, id := range []string{"not-a-uuid", "0192d4e8-0000-4000-8000-0000000000a1", strings.ToUpper(remoteGameA)} {
-			e.putRemote(t, remoteGameKey(id, "game.json"), fullGameJSON(id, "X"))
+			e.putRemote(remoteGameKey(id, "game.json"), fullGameJSON(id, "X"))
 		}
 
 		got, err := e.core.RemoteGames(ctx)
@@ -170,7 +170,7 @@ func TestRemoteGames(t *testing.T) {
 	t.Run("8-N7 ゲームの tombstone があれば、game.json を読まずに除く", func(t *testing.T) {
 		e := newBareEnv(t)
 		e.putRemoteGame(t, remoteGameA, "A")
-		e.putRemote(t, remoteGameKey(remoteGameA, "deleted.json"), deletedJSON)
+		e.putRemote(remoteGameKey(remoteGameA, "deleted.json"), deletedJSON)
 
 		got, err := e.core.RemoteGames(ctx)
 		if err != nil {
@@ -187,7 +187,7 @@ func TestRemoteGames(t *testing.T) {
 	t.Run("8-N8 ゲームの tombstone が不正なら、除く", func(t *testing.T) {
 		e := newBareEnv(t)
 		e.putRemoteGame(t, remoteGameA, "A")
-		e.putRemote(t, remoteGameKey(remoteGameA, "deleted.json"), `{`)
+		e.putRemote(remoteGameKey(remoteGameA, "deleted.json"), `{`)
 
 		got, err := e.core.RemoteGames(ctx)
 		if err != nil {
@@ -219,9 +219,9 @@ func TestRemoteGames(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			e := newBareEnv(t)
-			e.putRemote(t, remoteGameKey(remoteGameA, "HEAD"), "0192d4e8-0000-7000-8000-0000000000ff")
+			e.putRemote(remoteGameKey(remoteGameA, "HEAD"), "0192d4e8-0000-7000-8000-0000000000ff")
 			if tt.body != "" {
-				e.putRemote(t, remoteGameKey(remoteGameA, "game.json"), tt.body)
+				e.putRemote(remoteGameKey(remoteGameA, "game.json"), tt.body)
 			}
 
 			got, err := e.core.RemoteGames(ctx)
@@ -239,11 +239,11 @@ func TestRemoteGames(t *testing.T) {
 		// 登録済みのゲームと、ゲームの tombstone があるゲームは、取り込めないゲームに数えない
 		e.putRemoteGame(t, testGameID, "Game")
 		e.putRemoteGame(t, remoteGameB, "B")
-		e.putRemote(t, remoteGameKey(remoteGameB, "deleted.json"), deletedJSON)
+		e.putRemote(remoteGameKey(remoteGameB, "deleted.json"), deletedJSON)
 		e.putRemoteGame(t, remoteGameA, "A")
-		e.putRemote(t, remoteGameKey("not-a-uuid", "game.json"), "{}")     // 8-N6
-		e.putRemote(t, remoteGameKey(otherLocalGame, "deleted.json"), `{`) // 8-N8
-		e.putRemote(t, remoteGameKey(remoteGameC, "game.json"), `{`)       // 8-N9
+		e.putRemote(remoteGameKey("not-a-uuid", "game.json"), "{}")     // 8-N6
+		e.putRemote(remoteGameKey(otherLocalGame, "deleted.json"), `{`) // 8-N8
+		e.putRemote(remoteGameKey(remoteGameC, "game.json"), `{`)       // 8-N9
 
 		got, err := e.core.RemoteGames(ctx)
 		if err != nil {
@@ -393,7 +393,7 @@ func TestImportGame(t *testing.T) {
 		if _, err := e.core.RemoteGames(ctx); err != nil {
 			t.Fatalf("RemoteGames: %v", err)
 		}
-		e.putRemote(t, remoteGameKey(remoteGameA, "game.json"), fullGameJSON(remoteGameA, "New"))
+		e.putRemote(remoteGameKey(remoteGameA, "game.json"), fullGameJSON(remoteGameA, "New"))
 
 		got, err := e.core.ImportGame(ctx, remoteGameA, "/saveA", "/gameA.exe")
 		if err != nil {
@@ -418,10 +418,10 @@ func TestImportGame(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			e := newBareEnv(t)
 			if tt.deleted != "" {
-				e.putRemote(t, remoteGameKey(remoteGameA, "deleted.json"), tt.deleted)
+				e.putRemote(remoteGameKey(remoteGameA, "deleted.json"), tt.deleted)
 			}
 			if tt.game != "" {
-				e.putRemote(t, remoteGameKey(remoteGameA, "game.json"), tt.game)
+				e.putRemote(remoteGameKey(remoteGameA, "game.json"), tt.game)
 			}
 
 			if _, err := e.core.ImportGame(ctx, remoteGameA, "/saveA", "/gameA.exe"); err == nil {
@@ -449,8 +449,8 @@ func TestImportGame(t *testing.T) {
 	t.Run("8-N12 登録のときには、画像とプレイ履歴を取得しない", func(t *testing.T) {
 		e := newBareEnv(t)
 		e.putRemoteGame(t, remoteGameA, "A")
-		e.putRemote(t, remoteGameKey(remoteGameA, "images/"+testImage), "image")
-		e.putRemote(t, remoteGameKey(remoteGameA, "sessions/"+sessionA+".json"), sessionJSON(sessionA, remoteGameA, 60))
+		e.putRemote(remoteGameKey(remoteGameA, "images/"+testImage), "image")
+		e.putRemote(remoteGameKey(remoteGameA, "sessions/"+sessionA+".json"), sessionJSON(sessionA, remoteGameA, 60))
 
 		if _, err := e.core.ImportGame(ctx, remoteGameA, "/saveA", "/gameA.exe"); err != nil {
 			t.Fatalf("ImportGame: %v", err)

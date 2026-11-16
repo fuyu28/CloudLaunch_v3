@@ -153,7 +153,7 @@ func TestSyncImage(t *testing.T) {
 	t.Run("8-I1 リモートに画像があれば PUT しない", func(t *testing.T) {
 		e := newBareEnv(t)
 		sha := e.setImage(t, testPNG, later)
-		e.putRemote(t, imageKey(sha), string(testPNG))
+		e.putRemote(imageKey(sha), string(testPNG))
 
 		got, err := e.core.Sync(ctx, testGameID)
 		if err != nil {
@@ -169,8 +169,8 @@ func TestSyncImage(t *testing.T) {
 
 	t.Run("8-I3 game.json が指す画像がキャッシュになければ取得する", func(t *testing.T) {
 		e := newBareEnv(t)
-		e.putRemote(t, gameKey, remoteGameJSONWithImage(testImage))
-		e.putRemote(t, imageKey(testImage), string(testPNG))
+		e.putRemote(gameKey, remoteGameJSONWithImage(testImage))
+		e.putRemote(imageKey(testImage), string(testPNG))
 
 		got, err := e.core.Sync(ctx, testGameID)
 		if err != nil {
@@ -187,8 +187,8 @@ func TestSyncImage(t *testing.T) {
 	t.Run("8-I3 game.json が指す画像がキャッシュにあれば取得しない", func(t *testing.T) {
 		e := newBareEnv(t)
 		e.setImage(t, testPNG, testPlayedAt) // キャッシュに入れる。DB はこの後リモートの game.json で置き換わる
-		e.putRemote(t, gameKey, remoteGameJSONWithImage(testImage))
-		e.putRemote(t, imageKey(testImage), string(testPNG))
+		e.putRemote(gameKey, remoteGameJSONWithImage(testImage))
+		e.putRemote(imageKey(testImage), string(testPNG))
 
 		got, err := e.core.Sync(ctx, testGameID)
 		if err != nil {
@@ -218,8 +218,8 @@ func TestSyncImage(t *testing.T) {
 	for _, tt := range invalid {
 		t.Run(tt.name, func(t *testing.T) {
 			e := newBareEnv(t)
-			e.putRemote(t, gameKey, remoteGameJSONWithImage(tt.key))
-			e.putRemote(t, imageKey(tt.key), string(tt.body))
+			e.putRemote(gameKey, remoteGameJSONWithImage(tt.key))
+			e.putRemote(imageKey(tt.key), string(tt.body))
 
 			got, err := e.core.Sync(ctx, testGameID)
 			if err != nil {
@@ -280,7 +280,7 @@ func TestSyncImage(t *testing.T) {
 
 	t.Run("8章/画像/取得する画像がリモートになければ、画像なしで続ける", func(t *testing.T) {
 		e := newBareEnv(t)
-		e.putRemote(t, gameKey, remoteGameJSONWithImage(testImage))
+		e.putRemote(gameKey, remoteGameJSONWithImage(testImage))
 		e.putRemoteSession(t, sessionA, 60)
 
 		got, err := e.core.Sync(ctx, testGameID)
@@ -295,8 +295,8 @@ func TestSyncImage(t *testing.T) {
 
 	t.Run("8章/画像/画像の GET に失敗したら、プレイ履歴を同期せずにエラーを返す", func(t *testing.T) {
 		e := newBareEnv(t)
-		e.putRemote(t, gameKey, remoteGameJSONWithImage(testImage))
-		e.putRemote(t, imageKey(testImage), string(testPNG))
+		e.putRemote(gameKey, remoteGameJSONWithImage(testImage))
+		e.putRemote(imageKey(testImage), string(testPNG))
 		e.addSession(t, sessionA, 60)
 		errInjected := errors.New("injected")
 		e.remote.Before = func(op memstore.Op, key string) error {
