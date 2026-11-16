@@ -7,8 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"io/fs"
 	"time"
 )
 
@@ -65,17 +63,12 @@ func parseTombstone(body []byte) (Tombstone, error) {
 // ReadRemoteTombstone は、DB の記録を見ずに deleted.json だけを読む。登録していないゲームにも使える。deleted.json がなければ
 // false を返す。不正なら ErrInvalidTombstone で包んだエラーを、読めなければそれ以外のエラーを返す。
 func (c *Core) ReadRemoteTombstone(ctx context.Context, gameID string) (Tombstone, bool, error) {
-	r, err := c.cfg.Remote.Get(ctx, tombstoneKey(gameID))
-	if errors.Is(err, fs.ErrNotExist) {
+	body, found, err := c.getLimited(ctx, tombstoneKey(gameID), maxTombstoneSize)
+	if err != nil {
+		return Tombstone{}, false, fmt.Errorf("read deleted.json of game %s: %w", gameID, err)
+	}
+	if !found {
 		return Tombstone{}, false, nil
-	}
-	if err != nil {
-		return Tombstone{}, false, fmt.Errorf("read deleted.json of game %s: %w", gameID, err)
-	}
-	defer func() { _ = r.Close() }()
-	body, err := io.ReadAll(io.LimitReader(r, maxTombstoneSize+1))
-	if err != nil {
-		return Tombstone{}, false, fmt.Errorf("read deleted.json of game %s: %w", gameID, err)
 	}
 	t, err := parseTombstone(body)
 	if err != nil {
@@ -149,14 +142,15 @@ func (c *Core) deleteGameData(ctx context.Context, gameID string) error {
 	return nil
 }
 
-// ensureNotDeleted は、承認の後に tombstone を読み直す（仕様書 8-T7）。
+// ensureNotDeleted は、承認の後の読み直し（仕様書 8-T7）と、削除の前の確かめ（8-X11）で、ほかの PC がゲームを削除して
+// いないかを確かめる。
 func (c *Core) ensureNotDeleted(ctx context.Context, gameID string) error {
 	t, ok, err := c.CheckTombstone(ctx, gameID)
 	if err != nil {
 		return err
 	}
 	if ok {
-		return fmt.Errorf("deleted by %s at %s after approval: %w", t.DeviceName, t.DeletedAt.Format(timeLayout), ErrRemoteDeleted)
+		return fmt.Errorf("deleted by %s at %s: %w", t.DeviceName, t.DeletedAt.Format(timeLayout), ErrRemoteDeleted)
 	}
 	return nil
 }

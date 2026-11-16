@@ -1,4 +1,4 @@
-// リモートのキーのレイアウトと、HEAD が指す世代の読み込み（仕様書 2 章）。
+// リモートのキーのレイアウトと書式、HEAD が指す世代の読み込み（仕様書 2 章）。
 package syncore
 
 import (
@@ -8,10 +8,30 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"math"
 	"regexp"
 )
 
+// store と metasync にも同じ書式の定数がある。どれか 1 つだけ変えると DB とリモートの JSON で日時の形がずれるので、
+// それぞれのテストが、書式どおりの値で確かめている（#47）
+const timeLayout = "2006-01-02T15:04:05.000Z"
+
+// maxHeadSize は UUIDv7 の文字列の長さ。超える HEAD は generationPattern に当たらないので、続きを読まない
+const maxHeadSize = 36
+
 var generationPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
+
+func isSHA256Hex(s string) bool {
+	if len(s) != 64 {
+		return false
+	}
+	for _, c := range []byte(s) {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
+}
 
 func gamePrefix(gameID string) string {
 	return "games/" + gameID + "/"
@@ -43,12 +63,12 @@ func objectKey(gameID, sha256 string) string {
 
 // readHead は HEAD が指す世代を返す。HEAD がなければ空を返す。
 func (c *Core) readHead(ctx context.Context, gameID string) (string, error) {
-	head, err := c.getAll(ctx, headKey(gameID))
-	if errors.Is(err, fs.ErrNotExist) {
-		return "", nil
-	}
+	head, found, err := c.getLimited(ctx, headKey(gameID), maxHeadSize)
 	if err != nil {
 		return "", fmt.Errorf("read HEAD: %w", err)
+	}
+	if !found {
+		return "", nil
 	}
 	generation := string(head)
 	if !generationPattern.MatchString(generation) {
@@ -72,9 +92,14 @@ func (c *Core) readRemote(ctx context.Context, gameID string) (RemoteState, erro
 }
 
 func (c *Core) readManifest(ctx context.Context, gameID, generation string) (Manifest, error) {
-	body, err := c.getAll(ctx, manifestKey(gameID, generation))
+	key := manifestKey(gameID, generation)
+	// manifest の大きさの上限は、仕様書に定めていない
+	body, found, err := c.getLimited(ctx, key, math.MaxInt64)
 	if err != nil {
 		return Manifest{}, fmt.Errorf("read manifest %s: %w", generation, err)
+	}
+	if !found {
+		return Manifest{}, fmt.Errorf("read manifest %s: %s: %w", generation, key, fs.ErrNotExist)
 	}
 	var m Manifest
 	if err := json.Unmarshal(body, &m); err != nil {
@@ -86,15 +111,25 @@ func (c *Core) readManifest(ctx context.Context, gameID, generation string) (Man
 	return m, nil
 }
 
-func (c *Core) getAll(ctx context.Context, key string) ([]byte, error) {
+// getLimited は、キーがなければ found を false にして返す。「ない」を戻り値で分けるのは、本文の読み込みの失敗が
+// fs.ErrNotExist を包んでいても、ないものとして扱わないため。limit を超える本文は、limit の 1 バイト先までしか読まない
+// ので、呼び出し側は長さで超えたことを判定できる。Get のエラーはキーを含むので、包まずに返す。
+func (c *Core) getLimited(ctx context.Context, key string, limit int64) (body []byte, found bool, err error) {
 	r, err := c.cfg.Remote.Get(ctx, key)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, false, nil
+	}
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	defer func() { _ = r.Close() }()
-	b, err := io.ReadAll(r)
-	if err != nil {
-		return nil, fmt.Errorf("read %q: %w", key, err)
+	n := limit
+	if n < math.MaxInt64 {
+		n++
 	}
-	return b, nil
+	body, err = io.ReadAll(io.LimitReader(r, n))
+	if err != nil {
+		return nil, false, fmt.Errorf("read %s: %w", key, err)
+	}
+	return body, true, nil
 }

@@ -28,11 +28,8 @@ func (c *Core) Pull(ctx context.Context, plan Plan, opts PullOptions) error {
 		return fmt.Errorf("pull %s: invalid manifest %s: %w", plan.GameID, plan.Remote.Generation, err)
 	}
 	// 手順 9 で見つけると、live を入れ替えた後なので old とジャーナルが残る。何も変える前に止める
-	if c.cfg.BackupsDir == "" {
-		return fmt.Errorf("pull %s: %w", plan.GameID, errBackupsDirNotSet)
-	}
-	if c.cfg.Rename == nil {
-		return fmt.Errorf("pull %s: %w", plan.GameID, errRenameNotSet)
+	if err := c.checkBackupConfig(); err != nil {
+		return fmt.Errorf("pull %s: %w", plan.GameID, err)
 	}
 	release, err := c.acquire(ctx)
 	if err != nil {

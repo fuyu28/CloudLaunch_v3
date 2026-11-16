@@ -18,6 +18,7 @@ const transferLimit = 8
 var (
 	errBackupsDirNotSet = errors.New("backups directory is not configured")
 	errRenameNotSet     = errors.New("rename is not configured")
+	errProcessesNotSet  = errors.New("process checker is not configured")
 )
 
 type ObjectStore interface {

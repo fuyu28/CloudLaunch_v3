@@ -24,7 +24,7 @@ type ProcessChecker interface {
 // 起動されたゲームがセーブを書くと、承認後の確認が先に ErrPlanStale を返し、本当の理由が伝わらないため。
 func (c *Core) ensureGameNotRunning(exePath string) error {
 	if c.cfg.Processes == nil {
-		return errors.New("process checker is not configured")
+		return errProcessesNotSet
 	}
 	// platform が syncore のエラーを返すと platform が syncore に依存するので、見つからないことはここで確かめる
 	if _, err := os.Stat(exePath); errors.Is(err, fs.ErrNotExist) {

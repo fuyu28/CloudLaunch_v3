@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io/fs"
 	"os"
 	"time"
 )
@@ -111,17 +110,4 @@ func (c *Core) recoverOne(ctx context.Context, op PullOperation) (RecoveryCase, 
 	default:
 		return RecoveryNothing, nil
 	}
-}
-
-// exists は、存在しない以外のエラーを、存在しないとみなさずに包んで返す（仕様書 6 章で、パスの状態を確かめられない
-// ときは行を残してエラーにするため）。
-func exists(path string) (bool, error) {
-	_, err := os.Lstat(path)
-	if errors.Is(err, fs.ErrNotExist) {
-		return false, nil
-	}
-	if err != nil {
-		return false, fmt.Errorf("stat %s: %w", path, err)
-	}
-	return true, nil
 }

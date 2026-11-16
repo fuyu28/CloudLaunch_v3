@@ -30,7 +30,7 @@ func ensureLocalUnchanged(ctx context.Context, folder string, plan Plan) error {
 // ErrPlanStale で止まり、呼び出し側が掃除せずにメタ情報を同期して、削除したデータを戻す
 func (c *Core) ensureRemoteUnchanged(ctx context.Context, plan Plan) error {
 	if err := c.ensureNotDeleted(ctx, plan.GameID); err != nil {
-		return err
+		return fmt.Errorf("after approval: %w", err)
 	}
 	head, err := c.readHead(ctx, plan.GameID)
 	if err != nil {

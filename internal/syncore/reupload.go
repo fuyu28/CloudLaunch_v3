@@ -16,7 +16,7 @@ var ErrNotRemoteDeleted = errors.New("game is not recorded as deleted on remote"
 // 確かめる。セーブフォルダに触れないので、ゲームの実行中かは確かめない（8-U2）。
 func (c *Core) ReuploadGame(ctx context.Context, gameID string, reupload func(ctx context.Context) error) error {
 	if reupload == nil {
-		return fmt.Errorf("reupload game %s: %w", gameID, errors.New("reupload is not given"))
+		return fmt.Errorf("reupload game %s: reupload is not given", gameID)
 	}
 	release, err := c.acquire(ctx)
 	if err != nil {

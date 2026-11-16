@@ -24,6 +24,33 @@ func backupName(startedAt time.Time, opID string) string {
 	return startedAt.UTC().Format(backupTimeLayout) + "-" + opID
 }
 
+// checkBackupConfig は、バックアップを作る操作が、何も変える前に呼ぶ。途中で設定がないと分かると、変えかけた状態が残る。
+func (c *Core) checkBackupConfig() error {
+	if c.cfg.BackupsDir == "" {
+		return errBackupsDirNotSet
+	}
+	if c.cfg.Rename == nil {
+		return errRenameNotSet
+	}
+	return nil
+}
+
+func (c *Core) backupDir(gameID string) string {
+	return filepath.Join(c.cfg.BackupsDir, gameID)
+}
+
+func (c *Core) makeBackupDir(gameID string) (string, error) {
+	// 空のまま Join すると、作業ディレクトリの下に作ってしまう
+	if c.cfg.BackupsDir == "" {
+		return "", errBackupsDirNotSet
+	}
+	dir := c.backupDir(gameID)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", fmt.Errorf("create backups directory: %w", err)
+	}
+	return dir, nil
+}
+
 // backupOld は、Pull の手順 9 と復旧の 6-R3 で共有する。startedAt と opID は Pull ジャーナルの行の値で、
 // どちらから呼んでも同じバックアップ名になる。
 func (c *Core) backupOld(ctx context.Context, gameID, old string, startedAt time.Time, opID string) error {
@@ -40,13 +67,9 @@ func (c *Core) backupOld(ctx context.Context, gameID, old string, startedAt time
 // 最終の名前があれば中身は完全であり、そのときは old を削除するだけにする。この順にすると、どこで中断しても、
 // 完全なコピーを途中まで消えた old で上書きしない。
 func (c *Core) moveToBackup(ctx context.Context, gameID, old, name string) error {
-	// 空のまま Join すると、作業ディレクトリの下に移してしまう
-	if c.cfg.BackupsDir == "" {
-		return errBackupsDirNotSet
-	}
-	dir := filepath.Join(c.cfg.BackupsDir, gameID)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return fmt.Errorf("create backups directory: %w", err)
+	dir, err := c.makeBackupDir(gameID)
+	if err != nil {
+		return err
 	}
 	dst := filepath.Join(dir, name)
 	done, err := exists(dst)
@@ -157,7 +180,7 @@ func (c *Core) copyFile(src, dst string) error {
 // 時計が戻って名前が古くなっていても消さない（仕様書 3 章）。
 // 削除に失敗しても警告を出すだけにする。古いバックアップが残っても、セーブは失われないため（仕様書 6 章の手順 9）。
 func (c *Core) pruneBackups(ctx context.Context, gameID, created string) {
-	dir := filepath.Join(c.cfg.BackupsDir, gameID)
+	dir := c.backupDir(gameID)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		c.cfg.Logger.WarnContext(ctx, "could not list backups", "game", gameID, "error", err)
