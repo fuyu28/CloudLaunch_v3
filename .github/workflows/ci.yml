@@ -19,7 +19,8 @@ concurrency:
 
 jobs:
   # 対象を「変わったら走らせるもの」の列挙にすると、埋め込みの SQL やテストのコーパスのような書き漏れで検査が飛ぶので、
-  # 「走らせなくてよいもの」を除く形にする
+  # 「走らせなくてよいもの」を除く形にする。フロントだけの変更では、結果の変わる Go のテストがない（UI にはテストを書かない）
+  # ので、Go のリントとテストを飛ばす。Go の変更はバインディングを通じてフロントを壊しうるので、フロントのジョブも走らせる
   changes:
     name: Changes
     runs-on: ubuntu-latest
@@ -28,7 +29,8 @@ jobs:
       contents: read
       pull-requests: read
     outputs:
-      code: ${{ steps.filter.outputs.code }}
+      go: ${{ steps.filter.outputs.go }}
+      frontend: ${{ steps.filter.outputs.frontend }}
     steps:
       - name: Detect changed areas
         id: filter
@@ -37,15 +39,18 @@ jobs:
         with:
           predicate-quantifier: every
           filters: |
-            code:
+            go:
               - '**'
               - '!**/*.md'
+              - '!cmd/cloudlaunch-gui/frontend/**'
+            frontend:
+              - 'cmd/cloudlaunch-gui/frontend/**'
 
   lint:
     name: Lint (${{ matrix.goos }})
     needs: changes
     # dev と main への push では、取り込んだ結果を確かめるため常に走らせる
-    if: github.event_name == 'push' || needs.changes.outputs.code == 'true'
+    if: github.event_name == 'push' || needs.changes.outputs.go == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     strategy:
@@ -78,7 +83,7 @@ jobs:
   test:
     name: Test (${{ matrix.os }})
     needs: changes
-    if: github.event_name == 'push' || needs.changes.outputs.code == 'true'
+    if: github.event_name == 'push' || needs.changes.outputs.go == 'true'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     strategy:
@@ -118,6 +123,57 @@ jobs:
         if: runner.os == 'Windows'
         run: go test -race -cover ./...
 
+  frontend:
+    name: Frontend
+    needs: changes
+    if: github.event_name == 'push' || needs.changes.outputs.go == 'true' || needs.changes.outputs.frontend == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: cmd/cloudlaunch-gui/frontend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # 手元と同じ版を使うよう、mise.toml から入れる。リンタなど、このジョブで使わないものは入れない。wails3 の CLI は
+      # Wails の Linux の実装を取り込み、cgo では WebKitGTK のヘッダを要求するので、cgo なしでビルドする
+      - name: Set up tools
+        uses: jdx/mise-action@v5
+        env:
+          CGO_ENABLED: "0"
+        with:
+          install_args: go bun go:github.com/wailsapp/wails/v3/cmd/wails3
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Type check
+        run: bun run check
+
+      - name: Build
+        run: bun run build
+
+      # Wails は //go:embed でフロントのビルド結果を取り込むので、埋め込むパスが変わると Go のビルドが壊れる。フロントだけの
+      # 変更では Go のテストを飛ばすので、ここでビルドして確かめる。Linux 向けは WebKitGTK のヘッダが要るので、本番の Windows 向けにする
+      - name: Build GUI
+        env:
+          GOOS: windows
+        run: go build -tags production -o /dev/null ..
+
+      # Linux の Wails は cgo で WebKitGTK を使い、ヘッダのない CI ではパッケージを読めないので、Windows 向けとして読む。
+      # 生成するのはサービスの型からなので、結果は GOOS に依らない
+      - name: Check bindings are up to date
+        env:
+          GOOS: windows
+        run: |
+          mise run gui-bindings
+          if [ -n "$(git status --porcelain -- bindings)" ]; then
+            git status --short -- bindings
+            echo "::error::バインディングが Go の側と合っていません。mise run gui-bindings で生成し直してコミットしてください"
+            exit 1
+          fi
+
   # 仕様書の変更（.md だけの PR）でも一覧が変わるので、changes の結果によらず走らせる
   spec-ids:
     name: Spec IDs
@@ -135,7 +191,7 @@ jobs:
   ci-ok:
     name: CI OK
     if: always()
-    needs: [changes, lint, test, spec-ids]
+    needs: [changes, lint, test, frontend, spec-ids]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
