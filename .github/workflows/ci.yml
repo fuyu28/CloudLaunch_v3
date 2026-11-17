@@ -136,9 +136,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
-      # 手元と同じ版を使うよう、mise.toml から入れる。リンタなど、このジョブで使わないものは入れない
+      # 手元と同じ版を使うよう、mise.toml から入れる。リンタなど、このジョブで使わないものは入れない。wails3 の CLI は
+      # Wails の Linux の実装を取り込み、cgo では WebKitGTK のヘッダを要求するので、cgo なしでビルドする
       - name: Set up tools
         uses: jdx/mise-action@v5
+        env:
+          CGO_ENABLED: "0"
         with:
           install_args: go bun go:github.com/wailsapp/wails/v3/cmd/wails3
 
