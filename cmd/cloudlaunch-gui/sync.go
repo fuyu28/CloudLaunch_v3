@@ -189,10 +189,20 @@ func (s *SyncService) Transfer(ctx context.Context, gameID, token string) Transf
 		return TransferView{Error: "キャンセルしました"}
 	}
 	s.logger.Error("transfer failed", "gameId", gameID, "err", err)
-	// 承認の後にほかの PC で削除されると、削除で消えた object を取得できずにも失敗し、ErrRemoteDeleted にならない。
-	// 記録と配下の削除（8-T2）は次の確認に任せ、ここでは書き込まずに確かめる
-	if _, deleted, terr := s.save.CheckTombstone(context.WithoutCancel(ctx), gameID); terr == nil && deleted {
-		return TransferView{Error: "リモートで削除されたゲームなので、同期しませんでした。もう一度確認してください"}
+	// 承認の後にほかの PC で削除されたときは、直後に 8-T2 の扱いにする（8-T7）。Push が PUT した object を残さないため。
+	// 削除で消えた object を取得できずにも失敗し、ErrRemoteDeleted にならないので、どの失敗でも確かめる。ctx は
+	// キャンセルと終了で打ち切れるよう、転送のものを使う
+	t, deleted, terr := s.save.HandleTombstone(ctx, gameID)
+	if deleted {
+		v := TransferView{Error: fmt.Sprintf("リモートで削除されました（%s、%s）", t.DeviceName, formatTime(t.DeletedAt))}
+		if terr != nil {
+			s.logger.Error("delete game data failed", "gameId", gameID, "err", terr)
+			v.Error += "。リモートのデータの削除に失敗しました。もう一度確認すると削除し直します"
+		}
+		return v
+	}
+	if terr != nil {
+		s.logger.Warn("check tombstone after transfer failed", "gameId", gameID, "err", terr)
 	}
 	return TransferView{Error: explainSyncError(err)}
 }
