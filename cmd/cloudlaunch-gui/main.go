@@ -72,9 +72,9 @@ func runApp(dir, logPath string, logFile *os.File) error {
 	defer func() { _ = s.Close() }()
 
 	// deviceName は DB の設定に置き、初期値をホスト名にする（仕様書 3 章）。設定画面（#142）ができるまでは初期値を渡す
-	host, err := os.Hostname()
-	if err != nil {
-		return fmt.Errorf("hostname: %w", err)
+	host, hostErr := os.Hostname()
+	if hostErr != nil {
+		hostErr = fmt.Errorf("hostname: %w", hostErr)
 	}
 	cfg := syncore.Config{
 		Local:      s,
@@ -86,7 +86,7 @@ func runApp(dir, logPath string, logFile *os.File) error {
 		Rename:     platform.Rename,
 	}
 	metaCfg := metasync.Config{Local: s, Logger: logger, ImageDir: filepath.Join(dir, "images")}
-	// 接続情報がなくても一覧と起動時の復旧は使えるので、起動は止めず、確認のときに伝える。nil の *objstore.S3 を
+	// 接続情報や deviceName がなくても一覧と起動時の復旧は使えるので、起動は止めず、確認のときに伝える。nil の *objstore.S3 を
 	// インターフェースに入れると nil と比べて等しくならないので、読めたときだけ入れる
 	remote, remoteErr := openRemote()
 	if remoteErr == nil {
@@ -106,7 +106,7 @@ func runApp(dir, logPath string, logFile *os.File) error {
 		Name: "CloudLaunch",
 		Services: []application.Service{
 			application.NewService(&HomeService{store: s, banner: recoverBanner(err, logPath)}),
-			application.NewService(newSyncService(core, games, logger, remoteErr)),
+			application.NewService(newSyncService(core, games, logger, errors.Join(hostErr, remoteErr))),
 		},
 		Assets: application.AssetOptions{Handler: application.AssetFileServerFS(assets)},
 		// Wails は画面のファイルの要求ごとに INFO を出し、同期のログが埋もれるので、WARN 以上だけにする

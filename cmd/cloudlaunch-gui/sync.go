@@ -30,20 +30,24 @@ func init() {
 type ProgressEvent struct {
 	GameID   string           `json:"gameId"`
 	Progress syncore.Progress `json:"progress"`
+	Percent  int              `json:"percent"`
+	Text     string           `json:"text"`
 }
 
-// SyncService は Wails のサービスとして、フロントから呼ばれる。
 type SyncService struct {
 	save   *syncore.Core
 	games  *gamesync.Core
 	logger *slog.Logger
-	// remoteErr は、リモートの接続情報を読めなかったときに入る。このときは確認を受け付けない
-	remoteErr error
-	emit      func(ProgressEvent)
+	// setupErr は、リモートの接続情報か deviceName を用意できなかったときに入る。このときは確認を受け付けない
+	setupErr error
+	emit     func(ProgressEvent)
 
 	mu     sync.Mutex
 	ops    map[string]*gameOp
 	tokens uint64
+	// closed は、終了の処理を始めた後に転送を始めないために使う
+	closed    bool
+	transfers sync.WaitGroup
 }
 
 // gameOp は、ゲームごとの今の操作。確認中と転送中は cancel が、確認を終えて承認を待つ間は plan が入る。
@@ -83,12 +87,12 @@ type TransferView struct {
 	Error  string `json:"error"`
 }
 
-func newSyncService(save *syncore.Core, games *gamesync.Core, logger *slog.Logger, remoteErr error) *SyncService {
+func newSyncService(save *syncore.Core, games *gamesync.Core, logger *slog.Logger, setupErr error) *SyncService {
 	return &SyncService{
-		save:      save,
-		games:     games,
-		logger:    logger,
-		remoteErr: remoteErr,
+		save:     save,
+		games:    games,
+		logger:   logger,
+		setupErr: setupErr,
 		emit: func(e ProgressEvent) {
 			application.Get().Event.Emit(progressEvent, e)
 		},
@@ -99,8 +103,8 @@ func newSyncService(save *syncore.Core, games *gamesync.Core, logger *slog.Logge
 // Check は、同じゲームの前の確認を打ち切ってから判定する。判定が base の記録に当たれば、データを転送しないので確認を取らずに
 // 記録する（仕様書 4 章）。ゲームの tombstone があれば、gamesync が 8-T2 の扱いにする。
 func (s *SyncService) Check(ctx context.Context, gameID string) CheckView {
-	if s.remoteErr != nil {
-		return CheckView{Error: "リモートの接続情報を読めません: " + s.remoteErr.Error()}
+	if s.setupErr != nil {
+		return CheckView{Error: "同期の設定を読めません: " + s.setupErr.Error()}
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -176,30 +180,63 @@ func (s *SyncService) Transfer(ctx context.Context, gameID, token string) Transf
 	default:
 		err = fmt.Errorf("decision %s is not a transfer", plan.Decision)
 	}
-	if err != nil {
-		if errors.Is(err, context.Canceled) {
-			return TransferView{Error: "キャンセルしました"}
-		}
-		s.logger.Error("transfer failed", "gameId", gameID, "err", err)
-		return TransferView{Error: explainSyncError(err)}
+	if err == nil {
+		return TransferView{Status: done}
 	}
-	return TransferView{Status: done}
+	if errors.Is(err, context.Canceled) {
+		// 止めた後の片付け（stage やジャーナルの削除）の失敗も err に含まれうるので、キャンセルでもログに残す
+		s.logger.Info("transfer canceled", "gameId", gameID, "err", err)
+		return TransferView{Error: "キャンセルしました"}
+	}
+	s.logger.Error("transfer failed", "gameId", gameID, "err", err)
+	// 承認の後にほかの PC で削除されると、削除で消えた object を取得できずにも失敗し、ErrRemoteDeleted にならない。
+	// 記録と配下の削除（8-T2）は次の確認に任せ、ここでは書き込まずに確かめる
+	if _, deleted, terr := s.save.CheckTombstone(context.WithoutCancel(ctx), gameID); terr == nil && deleted {
+		return TransferView{Error: "リモートで削除されたゲームなので、同期しませんでした。もう一度確認してください"}
+	}
+	return TransferView{Error: explainSyncError(err)}
 }
 
 func (s *SyncService) beginTransfer(gameID, token string, cancel context.CancelFunc) *gameOp {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	op := s.ops[gameID]
-	if op == nil || op.token != token || op.plan == nil || op.transferring {
+	if s.closed || op == nil || op.token != token || op.plan == nil || op.transferring {
 		return nil
 	}
 	op.transferring = true
 	op.cancel = cancel
+	s.transfers.Add(1)
 	return op
+}
+
+// Dismiss は、確認ダイアログを承認せずに閉じたときに呼び、承認を待つ plan を捨てる。token が今の確認のものでなければ何もしない。
+func (s *SyncService) Dismiss(gameID, token string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if op := s.ops[gameID]; op != nil && op.token == token && op.plan != nil && !op.transferring {
+		delete(s.ops, gameID)
+	}
+}
+
+// ServiceShutdown は、Wails が終了するときに、DB を閉じる前に呼ぶ。転送を打ち切り、終わるまで待つ。閉じた DB に Push・Pull の
+// 後始末が当たって、中断と同じ状態を余分に残さないため。
+func (s *SyncService) ServiceShutdown() error {
+	s.mu.Lock()
+	s.closed = true
+	for _, op := range s.ops {
+		if op.cancel != nil {
+			op.cancel()
+		}
+	}
+	s.mu.Unlock()
+	s.transfers.Wait()
+	return nil
 }
 
 // finish は、終わった操作がまだ今の操作のときだけ消す。転送中は新しい確認を受け付けないので、ほかの操作に置き換わってはいない。
 func (s *SyncService) finish(gameID string, op *gameOp) {
+	defer s.transfers.Done()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.ops[gameID] == op {
@@ -226,7 +263,25 @@ func throttleProgress(gameID string, emit func(ProgressEvent)) func(syncore.Prog
 			return
 		}
 		last = now
-		emit(ProgressEvent{GameID: gameID, Progress: p})
+		percent := progressPercent(p)
+		emit(ProgressEvent{
+			GameID:   gameID,
+			Progress: p,
+			Percent:  percent,
+			Text:     fmt.Sprintf("%d / %d ファイル（%d%%）", p.FilesDone, p.FilesTotal, percent),
+		})
+	}
+}
+
+// progressPercent は、空のファイルだけを転送するときもバーが進むよう、サイズの合計が 0 ならファイルの数で割る。
+func progressPercent(p syncore.Progress) int {
+	switch {
+	case p.BytesTotal > 0:
+		return int(p.BytesDone * 100 / p.BytesTotal)
+	case p.FilesTotal > 0:
+		return p.FilesDone * 100 / p.FilesTotal
+	default:
+		return 100
 	}
 }
 

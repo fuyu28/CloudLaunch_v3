@@ -195,6 +195,8 @@ export class InfoRow {
 export class ProgressEvent {
     "gameId": string;
     "progress": syncore$0.Progress;
+    "percent": number;
+    "text": string;
 
     /** Creates a new ProgressEvent instance. */
     constructor($$source: Partial<ProgressEvent> = {}) {
@@ -203,6 +205,12 @@ export class ProgressEvent {
         }
         if (!("progress" in $$source)) {
             this["progress"] = (new syncore$0.Progress());
+        }
+        if (!("percent" in $$source)) {
+            this["percent"] = 0;
+        }
+        if (!("text" in $$source)) {
+            this["text"] = "";
         }
 
         Object.assign(this, $$source);

@@ -1,12 +1,15 @@
 <script lang="ts">
   import { Events } from "@wailsio/runtime";
   import { HomeService, SyncService } from "../bindings/github.com/fuyu28/CloudLaunch_v3/cmd/cloudlaunch-gui";
-  import type { ConfirmView, HomeView } from "../bindings/github.com/fuyu28/CloudLaunch_v3/cmd/cloudlaunch-gui";
-  import type { Progress } from "../bindings/github.com/fuyu28/CloudLaunch_v3/internal/syncore";
+  import type {
+    ConfirmView,
+    HomeView,
+    ProgressEvent,
+  } from "../bindings/github.com/fuyu28/CloudLaunch_v3/cmd/cloudlaunch-gui";
   import { SyncProgress } from "../bindings/events";
 
   type CardState = { status: string; error: string };
-  type Transfer = { title: string; progress: Progress | null };
+  type Transfer = { title: string; progress: ProgressEvent | null; cancelError: string };
 
   let view = $state<HomeView | null>(null);
   let loadError = $state("");
@@ -21,29 +24,45 @@
 
   Events.On(SyncProgress, (ev) => {
     const t = transfers[ev.data.gameId];
-    if (t) t.progress = ev.data.progress;
+    if (t) t.progress = ev.data;
   });
 
   async function check(gameId: string, title: string) {
     checking[gameId] = true;
     try {
       const v = await SyncService.Check(gameId);
+      // 置き換えた新しい確認が、まだ走っている
       if (v.superseded) return;
+      checking[gameId] = false;
       cards[gameId] = { status: v.status, error: v.error };
       if (v.confirm) dialog = { gameId, title, confirm: v.confirm };
     } catch (e) {
-      cards[gameId] = { status: "", error: String(e) };
-    } finally {
       checking[gameId] = false;
+      cards[gameId] = { status: "", error: String(e) };
     }
   }
 
-  // 確認ダイアログは承認した時点で閉じ、進捗はカードと画面下の帯に出す
+  function dismiss() {
+    if (!dialog) return;
+    const { gameId, confirm } = dialog;
+    dialog = null;
+    SyncService.Dismiss(gameId, confirm.token).catch((e) => {
+      cards[gameId] = { status: "", error: String(e) };
+    });
+  }
+
+  function cancel(gameId: string) {
+    SyncService.Cancel(gameId).catch((e) => {
+      const t = transfers[gameId];
+      if (t) t.cancelError = "キャンセルできませんでした: " + String(e);
+    });
+  }
+
   async function approve() {
     if (!dialog) return;
     const { gameId, title, confirm } = dialog;
     dialog = null;
-    transfers[gameId] = { title, progress: null };
+    transfers[gameId] = { title, progress: null, cancelError: "" };
     try {
       const v = await SyncService.Transfer(gameId, confirm.token);
       cards[gameId] = { status: v.status, error: v.error };
@@ -54,15 +73,6 @@
     }
   }
 
-  function percent(p: Progress | null): number {
-    if (!p || p.BytesTotal === 0) return p && p.FilesDone === p.FilesTotal ? 100 : 0;
-    return Math.floor((p.BytesDone / p.BytesTotal) * 100);
-  }
-
-  function progressText(p: Progress | null): string {
-    if (!p) return "準備中…";
-    return `${p.FilesDone} / ${p.FilesTotal} ファイル（${percent(p)}%）`;
-  }
 </script>
 
 <main>
@@ -96,8 +106,8 @@
             </button>
           </div>
           {#if transfer}
-            <progress max="100" value={percent(transfer.progress)}></progress>
-            <div class="status">{progressText(transfer.progress)}</div>
+            <progress max="100" value={transfer.progress?.percent ?? 0}></progress>
+            <div class="status">{transfer.progress?.text ?? "準備中…"}</div>
           {:else if card}
             {#if card.status}<div class="status">{card.status}</div>{/if}
             {#if card.error}<div class="error">{card.error}</div>{/if}
@@ -113,9 +123,10 @@
     {#each Object.entries(transfers) as [gameId, t] (gameId)}
       <div class="transfer">
         <span class="title">{t.title}</span>
-        <span>{progressText(t.progress)}</span>
-        <button onclick={() => SyncService.Cancel(gameId)}>キャンセル</button>
+        <span>{t.progress?.text ?? "準備中…"}</span>
+        <button onclick={() => cancel(gameId)}>キャンセル</button>
       </div>
+      {#if t.cancelError}<div class="error">{t.cancelError}</div>{/if}
     {/each}
   </footer>
 {/if}
@@ -132,7 +143,7 @@
         </tbody>
       </table>
       <div class="actions">
-        <button onclick={() => (dialog = null)}>やめる</button>
+        <button onclick={dismiss}>やめる</button>
         <button class="primary" onclick={approve}>{dialog.confirm.approveLabel}</button>
       </div>
     </div>
