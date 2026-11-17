@@ -1,5 +1,12 @@
 version: "2"
 
+run:
+  # Wails の Linux の既定の実装は cgo で WebKitGTK を使い、ヘッダのない CI の Ubuntu では GUI を型検査できない。purego の実装は
+  # cgo を使わないので、リントだけこちらで検査する。標準ライブラリの crypto もアセンブリのない実装に変わるが、リントは型検査だけ
+  # なので結果に関わらない。テストには付けない（ci.yml）
+  build-tags:
+    - purego
+
 linters:
   default: standard
   enable:

@@ -1,0 +1,22 @@
+{
+  "name": "cloudlaunch-gui",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build --mode production",
+    "check": "svelte-check --tsconfig ./tsconfig.json"
+  },
+  "dependencies": {
+    "@wailsio/runtime": "3.1.0"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^7.0.0",
+    "svelte": "^5.46.4",
+    "svelte-check": "^4.4.8",
+    "tslib": "^2.6.2",
+    "typescript": "^5.2.2",
+    "vite": "^8.2.4"
+  }
+}

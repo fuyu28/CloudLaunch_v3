@@ -50,6 +50,36 @@ func TestGameLocal(t *testing.T) {
 	})
 }
 
+func TestListGames(t *testing.T) {
+	t.Run("store/ListGames が登録したゲームを ID の順に、タイトルとブランドとともに返す", func(t *testing.T) {
+		s, _ := openTemp(t)
+		ctx := context.Background()
+		const laterID = "0192d4e8-0000-7000-8000-000000000002"
+		for _, g := range []NewGame{
+			{ID: laterID, Title: "Later", Brand: "Brand"},
+			{ID: testGameID, Title: "Earlier"},
+		} {
+			g.SaveFolderPath, g.ExePath = "/save-"+g.ID, "/game.exe"
+			g.CreatedAt = time.Date(2026, 10, 27, 0, 0, 0, 0, time.UTC)
+			if err := s.CreateGame(ctx, g); err != nil {
+				t.Fatalf("CreateGame: %v", err)
+			}
+		}
+
+		got, err := s.ListGames(ctx)
+		if err != nil {
+			t.Fatalf("ListGames: %v", err)
+		}
+		want := []GameListItem{
+			{ID: testGameID, Title: "Earlier"},
+			{ID: laterID, Title: "Later", Brand: "Brand"},
+		}
+		if diff := cmp.Diff(want, got); diff != "" {
+			t.Errorf("ListGames (-want +got):\n%s", diff)
+		}
+	})
+}
+
 func TestDeleteGame(t *testing.T) {
 	const otherGameID = "0192d4e8-0000-7000-8000-000000000002"
 	playedAt := time.Date(2026, 11, 2, 0, 0, 0, 0, time.UTC)
