@@ -1,1 +1,3 @@
 * text=auto eol=lf
+# wails3 generate bindings の生成物。PR の差分で畳み、手で書いたコードのレビューに埋もれさせない
+cmd/cloudlaunch-gui/frontend/bindings/** linguist-generated=true
