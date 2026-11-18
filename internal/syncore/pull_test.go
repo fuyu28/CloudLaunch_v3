@@ -530,6 +530,24 @@ func TestPull差分の取得(t *testing.T) {
 		}
 	})
 
+	t.Run("6-F2 live からコピーしたファイルを書き換えても、バックアップは変わらない", func(t *testing.T) {
+		e := newEnv(t)
+		plan := pullOverLocal(t, e, local, remote)
+
+		if err := e.core.Pull(t.Context(), plan, syncore.PullOptions{}); err != nil {
+			t.Fatalf("Pull: %v", err)
+		}
+		// ゲームがセーブをその場で書き換える。ハードリンクなら、バックアップの slot1.sav も変わる
+		writeFiles(t, e.saveDir, map[string]string{"slot1.sav": "played"})
+		names := e.gameBackups(t)
+		if len(names) != 1 {
+			t.Fatalf("バックアップ = %v, want 1 つ", names)
+		}
+		if diff := cmp.Diff(local, readFiles(t, filepath.Join(e.backupsDir, testGameID, names[0]))); diff != "" {
+			t.Errorf("バックアップ (-want +got):\n%s", diff)
+		}
+	})
+
 	t.Run("6-F2 path の違う live のファイルも、中身が同じならコピーの元にする", func(t *testing.T) {
 		e := newEnv(t)
 		renamed := map[string]string{"renamed.sav": "one", "slot2.sav": "two"}

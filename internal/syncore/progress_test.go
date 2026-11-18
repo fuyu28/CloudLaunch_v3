@@ -102,9 +102,10 @@ func TestProgress(t *testing.T) {
 		assertProgressed(t, log.calls(), syncore.Progress{FilesDone: 2, FilesTotal: 2, BytesDone: 8, BytesTotal: 8})
 	})
 
-	t.Run("6章/Pull/live からコピーしたファイルは、進捗に数えない", func(t *testing.T) {
+	t.Run("6章/Pull/コピーしたファイルは、進捗に数えない", func(t *testing.T) {
 		e := newEnv(t)
-		plan := pullOverLocal(t, e, map[string]string{"a.sav": "one"}, map[string]string{"a.sav": "one", "b.sav": "three"})
+		// a.sav は live から、c.sav は取得した b.sav から stage の中でコピーする
+		plan := pullOverLocal(t, e, map[string]string{"a.sav": "one"}, map[string]string{"a.sav": "one", "b.sav": "three", "c.sav": "three"})
 		var log progressLog
 
 		if err := e.core.Pull(t.Context(), plan, syncore.PullOptions{Progress: log.record}); err != nil {
