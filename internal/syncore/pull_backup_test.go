@@ -321,3 +321,37 @@ func TestPullバックアップ(t *testing.T) {
 		}
 	})
 }
+
+func TestBackupDir(t *testing.T) {
+	t.Run("3章/バックアップ/Pull で作ったバックアップは、BackupDir の返すフォルダの中にある", func(t *testing.T) {
+		e := newEnv(t)
+		plan := pullOverLocal(t, e, map[string]string{"slot1.sav": "old"}, map[string]string{"slot1.sav": "new"})
+		if err := e.core.Pull(t.Context(), plan, syncore.PullOptions{}); err != nil {
+			t.Fatalf("Pull: %v", err)
+		}
+
+		dir, err := e.core.BackupDir(testGameID)
+		if err != nil {
+			t.Fatalf("BackupDir: %v", err)
+		}
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			t.Fatalf("read %s: %v", dir, err)
+		}
+		if len(entries) != 1 {
+			t.Fatalf("%s の中身 = %v, want バックアップが 1 つ", dir, entries)
+		}
+		if diff := cmp.Diff(map[string]string{"slot1.sav": "old"}, readFiles(t, filepath.Join(dir, entries[0].Name()))); diff != "" {
+			t.Errorf("バックアップ (-want +got):\n%s", diff)
+		}
+	})
+
+	t.Run("3章/バックアップ/BackupsDir が空なら、BackupDir はエラーを返す", func(t *testing.T) {
+		e := newEnv(t)
+		core := e.coreWithout(func(cfg *syncore.Config) { cfg.BackupsDir = "" })
+
+		if dir, err := core.BackupDir(testGameID); err == nil {
+			t.Errorf("BackupDir = %q, want an error", dir)
+		}
+	})
+}

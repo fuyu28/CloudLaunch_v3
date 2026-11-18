@@ -35,6 +35,10 @@ func (c *Core) checkBackupConfig() error {
 	return nil
 }
 
+func (c *Core) BackupDir(gameID string) (string, error) {
+	return "", nil
+}
+
 func (c *Core) backupDir(gameID string) string {
 	return filepath.Join(c.cfg.BackupsDir, gameID)
 }
