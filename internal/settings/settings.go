@@ -150,7 +150,13 @@ type SavedRemote struct {
 
 // SavedRemote は、環境変数が効いていても、保存した値を返す。
 func (s *Settings) SavedRemote(ctx context.Context) (SavedRemote, error) {
-	return SavedRemote{}, nil
+	r, err := s.savedRemote(ctx)
+	if err != nil {
+		return SavedRemote{}, err
+	}
+	return SavedRemote{
+		Endpoint: r.Endpoint, Region: r.Region, Bucket: r.Bucket, AccessKeyID: r.AccessKeyID, HasSecret: r.SecretAccessKey != "",
+	}, nil
 }
 
 func (s *Settings) UsesEnv() bool {
