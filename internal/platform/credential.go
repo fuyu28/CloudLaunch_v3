@@ -1,8 +1,11 @@
 // R2 のアクセスキーの置き場所（仕様書 3 章）。置き場所そのものは OS ごとのファイルにある。
 package platform
 
-import "github.com/fuyu28/CloudLaunch_v3/internal/settings"
+// R2CredentialTarget は、CLI と GUI が同じ資格情報を読むよう、両方が使う target。
+const R2CredentialTarget = "CloudLaunch/R2"
 
+// CredentialStore は、Windows では資格情報マネージャーの target の 1 件に、Linux（開発用）では dir の credential.json に置く。
+// Windows では dir を、Linux では target を使わない。
 type CredentialStore struct {
 	target string
 	dir    string
@@ -10,16 +13,4 @@ type CredentialStore struct {
 
 func NewCredentialStore(target, dir string) *CredentialStore {
 	return &CredentialStore{target: target, dir: dir}
-}
-
-func (c *CredentialStore) Credential() (settings.Credential, bool, error) {
-	return settings.Credential{}, false, nil
-}
-
-func (c *CredentialStore) SetCredential(cred settings.Credential) error {
-	return nil
-}
-
-func (c *CredentialStore) delete() error {
-	return nil
 }

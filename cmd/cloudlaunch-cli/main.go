@@ -21,6 +21,7 @@ import (
 	"github.com/fuyu28/CloudLaunch_v3/internal/metasync"
 	"github.com/fuyu28/CloudLaunch_v3/internal/objstore"
 	"github.com/fuyu28/CloudLaunch_v3/internal/platform"
+	"github.com/fuyu28/CloudLaunch_v3/internal/settings"
 	"github.com/fuyu28/CloudLaunch_v3/internal/store"
 	"github.com/fuyu28/CloudLaunch_v3/internal/syncore"
 )
@@ -41,7 +42,8 @@ const usage = `usage:
   cloudlaunch-cli pull --game <gameId> [--overwrite] [--data-dir <dir>]
   cloudlaunch-cli recover [--data-dir <dir>]
 
-status・push・pull・game remote・game import・game delete --remote はリモートの接続先と鍵を環境変数から読む:
+status・push・pull・game remote・game import・game delete --remote は、GUI の設定画面で保存したリモートの接続先と鍵を読む。
+次の環境変数のどれか 1 つでもあれば、保存した値を使わず、すべてを環境変数から読む（開発用）:
   CLOUDLAUNCH_S3_ENDPOINT, CLOUDLAUNCH_S3_BUCKET, CLOUDLAUNCH_S3_ACCESS_KEY_ID, CLOUDLAUNCH_S3_SECRET_ACCESS_KEY,
   CLOUDLAUNCH_S3_REGION（省くと auto）`
 
@@ -100,7 +102,7 @@ func recoverPulls(ctx context.Context, args []string, stdout io.Writer) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	c, err := openCores(ctx, *dataDir, nil, "")
+	c, err := openCores(ctx, *dataDir, connectNone)
 	if err != nil {
 		return err
 	}
@@ -359,16 +361,7 @@ func openCore(ctx context.Context, name string, args []string, overwrite *bool) 
 
 // openSyncCores は、セーブの同期と削除のために、deviceName も設定してリモートにつなぐ。
 func openSyncCores(ctx context.Context, gameID, dataDir string) (cores, error) {
-	remote, err := openRemote()
-	if err != nil {
-		return cores{}, err
-	}
-	// deviceName は DB の設定に置き、初期値をホスト名にする（仕様書 3 章）。変更する手段ができるまでは初期値をそのまま渡す
-	host, err := os.Hostname()
-	if err != nil {
-		return cores{}, fmt.Errorf("hostname: %w", err)
-	}
-	c, err := openCores(ctx, dataDir, remote, host)
+	c, err := openCores(ctx, dataDir, connectSync)
 	if err != nil {
 		return cores{}, err
 	}
@@ -379,20 +372,37 @@ func openSyncCores(ctx context.Context, gameID, dataDir string) (cores, error) {
 // openMetaCores は、セーブを同期しない game remote・game import のために、リモートにつなぐ。manifest も tombstone も
 // 書かないので、deviceName を読まない。
 func openMetaCores(ctx context.Context, dataDir string) (cores, error) {
-	remote, err := openRemote()
-	if err != nil {
-		return cores{}, err
-	}
-	return openCores(ctx, dataDir, remote, "")
+	return openCores(ctx, dataDir, connectMeta)
 }
 
-// openCores は、remote が nil なら、リモートにつながないコアを返す。そのコアでは、リモートに触れる操作を呼ばない。
-// deviceName は、manifest や tombstone を書かないコマンドでは空でよい。バックアップの置き場所と同期ロックを、どのコマンド
-// でも揃えるために 1 か所で組み立てる。
-func openCores(ctx context.Context, dataDir string, remote *objstore.S3, deviceName string) (cores, error) {
+type connectMode int
+
+const (
+	// connectNone は、リモートにつながない。そのコアでは、リモートに触れる操作を呼ばない
+	connectNone connectMode = iota
+	connectMeta
+	// connectSync は、manifest や tombstone を書くので、deviceName も読む
+	connectSync
+)
+
+// openCores は、バックアップの置き場所と同期ロックを、どのコマンドでも揃えるために 1 か所で組み立てる。
+// 接続情報と deviceName は DB の設定から読むので、DB を開いてから読む。
+func openCores(ctx context.Context, dataDir string, mode connectMode) (cores, error) {
 	s, dir, err := openStore(ctx, dataDir)
 	if err != nil {
 		return cores{}, err
+	}
+	var remote *objstore.S3
+	var deviceName string
+	if mode != connectNone {
+		set := settings.New(settings.Config{Local: s, Credentials: platform.NewCredentialStore(platform.R2CredentialTarget, dir)})
+		if remote, err = openRemote(ctx, set); err == nil && mode == connectSync {
+			deviceName, err = set.DeviceName(ctx)
+		}
+		if err != nil {
+			_ = s.Close()
+			return cores{}, err
+		}
 	}
 
 	logger := newLogger()
@@ -419,14 +429,15 @@ func openCores(ctx context.Context, dataDir string, remote *objstore.S3, deviceN
 	return cores{sync: core, meta: metasync.New(metaCfg), store: s, logger: logger, dataDir: dataDir}, nil
 }
 
-func openRemote() (*objstore.S3, error) {
-	return objstore.New(objstore.Config{
-		Endpoint:        os.Getenv("CLOUDLAUNCH_S3_ENDPOINT"),
-		Region:          os.Getenv("CLOUDLAUNCH_S3_REGION"),
-		Bucket:          os.Getenv("CLOUDLAUNCH_S3_BUCKET"),
-		AccessKeyID:     os.Getenv("CLOUDLAUNCH_S3_ACCESS_KEY_ID"),
-		SecretAccessKey: os.Getenv("CLOUDLAUNCH_S3_SECRET_ACCESS_KEY"),
-	})
+func openRemote(ctx context.Context, set *settings.Settings) (*objstore.S3, error) {
+	r, err := set.Remote(ctx)
+	if errors.Is(err, settings.ErrRemoteNotConfigured) {
+		return nil, fmt.Errorf("設定画面で接続情報を入れてください（開発では環境変数 CLOUDLAUNCH_S3_* でも渡せます）: %w", err)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return objstore.New(objstore.Config(r))
 }
 
 // tombstoneReader は、metasync の取り込みに syncore の tombstone の確認を渡す。metasync は syncore を import できないので、
@@ -631,7 +642,7 @@ func gameReupload(ctx context.Context, args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	c, err := openCores(ctx, *dataDir, nil, "")
+	c, err := openCores(ctx, *dataDir, connectNone)
 	if err != nil {
 		return err
 	}
@@ -890,7 +901,7 @@ func gameSetImage(ctx context.Context, args []string, stdout io.Writer) error {
 		return errors.New("specify either --file or --clear")
 	}
 
-	c, err := openCores(ctx, *dataDir, nil, "")
+	c, err := openCores(ctx, *dataDir, connectNone)
 	if err != nil {
 		return err
 	}

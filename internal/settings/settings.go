@@ -5,6 +5,11 @@ package settings
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net/url"
+	"os"
+	"strings"
+	"unicode/utf8"
 )
 
 var (
@@ -12,6 +17,23 @@ var (
 	ErrRemoteNotConfigured = errors.New("remote is not configured")
 	// ErrInvalidSettings は、保存しようとした値が検証を通らなかったことを表す。何も保存していない
 	ErrInvalidSettings = errors.New("invalid settings")
+)
+
+const (
+	keyEndpoint   = "remote.endpoint"
+	keyRegion     = "remote.region"
+	keyBucket     = "remote.bucket"
+	keyDeviceName = "deviceName"
+
+	envEndpoint        = "CLOUDLAUNCH_S3_ENDPOINT"
+	envRegion          = "CLOUDLAUNCH_S3_REGION"
+	envBucket          = "CLOUDLAUNCH_S3_BUCKET"
+	envAccessKeyID     = "CLOUDLAUNCH_S3_ACCESS_KEY_ID"
+	envSecretAccessKey = "CLOUDLAUNCH_S3_SECRET_ACCESS_KEY"
+
+	defaultRegion = "auto"
+	// maxDeviceNameLen は rune の数。deviceName は確認ダイアログと tombstone の表示に出るだけなので、画面に収まる長さで止める
+	maxDeviceNameLen = 64
 )
 
 // Local は DB の設定。
@@ -46,6 +68,12 @@ type Settings struct {
 }
 
 func New(cfg Config) *Settings {
+	if cfg.Getenv == nil {
+		cfg.Getenv = os.Getenv
+	}
+	if cfg.Hostname == nil {
+		cfg.Hostname = os.Hostname
+	}
 	return &Settings{cfg: cfg}
 }
 
@@ -66,22 +94,126 @@ type RemoteInput struct {
 	SecretAccessKey string
 }
 
+// Remote は、CLOUDLAUNCH_S3_* のどれか 1 つでもあれば、すべてを環境変数から読み、保存した値と混ぜない。どこから読んだかに
+// 気づきにくい組み合わせを作らないため。Region だけは、空なら auto にする。
 func (s *Settings) Remote(ctx context.Context) (Remote, error) {
-	return Remote{}, nil
+	var r Remote
+	if s.UsesEnv() {
+		r = Remote{
+			Endpoint:        s.cfg.Getenv(envEndpoint),
+			Region:          s.cfg.Getenv(envRegion),
+			Bucket:          s.cfg.Getenv(envBucket),
+			AccessKeyID:     s.cfg.Getenv(envAccessKeyID),
+			SecretAccessKey: s.cfg.Getenv(envSecretAccessKey),
+		}
+	} else {
+		var err error
+		if r, err = s.savedRemote(ctx); err != nil {
+			return Remote{}, err
+		}
+	}
+	if r.Endpoint == "" || r.Bucket == "" || r.AccessKeyID == "" || r.SecretAccessKey == "" {
+		return Remote{}, ErrRemoteNotConfigured
+	}
+	if r.Region == "" {
+		r.Region = defaultRegion
+	}
+	return r, nil
 }
 
+func (s *Settings) savedRemote(ctx context.Context) (Remote, error) {
+	var r Remote
+	for key, dst := range map[string]*string{keyEndpoint: &r.Endpoint, keyRegion: &r.Region, keyBucket: &r.Bucket} {
+		v, _, err := s.cfg.Local.Setting(ctx, key)
+		if err != nil {
+			return Remote{}, fmt.Errorf("read setting %s: %w", key, err)
+		}
+		*dst = v
+	}
+	c, ok, err := s.cfg.Credentials.Credential()
+	if err != nil {
+		return Remote{}, fmt.Errorf("read credential: %w", err)
+	}
+	if ok {
+		r.AccessKeyID, r.SecretAccessKey = c.AccessKeyID, c.SecretAccessKey
+	}
+	return r, nil
+}
+
+// UsesEnv は、Remote が環境変数から読むかを返す。
 func (s *Settings) UsesEnv() bool {
+	for _, k := range []string{envEndpoint, envRegion, envBucket, envAccessKeyID, envSecretAccessKey} {
+		if s.cfg.Getenv(k) != "" {
+			return true
+		}
+	}
 	return false
 }
 
+// SaveRemote は、資格情報を書いてから DB の設定を書く。2 つは 1 つのトランザクションにできないので、DB の書き込みに失敗すると、
+// 新しい資格情報と古い DB の設定が残る。そのときはエラーを返し、もう一度保存すれば揃う。
 func (s *Settings) SaveRemote(ctx context.Context, in RemoteInput) error {
+	endpoint := strings.TrimSpace(in.Endpoint)
+	region := strings.TrimSpace(in.Region)
+	bucket := strings.TrimSpace(in.Bucket)
+	cred := Credential{AccessKeyID: strings.TrimSpace(in.AccessKeyID), SecretAccessKey: in.SecretAccessKey}
+
+	if u, err := url.Parse(endpoint); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return fmt.Errorf("%w: endpoint must be an http or https URL: %q", ErrInvalidSettings, endpoint)
+	}
+	if bucket == "" {
+		return fmt.Errorf("%w: empty bucket", ErrInvalidSettings)
+	}
+	if cred.AccessKeyID == "" {
+		return fmt.Errorf("%w: empty access key ID", ErrInvalidSettings)
+	}
+	if cred.SecretAccessKey == "" {
+		saved, ok, err := s.cfg.Credentials.Credential()
+		if err != nil {
+			return fmt.Errorf("read credential: %w", err)
+		}
+		if !ok || saved.SecretAccessKey == "" {
+			return fmt.Errorf("%w: empty secret access key", ErrInvalidSettings)
+		}
+		cred.SecretAccessKey = saved.SecretAccessKey
+	}
+
+	if err := s.cfg.Credentials.SetCredential(cred); err != nil {
+		return fmt.Errorf("write credential: %w", err)
+	}
+	if err := s.cfg.Local.SetSettings(ctx, map[string]string{keyEndpoint: endpoint, keyRegion: region, keyBucket: bucket}); err != nil {
+		return fmt.Errorf("write settings: %w", err)
+	}
 	return nil
 }
 
+// DeviceName は、保存していなければ、読むたびにホスト名を返す。初めから DB に書くと、ホスト名を変えた PC で古い名前が残るため。
 func (s *Settings) DeviceName(ctx context.Context) (string, error) {
-	return "", nil
+	v, ok, err := s.cfg.Local.Setting(ctx, keyDeviceName)
+	if err != nil {
+		return "", fmt.Errorf("read setting %s: %w", keyDeviceName, err)
+	}
+	if ok {
+		return v, nil
+	}
+	host, err := s.cfg.Hostname()
+	if err != nil {
+		return "", fmt.Errorf("hostname: %w", err)
+	}
+	return host, nil
 }
 
+// SaveDeviceName は、空の deviceName を拒否する。ゲームの tombstone で空の deviceName を不正とする（仕様書 8-T5）ため。
 func (s *Settings) SaveDeviceName(ctx context.Context, name string) error {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return fmt.Errorf("%w: empty device name", ErrInvalidSettings)
+	}
+	if n := utf8.RuneCountInString(name); n > maxDeviceNameLen {
+		return fmt.Errorf("%w: device name is %d characters, longer than %d", ErrInvalidSettings, n, maxDeviceNameLen)
+	}
+	if err := s.cfg.Local.SetSettings(ctx, map[string]string{keyDeviceName: name}); err != nil {
+		return fmt.Errorf("write settings: %w", err)
+	}
 	return nil
 }
