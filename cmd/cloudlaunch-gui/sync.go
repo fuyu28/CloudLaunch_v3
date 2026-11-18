@@ -65,22 +65,44 @@ type CheckView struct {
 	Status string `json:"status"`
 	// Error は、空でなければ失敗の文言として出す
 	Error string `json:"error"`
-	// Confirm は、承認を求めるときだけ入る
-	Confirm *ConfirmView `json:"confirm"`
+	// Dialog は、確認した plan を持つとき（削除済みと失敗のとき以外）に入る
+	Dialog *DialogView `json:"dialog"`
 }
 
-type ConfirmView struct {
-	// Token は、承認のときに Transfer へそのまま返す
-	Token        string    `json:"token"`
-	Title        string    `json:"title"`
-	Rows         []InfoRow `json:"rows"`
-	ApproveLabel string    `json:"approveLabel"`
+// DialogView は、確認ダイアログ。判定どおりの同期と、上書き（仕様書 7 章）の両方をここから選ぶ。
+type DialogView struct {
+	// Token は、Transfer と Dismiss へそのまま返す
+	Token string `json:"token"`
+	// Open は、確認の直後に開くことを表す。判定が変更なしのときは開かず、利用者が上書きを選ぶときに開く
+	Open    bool         `json:"open"`
+	Title   string       `json:"title"`
+	Warning string       `json:"warning"`
+	Compare []CompareRow `json:"compare"`
+	Actions []ActionView `json:"actions"`
 }
 
-type InfoRow struct {
-	Label string `json:"label"`
-	Value string `json:"value"`
+type CompareRow struct {
+	Label  string `json:"label"`
+	Local  string `json:"local"`
+	Remote string `json:"remote"`
 }
+
+type ActionView struct {
+	Direction TransferDirection `json:"direction"`
+	Label     string            `json:"label"`
+	// Note は、転送で変わるものか、選べない理由
+	Note     string `json:"note"`
+	Disabled bool   `json:"disabled"`
+	// Primary は、判定どおりの同期であることを表す
+	Primary bool `json:"primary"`
+}
+
+type TransferDirection string
+
+const (
+	TransferUpload   TransferDirection = "upload"
+	TransferDownload TransferDirection = "download"
+)
 
 type TransferView struct {
 	Status string `json:"status"`
@@ -127,13 +149,13 @@ func (s *SyncService) Check(ctx context.Context, gameID string) CheckView {
 		s.logger.Error("check failed", "gameId", gameID, "err", err)
 	}
 	view := checkView(plan, err)
-	if view.Confirm == nil {
+	if view.Dialog == nil {
 		delete(s.ops, gameID)
 		return view
 	}
 	op.cancel = nil
 	op.plan = &plan
-	view.Confirm.Token = op.token
+	view.Dialog.Token = op.token
 	return view
 }
 
@@ -156,8 +178,8 @@ func (s *SyncService) beginCheck(gameID string, cancel context.CancelFunc) *game
 }
 
 // Transfer は、token が今の確認のものでなければ実行しない。確認し直した後に、古いダイアログから承認されたときに当たる。
-// 承認の後に local・remote が変わったときは、syncore が ErrPlanStale で止める。
-func (s *SyncService) Transfer(ctx context.Context, gameID, token string) TransferView {
+// 向きが判定と違えば上書きにする（仕様書 7 章）。承認の後に local・remote が変わったときは、syncore が ErrPlanStale で止める。
+func (s *SyncService) Transfer(ctx context.Context, gameID, token string, direction TransferDirection) TransferView {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	op := s.beginTransfer(gameID, token, cancel)
@@ -169,19 +191,19 @@ func (s *SyncService) Transfer(ctx context.Context, gameID, token string) Transf
 	plan := *op.plan
 	notify := throttleProgress(gameID, s.emit)
 	var err error
-	var done string
-	switch plan.Decision {
-	case syncore.DecisionPush:
-		err = s.save.Push(ctx, plan, syncore.PushOptions{Progress: notify})
-		done = "アップロードしました"
-	case syncore.DecisionPull:
-		err = s.save.Pull(ctx, plan, syncore.PullOptions{Progress: notify})
-		done = "ダウンロードしました"
+	var overwrite bool
+	switch direction {
+	case TransferUpload:
+		overwrite = plan.Decision != syncore.DecisionPush
+		err = s.save.Push(ctx, plan, syncore.PushOptions{Overwrite: overwrite, Progress: notify})
+	case TransferDownload:
+		overwrite = plan.Decision != syncore.DecisionPull
+		err = s.save.Pull(ctx, plan, syncore.PullOptions{Overwrite: overwrite, Progress: notify})
 	default:
-		err = fmt.Errorf("decision %s is not a transfer", plan.Decision)
+		err = fmt.Errorf("unknown transfer direction %q", direction)
 	}
 	if err == nil {
-		return TransferView{Status: done}
+		return TransferView{Status: transferredLabel(plan, direction, overwrite)}
 	}
 	if errors.Is(err, context.Canceled) {
 		// 止めた後の片付け（stage やジャーナルの削除）の失敗も err に含まれうるので、キャンセルでもログに残す
@@ -295,46 +317,6 @@ func progressPercent(p syncore.Progress) int {
 	}
 }
 
-func checkView(plan syncore.Plan, err error) CheckView {
-	if t := plan.RemoteDeleted; t != nil {
-		v := CheckView{Status: fmt.Sprintf("リモートで削除されました（%s、%s）", t.DeviceName, formatTime(t.DeletedAt))}
-		if err != nil {
-			// 記録はしたので、次の確認で消し残りを削除し直す（仕様書 8-X10）
-			v.Error = "リモートのデータの削除に失敗しました。もう一度確認すると削除し直します: " + err.Error()
-		}
-		return v
-	}
-	if err != nil {
-		return CheckView{Error: explainSyncError(err)}
-	}
-	switch plan.Decision {
-	case syncore.DecisionPush:
-		return CheckView{Status: "アップロードが必要です", Confirm: confirmView(plan, "アップロード")}
-	case syncore.DecisionPull:
-		return CheckView{Status: "ダウンロードが必要です", Confirm: confirmView(plan, "ダウンロード")}
-	case syncore.DecisionConflict:
-		if plan.LocalMissing {
-			return CheckView{Status: "競合しています（ローカルにセーブが見つかりません）"}
-		}
-		return CheckView{Status: "競合しています"}
-	default:
-		return CheckView{Status: "変更なし"}
-	}
-}
-
-func confirmView(plan syncore.Plan, direction string) *ConfirmView {
-	rows := []InfoRow{{Label: "方向", Value: direction}}
-	if plan.Remote.Hash == "" {
-		rows = append(rows, InfoRow{Label: "リモート", Value: "セーブはありません"})
-	} else {
-		rows = append(rows,
-			InfoRow{Label: "リモートを保存した PC", Value: plan.Remote.Manifest.DeviceName},
-			InfoRow{Label: "リモートを保存した日時", Value: formatCreatedAt(plan.Remote.Manifest.CreatedAt)},
-		)
-	}
-	return &ConfirmView{Title: direction + "しますか？", Rows: rows, ApproveLabel: direction}
-}
-
 // formatCreatedAt は、manifest の createdAt がほかの PC の書いた値で解釈できないこともあるので、そのときは書かれたまま出す。
 func formatCreatedAt(s string) string {
 	t, err := time.Parse(time.RFC3339Nano, s)
@@ -360,6 +342,10 @@ func explainSyncError(err error) string {
 		return "登録した実行ファイルが見つかりません。ゲームの実行ファイルのパスを直してください"
 	case errors.Is(err, syncore.ErrRemoteDeleted):
 		return "リモートで削除されたゲームなので、同期しませんでした。もう一度確認してください"
+	case errors.Is(err, syncore.ErrLocalMissing):
+		return "ローカルにセーブがないので、アップロードで上書きできません。セーブフォルダの設定を確かめてください"
+	case errors.Is(err, syncore.ErrRemoteMissing):
+		return "リモートにセーブがないので、ダウンロードで上書きできません"
 	}
 	return "失敗しました: " + err.Error()
 }

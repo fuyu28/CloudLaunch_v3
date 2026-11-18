@@ -35,10 +35,10 @@ export function Dismiss(gameID: string, token: string): $CancellablePromise<void
 
 /**
  * Transfer は、token が今の確認のものでなければ実行しない。確認し直した後に、古いダイアログから承認されたときに当たる。
- * 承認の後に local・remote が変わったときは、syncore が ErrPlanStale で止める。
+ * 向きが判定と違えば上書きにする（仕様書 7 章）。承認の後に local・remote が変わったときは、syncore が ErrPlanStale で止める。
  */
-export function Transfer(gameID: string, token: string): $CancellablePromise<$models.TransferView> {
-    return $Call.ByID(3484320873, gameID, token).then(($result: any) => {
+export function Transfer(gameID: string, token: string, direction: $models.TransferDirection): $CancellablePromise<$models.TransferView> {
+    return $Call.ByID(3484320873, gameID, token, direction).then(($result: any) => {
         return $$createType1($result);
     });
 }

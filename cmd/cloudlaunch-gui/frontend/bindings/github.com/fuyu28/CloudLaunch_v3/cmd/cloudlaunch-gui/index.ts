@@ -9,11 +9,13 @@ export {
 };
 
 export {
+    ActionView,
     CheckView,
-    ConfirmView,
+    CompareRow,
+    DialogView,
     GameCard,
     HomeView,
-    InfoRow,
     ProgressEvent,
+    TransferDirection,
     TransferView
 } from "./models.js";
