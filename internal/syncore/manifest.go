@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"golang.org/x/sync/errgroup"
@@ -96,20 +97,22 @@ func isPlainDir(t fs.FileMode) bool {
 	return t == fs.ModeDir
 }
 
-// localEntries は root 以下の通常のファイルを path の昇順で返す。root がなければ空を返す。
-func localEntries(ctx context.Context, root string) ([]Entry, error) {
+// localEntries は root 以下の通常のファイルを path の昇順で返し、ファイルの mtime の最大値も返す。root がなければ空を返し、
+// ファイルがなければ mtime はゼロ値にする。
+func localEntries(ctx context.Context, root string) ([]Entry, time.Time, error) {
 	info, err := os.Lstat(root)
 	if errors.Is(err, fs.ErrNotExist) {
-		return []Entry{}, nil
+		return []Entry{}, time.Time{}, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("stat save folder: %w", err)
+		return nil, time.Time{}, fmt.Errorf("stat save folder: %w", err)
 	}
 	if !isPlainDir(info.Mode().Type()) {
-		return nil, fmt.Errorf("save folder %s is not a plain directory (%s)", root, info.Mode().Type())
+		return nil, time.Time{}, fmt.Errorf("save folder %s is not a plain directory (%s)", root, info.Mode().Type())
 	}
 
 	var paths []string
+	var modTime time.Time
 	err = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -128,22 +131,29 @@ func localEntries(ctx context.Context, root string) ([]Entry, error) {
 		if err != nil {
 			return err
 		}
+		fi, err := d.Info()
+		if err != nil {
+			return err
+		}
+		if fi.ModTime().After(modTime) {
+			modTime = fi.ModTime()
+		}
 		paths = append(paths, filepath.ToSlash(rel))
 		return nil
 	})
 	if err != nil {
-		return nil, fmt.Errorf("walk save folder: %w", err)
+		return nil, time.Time{}, fmt.Errorf("walk save folder: %w", err)
 	}
 
 	for _, p := range paths {
 		// JSON に書くと U+FFFD に置き換わり、local と remote の manifest ハッシュが一致しなくなる（仕様書 2 章）
 		if !utf8.ValidString(p) {
-			return nil, fmt.Errorf("path %q is not valid UTF-8", p)
+			return nil, time.Time{}, fmt.Errorf("path %q is not valid UTF-8", p)
 		}
 	}
 	// 当たる manifest を HEAD に書くと、どの PC も Pull できなくなる（仕様書 2 章）。ハッシュの計算を無駄にしないよう先に確かめる
 	if err := validatePaths(paths); err != nil {
-		return nil, fmt.Errorf("save folder %s: %w", root, err)
+		return nil, time.Time{}, fmt.Errorf("save folder %s: %w", root, err)
 	}
 
 	entries := make([]Entry, len(paths))
@@ -160,11 +170,11 @@ func localEntries(ctx context.Context, root string) ([]Entry, error) {
 		})
 	}
 	if err := g.Wait(); err != nil {
-		return nil, err
+		return nil, time.Time{}, err
 	}
 	// WalkDir はディレクトリごとに名前で並べるので、"a/b" が "a.sav" より先に来る。区切りを / にした path のバイト列の順に並べ直す
 	slices.SortFunc(entries, func(a, b Entry) int { return strings.Compare(a.Path, b.Path) })
-	return entries, nil
+	return entries, modTime, nil
 }
 
 func hashFile(ctx context.Context, path string) (string, int64, error) {

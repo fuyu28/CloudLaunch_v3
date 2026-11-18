@@ -123,7 +123,7 @@ func (c *Core) prepareStage(ctx context.Context, plan Plan, game GameLocal, stag
 		return err
 	}
 
-	staged, err := localEntries(ctx, stage)
+	staged, _, err := localEntries(ctx, stage)
 	if err != nil {
 		return err
 	}

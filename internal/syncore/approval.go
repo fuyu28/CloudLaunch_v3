@@ -13,7 +13,7 @@ var ErrPlanStale = errors.New("plan is stale")
 // ensureLocalUnchanged は、承認の後にセーブフォルダが変わっていないかを確かめる（仕様書 7 章、5-P3・6-L6）。
 // DB の base ではなく plan.Base を使う。plan.Local.Hash は plan.Base から計算したもので、同じ base で計算し直さないと比べられない
 func ensureLocalUnchanged(ctx context.Context, folder string, plan Plan) error {
-	entries, err := localEntries(ctx, folder)
+	entries, _, err := localEntries(ctx, folder)
 	if err != nil {
 		return err
 	}

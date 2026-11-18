@@ -4,6 +4,7 @@ package syncore
 import (
 	"context"
 	"fmt"
+	"time"
 )
 
 type Decision int
@@ -46,6 +47,52 @@ type Plan struct {
 type LocalState struct {
 	Entries []Entry
 	Hash    string // ファイルが 1 つもなく、base が空 manifest のハッシュでなければ空
+	// ModTime は、ファイルの mtime の最大値（仕様書 7 章「確認ダイアログに出す情報」）。ファイルがなければゼロ値
+	ModTime time.Time
+}
+
+// Direction は、Changes で数える転送の向き。
+type Direction int
+
+const (
+	DirectionUpload Direction = iota
+	DirectionDownload
+)
+
+// Changes は、転送すると転送先で追加・変更・削除されるファイルの数と、転送するファイルの大きさの合計。
+type Changes struct {
+	Added    int
+	Modified int
+	Deleted  int
+	Bytes    int64
+}
+
+// Changes は、アップロードなら remote の、ダウンロードなら local の entries を基準に、転送元の entries と path で
+// 突き合わせて数える。中身が同じかは sha256 で比べる。判定によらず数えるので、上書きの確認にも使える。
+func (p Plan) Changes(d Direction) Changes {
+	from, to := p.Local.Entries, p.Remote.Manifest.Entries
+	if d == DirectionDownload {
+		from, to = to, from
+	}
+	existing := make(map[string]string, len(to))
+	for _, e := range to {
+		existing[e.Path] = e.SHA256
+	}
+	var c Changes
+	for _, e := range from {
+		sum, ok := existing[e.Path]
+		switch {
+		case !ok:
+			c.Added++
+			c.Bytes += e.Size
+		case sum != e.SHA256:
+			c.Modified++
+			c.Bytes += e.Size
+		}
+		delete(existing, e.Path)
+	}
+	c.Deleted = len(existing)
+	return c
 }
 
 // localHash は、Status の判定と、Push・Pull の承認後の確認（ensureLocalUnchanged）で、同じ local を同じハッシュにするために 1 か所で決める。
@@ -79,11 +126,11 @@ func (c *Core) Status(ctx context.Context, gameID string) (Plan, error) {
 	}
 	saveFolder, base := game.SaveFolderPath, game.BaseManifestHash
 
-	entries, err := localEntries(ctx, saveFolder)
+	entries, modTime, err := localEntries(ctx, saveFolder)
 	if err != nil {
 		return Plan{}, err
 	}
-	local := LocalState{Entries: entries, Hash: localHash(entries, base)}
+	local := LocalState{Entries: entries, Hash: localHash(entries, base), ModTime: modTime}
 	remote, err := c.readRemote(ctx, gameID)
 	if err != nil {
 		return Plan{}, err
