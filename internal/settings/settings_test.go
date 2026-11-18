@@ -13,22 +13,55 @@ import (
 	"github.com/fuyu28/CloudLaunch_v3/internal/store"
 )
 
+var errInjected = errors.New("injected")
+
+// memCredentials は、readErr・writeErr が nil でなければ、読み書きをそのエラーで失敗させる。
 type memCredentials struct {
-	cred settings.Credential
-	ok   bool
+	cred     settings.Credential
+	ok       bool
+	readErr  error
+	writeErr error
 }
 
 func (m *memCredentials) Credential() (settings.Credential, bool, error) {
+	if m.readErr != nil {
+		return settings.Credential{}, false, m.readErr
+	}
 	return m.cred, m.ok, nil
 }
 
 func (m *memCredentials) SetCredential(c settings.Credential) error {
+	if m.writeErr != nil {
+		return m.writeErr
+	}
 	m.cred, m.ok = c, true
 	return nil
 }
 
+// faultyLocal は、本物の DB の前に置き、readErr・writeErr が nil でなければ、読み書きをそのエラーで失敗させる。
+type faultyLocal struct {
+	*store.Store
+	readErr  error
+	writeErr error
+}
+
+func (l *faultyLocal) Setting(ctx context.Context, key string) (string, bool, error) {
+	if l.readErr != nil {
+		return "", false, l.readErr
+	}
+	return l.Store.Setting(ctx, key)
+}
+
+func (l *faultyLocal) SetSettings(ctx context.Context, values map[string]string) error {
+	if l.writeErr != nil {
+		return l.writeErr
+	}
+	return l.Store.SetSettings(ctx, values)
+}
+
 type fixture struct {
 	settings *settings.Settings
+	local    *faultyLocal
 	creds    *memCredentials
 }
 
@@ -40,14 +73,16 @@ func newFixture(t *testing.T, env map[string]string) fixture {
 		t.Fatalf("store.Open: %v", err)
 	}
 	t.Cleanup(func() { _ = s.Close() })
+	local := &faultyLocal{Store: s}
 	creds := &memCredentials{}
 	return fixture{
 		settings: settings.New(settings.Config{
-			Local:       s,
+			Local:       local,
 			Credentials: creds,
 			Getenv:      func(k string) string { return env[k] },
 			Hostname:    func() (string, error) { return "host-pc", nil },
 		}),
+		local: local,
 		creds: creds,
 	}
 }
@@ -301,6 +336,94 @@ func TestSaveRemote(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestRemoteFromEnv は、環境変数があるときに保存先を読まないことを、保存先の読み出しを失敗させて確かめる。
+func TestRemoteFromEnv(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("3章/接続情報/環境変数がすべてあれば、保存先を読まずに環境変数から読む", func(t *testing.T) {
+		f := newFixture(t, fullEnv)
+		f.local.readErr, f.creds.readErr = errInjected, errInjected
+
+		got, err := f.settings.Remote(ctx)
+		if err != nil {
+			t.Fatalf("Remote: %v", err)
+		}
+		if got.Bucket != "env-bucket" {
+			t.Errorf("Remote.Bucket = %q, want env-bucket", got.Bucket)
+		}
+	})
+
+	t.Run("3章/接続情報/環境変数が Region だけでも、保存した値を読まずに ErrRemoteNotConfigured を返す", func(t *testing.T) {
+		f := newFixture(t, map[string]string{"CLOUDLAUNCH_S3_REGION": "us-east-1"})
+		save(t, f, savedInput)
+		f.local.readErr, f.creds.readErr = errInjected, errInjected
+
+		_, err := f.settings.Remote(ctx)
+		if !errors.Is(err, settings.ErrRemoteNotConfigured) {
+			t.Errorf("Remote: err = %v, want ErrRemoteNotConfigured", err)
+		}
+	})
+}
+
+// TestSaveRemoteFailure は、資格情報と DB の設定を 1 つのトランザクションで書けないことから残る状態を確かめる。
+func TestSaveRemoteFailure(t *testing.T) {
+	ctx := context.Background()
+	newInput := settings.RemoteInput{
+		Endpoint: "https://other.r2.cloudflarestorage.com", Bucket: "new-bucket",
+		AccessKeyID: "new-key", SecretAccessKey: "new-secret",
+	}
+	newRemote := settings.Remote{
+		Endpoint: "https://other.r2.cloudflarestorage.com", Region: "auto", Bucket: "new-bucket",
+		AccessKeyID: "new-key", SecretAccessKey: "new-secret",
+	}
+
+	t.Run("3章/接続情報/資格情報の書き込みに失敗したら、DB の設定を変えない", func(t *testing.T) {
+		f := newFixture(t, nil)
+		save(t, f, savedInput)
+		f.creds.writeErr = errInjected
+
+		if err := f.settings.SaveRemote(ctx, newInput); !errors.Is(err, errInjected) {
+			t.Fatalf("SaveRemote: err = %v, want injected", err)
+		}
+		got, err := f.settings.Remote(ctx)
+		if err != nil {
+			t.Fatalf("Remote: %v", err)
+		}
+		if diff := cmp.Diff(savedRemote, got); diff != "" {
+			t.Errorf("Remote (-want +got):\n%s", diff)
+		}
+	})
+
+	t.Run("3章/接続情報/DB の書き込みに失敗したら、新しい資格情報と古い DB の設定が残り、もう一度保存すれば揃う", func(t *testing.T) {
+		f := newFixture(t, nil)
+		save(t, f, savedInput)
+		f.local.writeErr = errInjected
+
+		if err := f.settings.SaveRemote(ctx, newInput); !errors.Is(err, errInjected) {
+			t.Fatalf("SaveRemote: err = %v, want injected", err)
+		}
+		got, err := f.settings.Remote(ctx)
+		if err != nil {
+			t.Fatalf("Remote: %v", err)
+		}
+		mixed := savedRemote
+		mixed.AccessKeyID, mixed.SecretAccessKey = "new-key", "new-secret"
+		if diff := cmp.Diff(mixed, got); diff != "" {
+			t.Errorf("失敗した後の Remote (-want +got):\n%s", diff)
+		}
+
+		f.local.writeErr = nil
+		save(t, f, newInput)
+		got, err = f.settings.Remote(ctx)
+		if err != nil {
+			t.Fatalf("Remote: %v", err)
+		}
+		if diff := cmp.Diff(newRemote, got); diff != "" {
+			t.Errorf("保存し直した後の Remote (-want +got):\n%s", diff)
+		}
+	})
 }
 
 func TestDeviceName(t *testing.T) {
