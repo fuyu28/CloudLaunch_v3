@@ -5,6 +5,102 @@
 // @ts-ignore: Unused imports
 import { Create as $Create } from "@wailsio/runtime";
 
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
+import * as syncore$0 from "../../internal/syncore/models.js";
+
+export class CheckView {
+    /**
+     * Superseded は、同じゲームの新しい確認に置き換えられたことを表す。このときはほかの項目を使わず、表示も変えない
+     */
+    "superseded": boolean;
+
+    /**
+     * Status は、カードに出す判定。確認に失敗したときは空
+     */
+    "status": string;
+
+    /**
+     * Error は、空でなければ失敗の文言として出す
+     */
+    "error": string;
+
+    /**
+     * Confirm は、承認を求めるときだけ入る
+     */
+    "confirm": ConfirmView | null;
+
+    /** Creates a new CheckView instance. */
+    constructor($$source: Partial<CheckView> = {}) {
+        if (!("superseded" in $$source)) {
+            this["superseded"] = false;
+        }
+        if (!("status" in $$source)) {
+            this["status"] = "";
+        }
+        if (!("error" in $$source)) {
+            this["error"] = "";
+        }
+        if (!("confirm" in $$source)) {
+            this["confirm"] = null;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new CheckView instance from a string or object.
+     */
+    static createFrom($$source: any = {}): CheckView {
+        const $$createField3_0 = $$createType1;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("confirm" in $$parsedSource) {
+            $$parsedSource["confirm"] = $$createField3_0($$parsedSource["confirm"]);
+        }
+        return new CheckView($$parsedSource as Partial<CheckView>);
+    }
+}
+
+export class ConfirmView {
+    /**
+     * Token は、承認のときに Transfer へそのまま返す
+     */
+    "token": string;
+    "title": string;
+    "rows": InfoRow[];
+    "approveLabel": string;
+
+    /** Creates a new ConfirmView instance. */
+    constructor($$source: Partial<ConfirmView> = {}) {
+        if (!("token" in $$source)) {
+            this["token"] = "";
+        }
+        if (!("title" in $$source)) {
+            this["title"] = "";
+        }
+        if (!("rows" in $$source)) {
+            this["rows"] = [];
+        }
+        if (!("approveLabel" in $$source)) {
+            this["approveLabel"] = "";
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new ConfirmView instance from a string or object.
+     */
+    static createFrom($$source: any = {}): ConfirmView {
+        const $$createField2_0 = $$createType3;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("rows" in $$parsedSource) {
+            $$parsedSource["rows"] = $$createField2_0($$parsedSource["rows"]);
+        }
+        return new ConfirmView($$parsedSource as Partial<ConfirmView>);
+    }
+}
+
 export class GameCard {
     "id": string;
     "title": string;
@@ -62,7 +158,7 @@ export class HomeView {
      * Creates a new HomeView instance from a string or object.
      */
     static createFrom($$source: any = {}): HomeView {
-        const $$createField0_0 = $$createType1;
+        const $$createField0_0 = $$createType5;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("games" in $$parsedSource) {
             $$parsedSource["games"] = $$createField0_0($$parsedSource["games"]);
@@ -71,6 +167,98 @@ export class HomeView {
     }
 }
 
+export class InfoRow {
+    "label": string;
+    "value": string;
+
+    /** Creates a new InfoRow instance. */
+    constructor($$source: Partial<InfoRow> = {}) {
+        if (!("label" in $$source)) {
+            this["label"] = "";
+        }
+        if (!("value" in $$source)) {
+            this["value"] = "";
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new InfoRow instance from a string or object.
+     */
+    static createFrom($$source: any = {}): InfoRow {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new InfoRow($$parsedSource as Partial<InfoRow>);
+    }
+}
+
+export class ProgressEvent {
+    "gameId": string;
+    "progress": syncore$0.Progress;
+    "percent": number;
+    "text": string;
+
+    /** Creates a new ProgressEvent instance. */
+    constructor($$source: Partial<ProgressEvent> = {}) {
+        if (!("gameId" in $$source)) {
+            this["gameId"] = "";
+        }
+        if (!("progress" in $$source)) {
+            this["progress"] = (new syncore$0.Progress());
+        }
+        if (!("percent" in $$source)) {
+            this["percent"] = 0;
+        }
+        if (!("text" in $$source)) {
+            this["text"] = "";
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new ProgressEvent instance from a string or object.
+     */
+    static createFrom($$source: any = {}): ProgressEvent {
+        const $$createField1_0 = $$createType6;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("progress" in $$parsedSource) {
+            $$parsedSource["progress"] = $$createField1_0($$parsedSource["progress"]);
+        }
+        return new ProgressEvent($$parsedSource as Partial<ProgressEvent>);
+    }
+}
+
+export class TransferView {
+    "status": string;
+    "error": string;
+
+    /** Creates a new TransferView instance. */
+    constructor($$source: Partial<TransferView> = {}) {
+        if (!("status" in $$source)) {
+            this["status"] = "";
+        }
+        if (!("error" in $$source)) {
+            this["error"] = "";
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new TransferView instance from a string or object.
+     */
+    static createFrom($$source: any = {}): TransferView {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new TransferView($$parsedSource as Partial<TransferView>);
+    }
+}
+
 // Private type creation functions
-const $$createType0 = GameCard.createFrom;
-const $$createType1 = $Create.Array($$createType0);
+const $$createType0 = ConfirmView.createFrom;
+const $$createType1 = $Create.Nullable($$createType0);
+const $$createType2 = InfoRow.createFrom;
+const $$createType3 = $Create.Array($$createType2);
+const $$createType4 = GameCard.createFrom;
+const $$createType5 = $Create.Array($$createType4);
+const $$createType6 = syncore$0.Progress.createFrom;

@@ -6,4 +6,17 @@
 // @ts-ignore: Unused imports
 import { Create as $Create } from "@wailsio/runtime";
 
-Object.freeze($Create.Events);
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
+import * as main$0 from "../../../../fuyu28/CloudLaunch_v3/cmd/cloudlaunch-gui/models.js";
+
+function configure() {
+    Object.freeze(Object.assign($Create.Events, {
+        "sync:progress": $$createType0,
+    }));
+}
+
+// Private type creation functions
+const $$createType0 = main$0.ProgressEvent.createFrom;
+
+configure();
