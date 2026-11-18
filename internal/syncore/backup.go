@@ -37,7 +37,7 @@ func (c *Core) checkBackupConfig() error {
 	return nil
 }
 
-// BackupDir は、ゲームのバックアップを並べるフォルダを返す。フォルダは作らないので、バックアップがまだなければ存在しない。
+// BackupDir はフォルダを作らないので、バックアップがまだなければ、返したパスは存在しない。
 // gameID は GUI から渡るので、UUID の正規の形でなければ拒否する。区切りと . を拒否するだけでは、Windows がパスの要素の
 // 末尾の . と空白を取り除くので、". " などが BackupsDir そのもの（全ゲームのバックアップ）を指す。
 func (c *Core) BackupDir(gameID string) (string, error) {
