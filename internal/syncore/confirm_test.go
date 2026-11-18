@@ -44,11 +44,25 @@ func Test確認ダイアログの情報(t *testing.T) {
 		}
 	})
 
-	t.Run("7章/確認ダイアログ/転送するサイズは、追加と変更のファイルの大きさの合計にする", func(t *testing.T) {
+	t.Run("7章/確認ダイアログ/アップロードの転送するサイズは、追加と変更のファイルの大きさの合計にする", func(t *testing.T) {
 		got := changesOf(t, syncore.DirectionUpload)
 		// 同じ c.sav と、削除する d.sav は数えない
 		if want := int64(len("added") + len("local-b")); got.Bytes != want {
 			t.Errorf("Bytes = %d, want %d", got.Bytes, want)
+		}
+	})
+
+	t.Run("7章/確認ダイアログ/ダウンロードの転送するサイズは、local にない sha256 ごとの大きさの合計にする", func(t *testing.T) {
+		e := newEnv(t)
+		writeFiles(t, e.saveDir, map[string]string{"a.sav": "one"})
+		// b.sav は a.sav の名前を変えただけで、c.sav と d.sav は同じ中身
+		e.putGeneration(t, entriesOf(map[string]string{"b.sav": "one", "c.sav": "two", "d.sav": "two"}))
+		plan, err := e.status(t)
+		if err != nil {
+			t.Fatalf("Status: %v", err)
+		}
+		if got, want := plan.Changes(syncore.DirectionDownload).Bytes, int64(len("two")); got != want {
+			t.Errorf("Bytes = %d, want %d", got, want)
 		}
 	})
 

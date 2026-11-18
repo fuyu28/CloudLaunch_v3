@@ -102,6 +102,31 @@ func TestProgress(t *testing.T) {
 		assertProgressed(t, log.calls(), syncore.Progress{FilesDone: 2, FilesTotal: 2, BytesDone: 8, BytesTotal: 8})
 	})
 
+	t.Run("6章/Pull/コピーしたファイルは、進捗に数えない", func(t *testing.T) {
+		e := newEnv(t)
+		// a.sav は live から、c.sav は取得した b.sav から stage の中でコピーする
+		plan := pullOverLocal(t, e, map[string]string{"a.sav": "one"}, map[string]string{"a.sav": "one", "b.sav": "three", "c.sav": "three"})
+		var log progressLog
+
+		if err := e.core.Pull(t.Context(), plan, syncore.PullOptions{Progress: log.record}); err != nil {
+			t.Fatalf("Pull: %v", err)
+		}
+		assertProgressed(t, log.calls(), syncore.Progress{FilesDone: 1, FilesTotal: 1, BytesDone: 5, BytesTotal: 5})
+	})
+
+	t.Run("6章/Pull/live にある中身だけで組み立てられるときは、0/0 で 1 回だけ進捗を知らせる", func(t *testing.T) {
+		e := newEnv(t)
+		plan := pullOverLocal(t, e, map[string]string{"before.sav": "one"}, map[string]string{"after.sav": "one"})
+		var log progressLog
+
+		if err := e.core.Pull(t.Context(), plan, syncore.PullOptions{Progress: log.record}); err != nil {
+			t.Fatalf("Pull: %v", err)
+		}
+		if diff := cmp.Diff([]syncore.Progress{{}}, log.calls()); diff != "" {
+			t.Errorf("進捗 (-want +got):\n%s", diff)
+		}
+	})
+
 	t.Run("5章/Push/PUT が失敗したら、その後は進捗を知らせない", func(t *testing.T) {
 		e := newEnv(t)
 		plan := approvedPush(t, e, map[string]string{"a.sav": "one", "b.sav": "two"})

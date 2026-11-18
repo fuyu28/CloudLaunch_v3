@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"time"
@@ -126,16 +127,13 @@ func (c *Core) prepareStage(ctx context.Context, plan Plan, game GameLocal, stag
 		c.cfg.Logger.WarnContext(ctx, "createdAt is not readable; keep mtime of pulled files", "game", plan.GameID, "createdAt", plan.Remote.Manifest.CreatedAt)
 		mtime = time.Time{}
 	}
-	if err := c.downloadAll(ctx, plan.GameID, stage, plan.Remote.Manifest.Entries, mtime, progress); err != nil {
+	if err := c.buildStage(ctx, plan, game.SaveFolderPath, stage, mtime, progress); err != nil {
+		// live からコピーする中身が承認の後に変わると、手順 6 より前に止まる（6-F3）。手順 6 で止まったときと同じく
+		// 確認し直せば済むと呼び出し側に伝わるよう、live が変わっていれば ErrPlanStale を足す
+		if staleErr := ensureLocalUnchanged(ctx, game.SaveFolderPath, plan); errors.Is(staleErr, ErrPlanStale) {
+			return errors.Join(err, staleErr)
+		}
 		return err
-	}
-
-	staged, _, err := localEntries(ctx, stage)
-	if err != nil {
-		return err
-	}
-	if ManifestHash(staged) != plan.Remote.Hash {
-		return fmt.Errorf("downloaded files do not match manifest %s", plan.Remote.Generation)
 	}
 
 	if err := c.ensureGameNotRunning(game.ExePath); err != nil {
@@ -159,7 +157,88 @@ func (c *Core) abortPull(ctx context.Context, opID, stage string, cause error) e
 	return cause
 }
 
-// downloadAll は、中身が同じファイルも、ファイルごとに取得する。mtime がゼロ値でなければ、各ファイルの mtime にする（6-F1）。
+// fetchEntries は、同じ sha256 のエントリが複数あっても最初の 1 つだけを返す（6-F2）。Changes の Bytes もこれで数え、
+// 確認ダイアログの「転送するサイズ」と Pull の転送量を一致させる。
+func fetchEntries(remote, local []Entry) []Entry {
+	have := make(map[string]bool, len(local))
+	for _, e := range local {
+		have[e.SHA256] = true
+	}
+	var fetch []Entry
+	for _, e := range remote {
+		if have[e.SHA256] {
+			continue
+		}
+		have[e.SHA256] = true
+		fetch = append(fetch, e)
+	}
+	return fetch
+}
+
+// buildStage は手順 4・5 を行う。fetchEntries の分を取得してから、残りのエントリを、承認した時点の local で同じ sha256
+// だった live のファイルか、先に取得した stage のファイルからコピーする（6-F2）。コピーの元が承認の後に書き換わっていても、
+// コピーの途中では確かめず、手順 5 の検証に任せる（6-F3）。
+func (c *Core) buildStage(ctx context.Context, plan Plan, live, stage string, mtime time.Time, progress func(Progress)) error {
+	fetch := fetchEntries(plan.Remote.Manifest.Entries, plan.Local.Entries)
+	if err := c.downloadAll(ctx, plan.GameID, stage, fetch, mtime, progress); err != nil {
+		return err
+	}
+
+	sources := make(map[string]string, len(plan.Local.Entries)+len(fetch))
+	for _, e := range plan.Local.Entries {
+		if _, ok := sources[e.SHA256]; !ok {
+			sources[e.SHA256] = filepath.Join(live, filepath.FromSlash(e.Path))
+		}
+	}
+	fetched := make(map[string]bool, len(fetch))
+	for _, e := range fetch {
+		sources[e.SHA256] = filepath.Join(stage, filepath.FromSlash(e.Path))
+		fetched[e.Path] = true
+	}
+	for _, e := range plan.Remote.Manifest.Entries {
+		if fetched[e.Path] {
+			continue
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := c.copyToStage(sources[e.SHA256], filepath.Join(stage, filepath.FromSlash(e.Path)), mtime); err != nil {
+			return err
+		}
+	}
+
+	staged, _, err := localEntries(ctx, stage)
+	if err != nil {
+		return err
+	}
+	if ManifestHash(staged) != plan.Remote.Hash {
+		return fmt.Errorf("staged files do not match manifest %s", plan.Remote.Generation)
+	}
+	return nil
+}
+
+// copyToStage は、バックアップの copyFile と違い、コピーの元の mtime を保たない。
+func (c *Core) copyToStage(src, dst string, mtime time.Time) error {
+	f, err := os.Open(src)
+	if err != nil {
+		return fmt.Errorf("open copy source: %w", err)
+	}
+	defer func() { _ = f.Close() }()
+	return c.writeStageFile(dst, f, mtime)
+}
+
+// writeStageFile は、取得とコピーで mtime（6-F1）と書き出しの扱いが食い違わないよう、stage への書き込みをまとめる。
+// mtime がゼロ値なら合わせない。
+func (c *Core) writeStageFile(dst string, r io.Reader, mtime time.Time) error {
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return fmt.Errorf("create directory in stage: %w", err)
+	}
+	if err := c.writeFileSyncedAt(dst, r, mtime); err != nil {
+		return fmt.Errorf("write %s: %w", dst, err)
+	}
+	return nil
+}
+
 func (c *Core) downloadAll(ctx context.Context, gameID, stage string, entries []Entry, mtime time.Time, progress func(Progress)) error {
 	var size int64
 	for _, e := range entries {
@@ -186,16 +265,10 @@ func (c *Core) downloadObject(ctx context.Context, key, dst string, mtime time.T
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-		return fmt.Errorf("create directory in stage: %w", err)
-	}
 	r, err := c.cfg.Remote.Get(ctx, key)
 	if err != nil {
 		return fmt.Errorf("download object: %w", err)
 	}
 	defer func() { _ = r.Close() }()
-	if err := c.writeFileSyncedAt(dst, r, mtime); err != nil {
-		return fmt.Errorf("write %s: %w", dst, err)
-	}
-	return nil
+	return c.writeStageFile(dst, r, mtime)
 }

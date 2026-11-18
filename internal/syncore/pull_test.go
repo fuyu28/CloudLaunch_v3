@@ -464,6 +464,172 @@ func TestPull空manifestのbase(t *testing.T) {
 	})
 }
 
+// recordObjectGets は e.remote.Before を置き換えるので、failOn などの失敗の仕込みと一緒には使えない。
+func recordObjectGets(e env) func() []string {
+	var mu sync.Mutex
+	var keys []string
+	e.remote.Before = func(op memstore.Op, key string) error {
+		if op == memstore.OpGet && strings.Contains(key, "/objects/") {
+			mu.Lock()
+			keys = append(keys, key)
+			mu.Unlock()
+		}
+		return nil
+	}
+	return func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]string(nil), keys...)
+	}
+}
+
+func deleteObject(t *testing.T, e env, content string) {
+	t.Helper()
+	if err := e.remote.Delete(t.Context(), objectKey(content)); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+}
+
+// assertCleanedUp は、中止した後に stage・old・ジャーナルが残っておらず、セーブフォルダが wantFiles のままであることを確かめる。
+// base は確かめない（assertAborted と違い、Pull の前に base があってよい）。
+func assertCleanedUp(t *testing.T, e env, wantFiles map[string]string) {
+	t.Helper()
+	if dirs := e.workDirs(t, "stage"); len(dirs) != 0 {
+		t.Errorf("stage が残っている: %v", dirs)
+	}
+	if dirs := e.workDirs(t, "old"); len(dirs) != 0 {
+		t.Errorf("old ができた: %v", dirs)
+	}
+	if n := e.journalCount(t); n != 0 {
+		t.Errorf("ジャーナルの行の数 = %d, want 0", n)
+	}
+	if diff := cmp.Diff(wantFiles, readFiles(t, e.saveDir)); diff != "" {
+		t.Errorf("セーブフォルダ (-want +got):\n%s", diff)
+	}
+}
+
+func TestPull差分の取得(t *testing.T) {
+	local := map[string]string{"slot1.sav": "one", "slot2.sav": "old"}
+	remote := map[string]string{"slot1.sav": "one", "slot2.sav": "two"}
+
+	t.Run("6-F2 live に同じ中身のあるファイルは、取得せずに live からコピーする", func(t *testing.T) {
+		e := newEnv(t)
+		plan := pullOverLocal(t, e, local, remote)
+		// 取得しようとすれば失敗する
+		deleteObject(t, e, "one")
+		gets := recordObjectGets(e)
+
+		if err := e.core.Pull(t.Context(), plan, syncore.PullOptions{}); err != nil {
+			t.Fatalf("Pull: %v", err)
+		}
+		if diff := cmp.Diff(remote, readFiles(t, e.saveDir)); diff != "" {
+			t.Errorf("セーブフォルダ (-want +got):\n%s", diff)
+		}
+		if diff := cmp.Diff([]string{objectKey("two")}, gets()); diff != "" {
+			t.Errorf("取得した object (-want +got):\n%s", diff)
+		}
+	})
+
+	t.Run("6-F2 live からコピーしたファイルを書き換えても、バックアップは変わらない", func(t *testing.T) {
+		e := newEnv(t)
+		plan := pullOverLocal(t, e, local, remote)
+
+		if err := e.core.Pull(t.Context(), plan, syncore.PullOptions{}); err != nil {
+			t.Fatalf("Pull: %v", err)
+		}
+		// ゲームがセーブをその場で書き換える。ハードリンクなら、バックアップの slot1.sav も変わる
+		writeFiles(t, e.saveDir, map[string]string{"slot1.sav": "played"})
+		names := e.gameBackups(t)
+		if len(names) != 1 {
+			t.Fatalf("バックアップ = %v, want 1 つ", names)
+		}
+		if diff := cmp.Diff(local, readFiles(t, filepath.Join(e.backupsDir, testGameID, names[0]))); diff != "" {
+			t.Errorf("バックアップ (-want +got):\n%s", diff)
+		}
+	})
+
+	t.Run("6-F2 path の違う live のファイルも、中身が同じならコピーの元にする", func(t *testing.T) {
+		e := newEnv(t)
+		renamed := map[string]string{"renamed.sav": "one", "slot2.sav": "two"}
+		plan := pullOverLocal(t, e, local, renamed)
+		deleteObject(t, e, "one")
+
+		if err := e.core.Pull(t.Context(), plan, syncore.PullOptions{}); err != nil {
+			t.Fatalf("Pull: %v", err)
+		}
+		if diff := cmp.Diff(renamed, readFiles(t, e.saveDir)); diff != "" {
+			t.Errorf("セーブフォルダ (-want +got):\n%s", diff)
+		}
+	})
+
+	t.Run("6-F2 live にない中身は、同じ中身のエントリが複数あっても 1 回だけ取得する", func(t *testing.T) {
+		e := newEnv(t)
+		same := map[string]string{"a.sav": "same", "b.sav": "same", "dir/c.sav": "same"}
+		plan := approvedPull(t, e, same)
+		gets := recordObjectGets(e)
+
+		if err := e.core.Pull(t.Context(), plan, syncore.PullOptions{}); err != nil {
+			t.Fatalf("Pull: %v", err)
+		}
+		if diff := cmp.Diff(same, readFiles(t, e.saveDir)); diff != "" {
+			t.Errorf("セーブフォルダ (-want +got):\n%s", diff)
+		}
+		if diff := cmp.Diff([]string{objectKey("same")}, gets()); diff != "" {
+			t.Errorf("取得した object (-want +got):\n%s", diff)
+		}
+	})
+
+	t.Run("6-F1 コピーしたファイルの mtime も、manifest の createdAt にする", func(t *testing.T) {
+		e := newEnv(t)
+		// slot1.sav は live から、slot3.sav は取得した slot2.sav から stage の中でコピーする
+		plan := pullOverLocal(t, e, local, map[string]string{"slot1.sav": "one", "slot2.sav": "two", "slot3.sav": "two"})
+
+		if err := e.core.Pull(t.Context(), plan, syncore.PullOptions{}); err != nil {
+			t.Fatalf("Pull: %v", err)
+		}
+		// putManifest が書く createdAt
+		want := time.Date(2026, 10, 27, 0, 0, 0, 0, time.UTC)
+		for _, rel := range []string{"slot1.sav", "slot3.sav"} {
+			info, err := os.Stat(filepath.Join(e.saveDir, rel))
+			if err != nil {
+				t.Fatalf("stat %s: %v", rel, err)
+			}
+			if !info.ModTime().Equal(want) {
+				t.Errorf("%s の mtime = %v, want %v", rel, info.ModTime(), want)
+			}
+		}
+	})
+
+	t.Run("6-F3 承認後に live のコピーの元が書き換わっていたら ErrPlanStale、stage とジャーナルを削除する", func(t *testing.T) {
+		e := newEnv(t)
+		plan := pullOverLocal(t, e, local, remote)
+		changed := map[string]string{"slot1.sav": "changed", "slot2.sav": "old"}
+		writeFiles(t, e.saveDir, changed)
+
+		if err := e.core.Pull(t.Context(), plan, syncore.PullOptions{}); !errors.Is(err, syncore.ErrPlanStale) {
+			t.Fatalf("Pull error = %v, want ErrPlanStale", err)
+		}
+		assertCleanedUp(t, e, changed)
+	})
+
+	t.Run("6-F3 コピーの元が消えていたら、取得に切り替えずに ErrPlanStale、stage とジャーナルを削除する", func(t *testing.T) {
+		e := newEnv(t)
+		plan := pullOverLocal(t, e, local, remote)
+		if err := os.Remove(filepath.Join(e.saveDir, "slot1.sav")); err != nil {
+			t.Fatalf("remove: %v", err)
+		}
+		gets := recordObjectGets(e)
+
+		if err := e.core.Pull(t.Context(), plan, syncore.PullOptions{}); !errors.Is(err, syncore.ErrPlanStale) {
+			t.Fatalf("Pull error = %v, want ErrPlanStale", err)
+		}
+		if diff := cmp.Diff([]string{objectKey("two")}, gets()); diff != "" {
+			t.Errorf("取得した object (-want +got):\n%s", diff)
+		}
+		assertCleanedUp(t, e, map[string]string{"slot2.sav": "old"})
+	})
+}
+
 // invalidPathCases は path の規則に当たる path の組で、FuzzPull不正なmanifest のシードにも使う。
 var invalidPathCases = []struct {
 	name  string
