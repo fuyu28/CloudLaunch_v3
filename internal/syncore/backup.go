@@ -35,8 +35,13 @@ func (c *Core) checkBackupConfig() error {
 	return nil
 }
 
+// BackupDir は、ゲームのバックアップを並べるフォルダを返す。フォルダは作らないので、バックアップがまだなければ存在しない。
 func (c *Core) BackupDir(gameID string) (string, error) {
-	return "", nil
+	// 空のまま Join すると、作業ディレクトリの下を指す
+	if c.cfg.BackupsDir == "" {
+		return "", errBackupsDirNotSet
+	}
+	return c.backupDir(gameID), nil
 }
 
 func (c *Core) backupDir(gameID string) string {

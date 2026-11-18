@@ -102,16 +102,19 @@ func runApp(dir, logPath string, logFile *os.File) error {
 		logger.Error("recover failed", "err", err)
 	}
 
+	backups := &BackupService{save: core}
 	app := application.New(application.Options{
 		Name: "CloudLaunch",
 		Services: []application.Service{
 			application.NewService(&HomeService{store: s, banner: recoverBanner(err, logPath)}),
 			application.NewService(newSyncService(core, games, logger, errors.Join(hostErr, remoteErr))),
+			application.NewService(backups),
 		},
 		Assets: application.AssetOptions{Handler: application.AssetFileServerFS(assets)},
 		// Wails は画面のファイルの要求ごとに INFO を出し、同期のログが埋もれるので、WARN 以上だけにする
 		Logger: slog.New(slog.NewTextHandler(logFile, &slog.HandlerOptions{Level: slog.LevelWarn})),
 	})
+	backups.openFolder = func(dir string) error { return app.Env.OpenFileManager(dir, false) }
 	app.Window.NewWithOptions(application.WebviewWindowOptions{
 		Title:  "CloudLaunch",
 		Width:  1000,

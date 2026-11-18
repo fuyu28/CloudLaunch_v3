@@ -1,6 +1,10 @@
 <script lang="ts">
   import { Events } from "@wailsio/runtime";
-  import { HomeService, SyncService } from "../bindings/github.com/fuyu28/CloudLaunch_v3/cmd/cloudlaunch-gui";
+  import {
+    BackupService,
+    HomeService,
+    SyncService,
+  } from "../bindings/github.com/fuyu28/CloudLaunch_v3/cmd/cloudlaunch-gui";
   import type {
     DialogView,
     HomeView,
@@ -20,6 +24,8 @@
   // dialogs は、最後の確認で受け取ったダイアログ。変更なしのときは開かずに持ち、カードの「上書き…」から開く
   let dialogs = $state<Record<string, DialogView>>({});
   let dialog = $state<{ gameId: string; title: string; view: DialogView } | null>(null);
+  // backupNotes は、バックアップのフォルダを開いたときの案内。確認の結果の行とは別に出す
+  let backupNotes = $state<Record<string, CardState>>({});
 
   HomeService.Load()
     .then((v) => (view = v))
@@ -47,6 +53,14 @@
     } catch (e) {
       checking[gameId] = false;
       cards[gameId] = { status: "", error: String(e) };
+    }
+  }
+
+  async function openBackups(gameId: string) {
+    try {
+      backupNotes[gameId] = { status: await BackupService.OpenBackups(gameId), error: "" };
+    } catch (e) {
+      backupNotes[gameId] = { status: "", error: "バックアップのフォルダを開けませんでした: " + String(e) };
     }
   }
 
@@ -101,9 +115,12 @@
                 <div class="brand">{game.brand}</div>
               {/if}
             </div>
-            <button disabled={checking[game.id] || !!transfer} onclick={() => check(game.id, game.title)}>
-              {checking[game.id] ? "確認中…" : "確認"}
-            </button>
+            <div class="buttons">
+              <button onclick={() => openBackups(game.id)}>バックアップ</button>
+              <button disabled={checking[game.id] || !!transfer} onclick={() => check(game.id, game.title)}>
+                {checking[game.id] ? "確認中…" : "確認"}
+              </button>
+            </div>
           </div>
           {#if transfer}
             <progress max="100" value={transfer.progress?.percent ?? 0}></progress>
@@ -119,6 +136,8 @@
               </div>
             {/if}
           {/if}
+          {#if backupNotes[game.id]?.status}<div class="status">{backupNotes[game.id].status}</div>{/if}
+          {#if backupNotes[game.id]?.error}<div class="error">{backupNotes[game.id].error}</div>{/if}
         </li>
       {/each}
     </ul>
@@ -212,6 +231,10 @@
   }
   .title {
     font-weight: 600;
+  }
+  .buttons {
+    display: flex;
+    gap: 8px;
   }
   .brand,
   .status {
