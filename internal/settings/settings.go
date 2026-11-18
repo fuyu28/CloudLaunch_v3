@@ -173,6 +173,10 @@ func (s *Settings) SaveRemote(ctx context.Context, in RemoteInput) error {
 		if !ok || saved.SecretAccessKey == "" {
 			return fmt.Errorf("%w: empty secret access key", ErrInvalidSettings)
 		}
+		// キーを作り直すと ID とシークレットは対で変わるので、新しい ID に古いシークレットを組み合わせると認証エラーになる
+		if saved.AccessKeyID != cred.AccessKeyID {
+			return fmt.Errorf("%w: secret access key is required when the access key ID changes", ErrInvalidSettings)
+		}
 		cred.SecretAccessKey = saved.SecretAccessKey
 	}
 

@@ -240,6 +240,25 @@ func TestSaveRemote(t *testing.T) {
 		})
 	}
 
+	t.Run("3章/接続情報/アクセスキー ID を変えるとき、シークレットが空なら拒否する", func(t *testing.T) {
+		f := newFixture(t, nil)
+		save(t, f, savedInput)
+		in := savedInput
+		in.AccessKeyID, in.SecretAccessKey = "new-key", ""
+
+		err := f.settings.SaveRemote(ctx, in)
+		if !errors.Is(err, settings.ErrInvalidSettings) {
+			t.Fatalf("SaveRemote: err = %v, want ErrInvalidSettings", err)
+		}
+		got, err := f.settings.Remote(ctx)
+		if err != nil {
+			t.Fatalf("Remote: %v", err)
+		}
+		if diff := cmp.Diff(savedRemote, got); diff != "" {
+			t.Errorf("拒否した後の Remote (-want +got):\n%s", diff)
+		}
+	})
+
 	t.Run("3章/接続情報/シークレットの前後の空白を除いて保存する", func(t *testing.T) {
 		f := newFixture(t, nil)
 		in := savedInput
