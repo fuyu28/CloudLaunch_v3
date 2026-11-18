@@ -355,9 +355,13 @@ func TestBackupDir(t *testing.T) {
 		}
 	})
 
-	t.Run("3章/バックアップ/gameId が空か、パスの区切りか . を含むなら、BackupDir はエラーを返す", func(t *testing.T) {
+	t.Run("3章/バックアップ/gameId が UUID の正規の形でなければ、BackupDir はエラーを返す", func(t *testing.T) {
 		e := newEnv(t)
-		for _, id := range []string{"", ".", "..", `..\..`, "../x", "a/b", `a\b`} {
+		// Windows はパスの要素の末尾の . と空白を取り除くので、". " や "..." は BackupsDir そのものを指す
+		for _, id := range []string{
+			"", ".", "..", "...", ". ", `..\..`, "../x", "a/b", `a\b`, "game",
+			strings.ToUpper(testGameID), testGameID + " ", testGameID + ".", "{" + testGameID + "}", "urn:uuid:" + testGameID,
+		} {
 			if dir, err := e.core.BackupDir(id); err == nil {
 				t.Errorf("BackupDir(%q) = %q, want an error", id, dir)
 			}

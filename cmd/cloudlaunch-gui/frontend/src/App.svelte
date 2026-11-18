@@ -28,6 +28,13 @@
   // backupNotes は、バックアップのフォルダを開いたときの案内。確認の結果の行とは別に出し、次の確認か転送で消す
   let backupNotes = $state<Record<string, BackupView>>({});
   let openingBackups = $state<Record<string, boolean>>({});
+  // backupSeqs は、案内を消した後に届いた古い応答で、案内を出し直さないための番号。表示に使わないので $state にしない
+  const backupSeqs: Record<string, number> = {};
+
+  function clearBackupNote(gameId: string) {
+    backupSeqs[gameId] = (backupSeqs[gameId] ?? 0) + 1;
+    delete backupNotes[gameId];
+  }
 
   HomeService.Load()
     .then((v) => (view = v))
@@ -40,7 +47,7 @@
 
   async function check(gameId: string, title: string) {
     checking[gameId] = true;
-    delete backupNotes[gameId];
+    clearBackupNote(gameId);
     // 新しい確認を始めると、Go は前の確認の plan を捨てる
     delete dialogs[gameId];
     try {
@@ -61,13 +68,16 @@
 
   async function openBackups(gameId: string) {
     openingBackups[gameId] = true;
+    const seq = (backupSeqs[gameId] = (backupSeqs[gameId] ?? 0) + 1);
+    let note: BackupView;
     try {
-      backupNotes[gameId] = await BackupService.OpenBackups(gameId);
+      note = await BackupService.OpenBackups(gameId);
     } catch (e) {
-      backupNotes[gameId] = { status: "", error: String(e) };
+      note = { status: "", error: String(e) };
     } finally {
       openingBackups[gameId] = false;
     }
+    if (backupSeqs[gameId] === seq) backupNotes[gameId] = note;
   }
 
   function cancel(gameId: string) {
@@ -82,7 +92,7 @@
     const { gameId, title, view } = dialog;
     dialog = null;
     delete dialogs[gameId];
-    delete backupNotes[gameId];
+    clearBackupNote(gameId);
     transfers[gameId] = { title, progress: null, cancelError: "" };
     try {
       const v = await SyncService.Transfer(gameId, view.token, direction);

@@ -9,8 +9,9 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"strings"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 const (
@@ -37,13 +38,14 @@ func (c *Core) checkBackupConfig() error {
 }
 
 // BackupDir は、ゲームのバックアップを並べるフォルダを返す。フォルダは作らないので、バックアップがまだなければ存在しない。
-// gameID は GUI から渡るので、BackupsDir の外や BackupsDir そのものを指す値を拒否する。
+// gameID は GUI から渡るので、UUID の正規の形でなければ拒否する。区切りと . を拒否するだけでは、Windows がパスの要素の
+// 末尾の . と空白を取り除くので、". " などが BackupsDir そのもの（全ゲームのバックアップ）を指す。
 func (c *Core) BackupDir(gameID string) (string, error) {
 	// 空のまま Join すると、作業ディレクトリの下を指す
 	if c.cfg.BackupsDir == "" {
 		return "", errBackupsDirNotSet
 	}
-	if gameID == "" || gameID == "." || gameID == ".." || strings.ContainsAny(gameID, `/\`) {
+	if u, err := uuid.Parse(gameID); err != nil || u.String() != gameID {
 		return "", fmt.Errorf("invalid game id %q", gameID)
 	}
 	return c.backupDir(gameID), nil
