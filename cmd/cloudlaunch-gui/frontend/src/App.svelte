@@ -50,16 +50,6 @@
     }
   }
 
-  function dismiss() {
-    if (!dialog) return;
-    const { gameId, view } = dialog;
-    dialog = null;
-    delete dialogs[gameId];
-    SyncService.Dismiss(gameId, view.token).catch((e) => {
-      cards[gameId] = { status: "", error: String(e) };
-    });
-  }
-
   function cancel(gameId: string) {
     SyncService.Cancel(gameId).catch((e) => {
       const t = transfers[gameId];
@@ -174,7 +164,7 @@
         {/each}
       </ul>
       <div class="actions">
-        <button onclick={dismiss}>やめる</button>
+        <button onclick={() => (dialog = null)}>やめる</button>
       </div>
     </div>
   </div>

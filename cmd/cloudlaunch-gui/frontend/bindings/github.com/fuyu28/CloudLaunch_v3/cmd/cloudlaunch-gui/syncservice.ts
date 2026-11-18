@@ -27,13 +27,6 @@ export function Check(gameID: string): $CancellablePromise<$models.CheckView> {
 }
 
 /**
- * Dismiss は、確認ダイアログを承認せずに閉じたときに呼び、承認を待つ plan を捨てる。token が今の確認のものでなければ何もしない。
- */
-export function Dismiss(gameID: string, token: string): $CancellablePromise<void> {
-    return $Call.ByID(1333841318, gameID, token);
-}
-
-/**
  * Transfer は、token が今の確認のものでなければ実行しない。確認し直した後に、古いダイアログから承認されたときに当たる。
  * 向きが判定と違えば上書きにする（仕様書 7 章）。承認の後に local・remote が変わったときは、syncore が ErrPlanStale で止める。
  */

@@ -51,50 +51,6 @@ type LocalState struct {
 	ModTime time.Time
 }
 
-// Direction は、Changes で数える転送の向き。
-type Direction int
-
-const (
-	DirectionUpload Direction = iota
-	DirectionDownload
-)
-
-// Changes は、転送すると転送先で追加・変更・削除されるファイルの数と、転送するファイルの大きさの合計。
-type Changes struct {
-	Added    int
-	Modified int
-	Deleted  int
-	Bytes    int64
-}
-
-// Changes は、アップロードなら remote の、ダウンロードなら local の entries を基準に、転送元の entries と path で
-// 突き合わせて数える。中身が同じかは sha256 で比べる。判定によらず数えるので、上書きの確認にも使える。
-func (p Plan) Changes(d Direction) Changes {
-	from, to := p.Local.Entries, p.Remote.Manifest.Entries
-	if d == DirectionDownload {
-		from, to = to, from
-	}
-	existing := make(map[string]string, len(to))
-	for _, e := range to {
-		existing[e.Path] = e.SHA256
-	}
-	var c Changes
-	for _, e := range from {
-		sum, ok := existing[e.Path]
-		switch {
-		case !ok:
-			c.Added++
-			c.Bytes += e.Size
-		case sum != e.SHA256:
-			c.Modified++
-			c.Bytes += e.Size
-		}
-		delete(existing, e.Path)
-	}
-	c.Deleted = len(existing)
-	return c
-}
-
 // localHash は、Status の判定と、Push・Pull の承認後の確認（ensureLocalUnchanged）で、同じ local を同じハッシュにするために 1 か所で決める。
 // base が空 manifest なら、ファイルのない local を「なし」にしない。空にして Push した後に、毎回競合と判定しないため（仕様書 4 章）
 func localHash(entries []Entry, base string) string {

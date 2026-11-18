@@ -71,7 +71,7 @@ export class CheckView {
     "error": string;
 
     /**
-     * Dialog は、確認した plan を持つとき（削除済みと失敗のとき以外）に入る
+     * Dialog は、確認した plan があり、どちらかの向きに転送できるときに入る
      */
     "dialog": DialogView | null;
 
@@ -140,7 +140,7 @@ export class CompareRow {
  */
 export class DialogView {
     /**
-     * Token は、Transfer と Dismiss へそのまま返す
+     * Token は、Transfer へそのまま返す
      */
     "token": string;
 

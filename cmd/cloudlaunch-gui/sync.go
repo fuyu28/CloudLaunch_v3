@@ -50,7 +50,9 @@ type SyncService struct {
 	transfers sync.WaitGroup
 }
 
-// gameOp は、ゲームごとの今の操作。確認中と転送中は cancel が、確認を終えて承認を待つ間は plan が入る。
+// gameOp は、ゲームごとの今の操作。確認中と転送中は cancel が、確認を終えて承認を待つ間は plan が入る。ダイアログを閉じても
+// plan は次の確認まで捨てず、カードから開き直せるようにする。承認の後に local・remote が変わっていれば syncore が
+// ErrPlanStale で止めるので、古い plan で利用者の見ていない転送はしない。
 type gameOp struct {
 	token        string
 	cancel       context.CancelFunc
@@ -65,13 +67,13 @@ type CheckView struct {
 	Status string `json:"status"`
 	// Error は、空でなければ失敗の文言として出す
 	Error string `json:"error"`
-	// Dialog は、確認した plan を持つとき（削除済みと失敗のとき以外）に入る
+	// Dialog は、確認した plan があり、どちらかの向きに転送できるときに入る
 	Dialog *DialogView `json:"dialog"`
 }
 
 // DialogView は、確認ダイアログ。判定どおりの同期と、上書き（仕様書 7 章）の両方をここから選ぶ。
 type DialogView struct {
-	// Token は、Transfer と Dismiss へそのまま返す
+	// Token は、Transfer へそのまま返す
 	Token string `json:"token"`
 	// Open は、確認の直後に開くことを表す。判定が変更なしのときは開かず、利用者が上書きを選ぶときに開く
 	Open    bool         `json:"open"`
@@ -240,15 +242,6 @@ func (s *SyncService) beginTransfer(gameID, token string, cancel context.CancelF
 	op.cancel = cancel
 	s.transfers.Add(1)
 	return op
-}
-
-// Dismiss は、確認ダイアログを承認せずに閉じたときに呼び、承認を待つ plan を捨てる。token が今の確認のものでなければ何もしない。
-func (s *SyncService) Dismiss(gameID, token string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if op := s.ops[gameID]; op != nil && op.token == token && op.plan != nil && !op.transferring {
-		delete(s.ops, gameID)
-	}
 }
 
 // ServiceShutdown は、Wails が終了するときに、DB を閉じる前に呼ぶ。転送を打ち切り、終わるまで待つ。閉じた DB に Push・Pull の

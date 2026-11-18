@@ -3,6 +3,7 @@ package main
 
 import (
 	"fmt"
+	"math"
 
 	"github.com/fuyu28/CloudLaunch_v3/internal/syncore"
 )
@@ -18,6 +19,10 @@ func checkView(plan syncore.Plan, err error) CheckView {
 	}
 	if err != nil {
 		return CheckView{Error: explainSyncError(err)}
+	}
+	// どちらの上書きも選べない（7-O3・7-O4）ので、開いても何もできないダイアログを出さない
+	if plan.Local.Hash == "" && plan.Remote.Hash == "" {
+		return CheckView{Status: "変更なし（セーブはまだありません）"}
 	}
 	d := &DialogView{Open: true, Compare: compareRows(plan), Actions: []ActionView{uploadAction(plan), downloadAction(plan)}}
 	var status string
@@ -125,6 +130,7 @@ func transferredLabel(plan syncore.Plan, d TransferDirection, overwrite bool) st
 	}
 }
 
+// formatBytes は、小数第 1 位に丸めた後の値で単位を選ぶ。丸める前の値で選ぶと、1 MB の少し手前が「1024.0 KB」になる。
 func formatBytes(n int64) string {
 	const unit = 1024
 	if n < unit {
@@ -132,7 +138,7 @@ func formatBytes(n int64) string {
 	}
 	value, suffix := float64(n)/unit, "KB"
 	for _, s := range []string{"MB", "GB", "TB"} {
-		if value < unit {
+		if math.Round(value*10)/10 < unit {
 			break
 		}
 		value, suffix = value/unit, s
