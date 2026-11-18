@@ -196,6 +196,46 @@ func TestPull(t *testing.T) {
 		}
 	})
 
+	t.Run("6-F1 取得したファイルの mtime を、manifest の createdAt にする", func(t *testing.T) {
+		e := newEnv(t)
+		removeSaveDir(t, e)
+		plan := approvedPull(t, e, files)
+
+		if err := e.core.Pull(t.Context(), plan, syncore.PullOptions{}); err != nil {
+			t.Fatalf("Pull: %v", err)
+		}
+		// putManifest が書く createdAt
+		want := time.Date(2026, 10, 27, 0, 0, 0, 0, time.UTC)
+		for rel := range files {
+			info, err := os.Stat(filepath.Join(e.saveDir, filepath.FromSlash(rel)))
+			if err != nil {
+				t.Fatalf("stat %s: %v", rel, err)
+			}
+			if !info.ModTime().Equal(want) {
+				t.Errorf("%s の mtime = %v, want %v", rel, info.ModTime(), want)
+			}
+		}
+		// 確認ダイアログの local の最終更新日時が、取り込んだ世代の日時になる（7 章）
+		if got := e.planWant(t, syncore.DecisionNoChange).Local.ModTime; !got.Equal(want) {
+			t.Errorf("Local.ModTime = %v, want %v", got, want)
+		}
+	})
+
+	t.Run("6-F1 createdAt が読めなければ、mtime を設定せずに Pull を続ける", func(t *testing.T) {
+		e := newEnv(t)
+		removeSaveDir(t, e)
+		e.putObjects(t, files)
+		e.putRawManifest(t, map[string]any{"createdAt": "not-a-time", "entries": entriesOf(files)})
+		plan := e.planWant(t, syncore.DecisionPull)
+
+		if err := e.core.Pull(t.Context(), plan, syncore.PullOptions{}); err != nil {
+			t.Fatalf("Pull: %v", err)
+		}
+		if diff := cmp.Diff(files, readFiles(t, e.saveDir)); diff != "" {
+			t.Errorf("セーブフォルダ (-want +got):\n%s", diff)
+		}
+	})
+
 	t.Run("6-L3 stage を作る前に、ジャーナルに live・stage・old のパスを書く", func(t *testing.T) {
 		e := newEnv(t)
 		plan := approvedPull(t, e, files)

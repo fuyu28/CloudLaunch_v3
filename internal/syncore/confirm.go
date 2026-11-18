@@ -1,0 +1,46 @@
+// 確認ダイアログに出す情報（仕様書 7 章）。転送すると変わるファイルの数え方。
+package syncore
+
+// Direction は、Changes で数える転送の向き。
+type Direction int
+
+const (
+	DirectionUpload Direction = iota
+	DirectionDownload
+)
+
+// Changes は、転送すると転送先で追加・変更・削除されるファイルの数と、転送するファイルの大きさの合計。
+type Changes struct {
+	Added    int
+	Modified int
+	Deleted  int
+	Bytes    int64
+}
+
+// Changes は、アップロードなら remote の、ダウンロードなら local の entries を基準に、転送元の entries と path で
+// 突き合わせて数える。中身が同じかは sha256 で比べる。判定によらず数えるので、上書きの確認にも使える。
+func (p Plan) Changes(d Direction) Changes {
+	from, to := p.Local.Entries, p.Remote.Manifest.Entries
+	if d == DirectionDownload {
+		from, to = to, from
+	}
+	existing := make(map[string]string, len(to))
+	for _, e := range to {
+		existing[e.Path] = e.SHA256
+	}
+	var c Changes
+	for _, e := range from {
+		sum, ok := existing[e.Path]
+		switch {
+		case !ok:
+			c.Added++
+			c.Bytes += e.Size
+		case sum != e.SHA256:
+			c.Modified++
+			c.Bytes += e.Size
+		}
+		delete(existing, e.Path)
+	}
+	c.Deleted = len(existing)
+	return c
+}

@@ -2,9 +2,10 @@
   import { Events } from "@wailsio/runtime";
   import { HomeService, SyncService } from "../bindings/github.com/fuyu28/CloudLaunch_v3/cmd/cloudlaunch-gui";
   import type {
-    ConfirmView,
+    DialogView,
     HomeView,
     ProgressEvent,
+    TransferDirection,
   } from "../bindings/github.com/fuyu28/CloudLaunch_v3/cmd/cloudlaunch-gui";
   import { SyncProgress } from "../bindings/events";
 
@@ -16,7 +17,9 @@
   let cards = $state<Record<string, CardState>>({});
   let checking = $state<Record<string, boolean>>({});
   let transfers = $state<Record<string, Transfer>>({});
-  let dialog = $state<{ gameId: string; title: string; confirm: ConfirmView } | null>(null);
+  // dialogs は、最後の確認で受け取ったダイアログ。変更なしのときは開かずに持ち、カードの「上書き…」から開く
+  let dialogs = $state<Record<string, DialogView>>({});
+  let dialog = $state<{ gameId: string; title: string; view: DialogView } | null>(null);
 
   HomeService.Load()
     .then((v) => (view = v))
@@ -29,26 +32,22 @@
 
   async function check(gameId: string, title: string) {
     checking[gameId] = true;
+    // 新しい確認を始めると、Go は前の確認の plan を捨てる
+    delete dialogs[gameId];
     try {
       const v = await SyncService.Check(gameId);
       // 置き換えた新しい確認が、まだ走っている
       if (v.superseded) return;
       checking[gameId] = false;
       cards[gameId] = { status: v.status, error: v.error };
-      if (v.confirm) dialog = { gameId, title, confirm: v.confirm };
+      if (v.dialog) {
+        dialogs[gameId] = v.dialog;
+        if (v.dialog.open) dialog = { gameId, title, view: v.dialog };
+      }
     } catch (e) {
       checking[gameId] = false;
       cards[gameId] = { status: "", error: String(e) };
     }
-  }
-
-  function dismiss() {
-    if (!dialog) return;
-    const { gameId, confirm } = dialog;
-    dialog = null;
-    SyncService.Dismiss(gameId, confirm.token).catch((e) => {
-      cards[gameId] = { status: "", error: String(e) };
-    });
   }
 
   function cancel(gameId: string) {
@@ -58,13 +57,14 @@
     });
   }
 
-  async function approve() {
+  async function approve(direction: TransferDirection) {
     if (!dialog) return;
-    const { gameId, title, confirm } = dialog;
+    const { gameId, title, view } = dialog;
     dialog = null;
+    delete dialogs[gameId];
     transfers[gameId] = { title, progress: null, cancelError: "" };
     try {
-      const v = await SyncService.Transfer(gameId, confirm.token);
+      const v = await SyncService.Transfer(gameId, view.token, direction);
       cards[gameId] = { status: v.status, error: v.error };
     } catch (e) {
       cards[gameId] = { status: "", error: String(e) };
@@ -111,6 +111,13 @@
           {:else if card}
             {#if card.status}<div class="status">{card.status}</div>{/if}
             {#if card.error}<div class="error">{card.error}</div>{/if}
+            {#if dialogs[game.id] && !checking[game.id]}
+              <div>
+                <button onclick={() => (dialog = { gameId: game.id, title: game.title, view: dialogs[game.id] })}>
+                  上書き…
+                </button>
+              </div>
+            {/if}
           {/if}
         </li>
       {/each}
@@ -134,17 +141,30 @@
 {#if dialog}
   <div class="backdrop">
     <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="dialog-title">
-      <h2 id="dialog-title">{dialog.title}: {dialog.confirm.title}</h2>
+      <h2 id="dialog-title">{dialog.title}: {dialog.view.title}</h2>
+      {#if dialog.view.warning}<p class="error">{dialog.view.warning}</p>{/if}
       <table>
+        <thead>
+          <tr><th></th><th>この PC</th><th>リモート</th></tr>
+        </thead>
         <tbody>
-          {#each dialog.confirm.rows as row (row.label)}
-            <tr><th>{row.label}</th><td>{row.value}</td></tr>
+          {#each dialog.view.compare as row (row.label)}
+            <tr><th>{row.label}</th><td>{row.local}</td><td>{row.remote}</td></tr>
           {/each}
         </tbody>
       </table>
+      <ul class="choices">
+        {#each dialog.view.actions as action (action.direction)}
+          <li>
+            <button class:primary={action.primary} disabled={action.disabled} onclick={() => approve(action.direction)}>
+              {action.label}
+            </button>
+            <span class="note">{action.note}</span>
+          </li>
+        {/each}
+      </ul>
       <div class="actions">
-        <button onclick={dismiss}>やめる</button>
-        <button class="primary" onclick={approve}>{dialog.confirm.approveLabel}</button>
+        <button onclick={() => (dialog = null)}>やめる</button>
       </div>
     </div>
   </div>
@@ -249,5 +269,24 @@
   }
   .primary {
     font-weight: 600;
+  }
+  .dialog td {
+    padding-right: 16px;
+  }
+  .choices {
+    list-style: none;
+    padding: 0;
+    margin: 16px 0 0;
+    display: grid;
+    gap: 8px;
+  }
+  .choices li {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .note {
+    font-size: 0.875em;
+    color: #6e6e73;
   }
 </style>

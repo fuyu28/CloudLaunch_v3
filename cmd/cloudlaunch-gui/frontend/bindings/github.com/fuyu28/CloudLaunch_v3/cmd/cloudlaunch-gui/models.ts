@@ -9,6 +9,51 @@ import { Create as $Create } from "@wailsio/runtime";
 // @ts-ignore: Unused imports
 import * as syncore$0 from "../../internal/syncore/models.js";
 
+export class ActionView {
+    "direction": TransferDirection;
+    "label": string;
+
+    /**
+     * Note は、転送で変わるものか、選べない理由
+     */
+    "note": string;
+    "disabled": boolean;
+
+    /**
+     * Primary は、判定どおりの同期であることを表す
+     */
+    "primary": boolean;
+
+    /** Creates a new ActionView instance. */
+    constructor($$source: Partial<ActionView> = {}) {
+        if (!("direction" in $$source)) {
+            this["direction"] = TransferDirection.$zero;
+        }
+        if (!("label" in $$source)) {
+            this["label"] = "";
+        }
+        if (!("note" in $$source)) {
+            this["note"] = "";
+        }
+        if (!("disabled" in $$source)) {
+            this["disabled"] = false;
+        }
+        if (!("primary" in $$source)) {
+            this["primary"] = false;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new ActionView instance from a string or object.
+     */
+    static createFrom($$source: any = {}): ActionView {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new ActionView($$parsedSource as Partial<ActionView>);
+    }
+}
+
 export class CheckView {
     /**
      * Superseded は、同じゲームの新しい確認に置き換えられたことを表す。このときはほかの項目を使わず、表示も変えない
@@ -26,9 +71,9 @@ export class CheckView {
     "error": string;
 
     /**
-     * Confirm は、承認を求めるときだけ入る
+     * Dialog は、確認した plan があり、どちらかの向きに転送できるときに入る
      */
-    "confirm": ConfirmView | null;
+    "dialog": DialogView | null;
 
     /** Creates a new CheckView instance. */
     constructor($$source: Partial<CheckView> = {}) {
@@ -41,8 +86,8 @@ export class CheckView {
         if (!("error" in $$source)) {
             this["error"] = "";
         }
-        if (!("confirm" in $$source)) {
-            this["confirm"] = null;
+        if (!("dialog" in $$source)) {
+            this["dialog"] = null;
         }
 
         Object.assign(this, $$source);
@@ -54,50 +99,98 @@ export class CheckView {
     static createFrom($$source: any = {}): CheckView {
         const $$createField3_0 = $$createType1;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
-        if ("confirm" in $$parsedSource) {
-            $$parsedSource["confirm"] = $$createField3_0($$parsedSource["confirm"]);
+        if ("dialog" in $$parsedSource) {
+            $$parsedSource["dialog"] = $$createField3_0($$parsedSource["dialog"]);
         }
         return new CheckView($$parsedSource as Partial<CheckView>);
     }
 }
 
-export class ConfirmView {
-    /**
-     * Token は、承認のときに Transfer へそのまま返す
-     */
-    "token": string;
-    "title": string;
-    "rows": InfoRow[];
-    "approveLabel": string;
+export class CompareRow {
+    "label": string;
+    "local": string;
+    "remote": string;
 
-    /** Creates a new ConfirmView instance. */
-    constructor($$source: Partial<ConfirmView> = {}) {
-        if (!("token" in $$source)) {
-            this["token"] = "";
+    /** Creates a new CompareRow instance. */
+    constructor($$source: Partial<CompareRow> = {}) {
+        if (!("label" in $$source)) {
+            this["label"] = "";
         }
-        if (!("title" in $$source)) {
-            this["title"] = "";
+        if (!("local" in $$source)) {
+            this["local"] = "";
         }
-        if (!("rows" in $$source)) {
-            this["rows"] = [];
-        }
-        if (!("approveLabel" in $$source)) {
-            this["approveLabel"] = "";
+        if (!("remote" in $$source)) {
+            this["remote"] = "";
         }
 
         Object.assign(this, $$source);
     }
 
     /**
-     * Creates a new ConfirmView instance from a string or object.
+     * Creates a new CompareRow instance from a string or object.
      */
-    static createFrom($$source: any = {}): ConfirmView {
-        const $$createField2_0 = $$createType3;
+    static createFrom($$source: any = {}): CompareRow {
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
-        if ("rows" in $$parsedSource) {
-            $$parsedSource["rows"] = $$createField2_0($$parsedSource["rows"]);
+        return new CompareRow($$parsedSource as Partial<CompareRow>);
+    }
+}
+
+/**
+ * DialogView は、確認ダイアログ。判定どおりの同期と、上書き（仕様書 7 章）の両方をここから選ぶ。
+ */
+export class DialogView {
+    /**
+     * Token は、Transfer へそのまま返す
+     */
+    "token": string;
+
+    /**
+     * Open は、確認の直後に開くことを表す。判定が変更なしのときは開かず、利用者が上書きを選ぶときに開く
+     */
+    "open": boolean;
+    "title": string;
+    "warning": string;
+    "compare": CompareRow[];
+    "actions": ActionView[];
+
+    /** Creates a new DialogView instance. */
+    constructor($$source: Partial<DialogView> = {}) {
+        if (!("token" in $$source)) {
+            this["token"] = "";
         }
-        return new ConfirmView($$parsedSource as Partial<ConfirmView>);
+        if (!("open" in $$source)) {
+            this["open"] = false;
+        }
+        if (!("title" in $$source)) {
+            this["title"] = "";
+        }
+        if (!("warning" in $$source)) {
+            this["warning"] = "";
+        }
+        if (!("compare" in $$source)) {
+            this["compare"] = [];
+        }
+        if (!("actions" in $$source)) {
+            this["actions"] = [];
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new DialogView instance from a string or object.
+     */
+    static createFrom($$source: any = {}): DialogView {
+        const $$createField4_0 = $$createType3;
+        const $$createField5_0 = $$createType5;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("compare" in $$parsedSource) {
+            $$parsedSource["compare"] = $$createField4_0($$parsedSource["compare"]);
+        }
+        if ("actions" in $$parsedSource) {
+            $$parsedSource["actions"] = $$createField5_0($$parsedSource["actions"]);
+        }
+        return new DialogView($$parsedSource as Partial<DialogView>);
     }
 }
 
@@ -158,37 +251,12 @@ export class HomeView {
      * Creates a new HomeView instance from a string or object.
      */
     static createFrom($$source: any = {}): HomeView {
-        const $$createField0_0 = $$createType5;
+        const $$createField0_0 = $$createType7;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("games" in $$parsedSource) {
             $$parsedSource["games"] = $$createField0_0($$parsedSource["games"]);
         }
         return new HomeView($$parsedSource as Partial<HomeView>);
-    }
-}
-
-export class InfoRow {
-    "label": string;
-    "value": string;
-
-    /** Creates a new InfoRow instance. */
-    constructor($$source: Partial<InfoRow> = {}) {
-        if (!("label" in $$source)) {
-            this["label"] = "";
-        }
-        if (!("value" in $$source)) {
-            this["value"] = "";
-        }
-
-        Object.assign(this, $$source);
-    }
-
-    /**
-     * Creates a new InfoRow instance from a string or object.
-     */
-    static createFrom($$source: any = {}): InfoRow {
-        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
-        return new InfoRow($$parsedSource as Partial<InfoRow>);
     }
 }
 
@@ -220,7 +288,7 @@ export class ProgressEvent {
      * Creates a new ProgressEvent instance from a string or object.
      */
     static createFrom($$source: any = {}): ProgressEvent {
-        const $$createField1_0 = $$createType6;
+        const $$createField1_0 = $$createType8;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("progress" in $$parsedSource) {
             $$parsedSource["progress"] = $$createField1_0($$parsedSource["progress"]);
@@ -228,6 +296,16 @@ export class ProgressEvent {
         return new ProgressEvent($$parsedSource as Partial<ProgressEvent>);
     }
 }
+
+export enum TransferDirection {
+    /**
+     * The Go zero value for the underlying type of the enum.
+     */
+    $zero = "",
+
+    TransferUpload = "upload",
+    TransferDownload = "download",
+};
 
 export class TransferView {
     "status": string;
@@ -255,10 +333,12 @@ export class TransferView {
 }
 
 // Private type creation functions
-const $$createType0 = ConfirmView.createFrom;
+const $$createType0 = DialogView.createFrom;
 const $$createType1 = $Create.Nullable($$createType0);
-const $$createType2 = InfoRow.createFrom;
+const $$createType2 = CompareRow.createFrom;
 const $$createType3 = $Create.Array($$createType2);
-const $$createType4 = GameCard.createFrom;
+const $$createType4 = ActionView.createFrom;
 const $$createType5 = $Create.Array($$createType4);
-const $$createType6 = syncore$0.Progress.createFrom;
+const $$createType6 = GameCard.createFrom;
+const $$createType7 = $Create.Array($$createType6);
+const $$createType8 = syncore$0.Progress.createFrom;

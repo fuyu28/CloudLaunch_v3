@@ -4,6 +4,7 @@ package syncore
 import (
 	"context"
 	"fmt"
+	"time"
 )
 
 type Decision int
@@ -46,6 +47,8 @@ type Plan struct {
 type LocalState struct {
 	Entries []Entry
 	Hash    string // ファイルが 1 つもなく、base が空 manifest のハッシュでなければ空
+	// ModTime は、ファイルの mtime の最大値（仕様書 7 章「確認ダイアログに出す情報」）。ファイルがなければゼロ値
+	ModTime time.Time
 }
 
 // localHash は、Status の判定と、Push・Pull の承認後の確認（ensureLocalUnchanged）で、同じ local を同じハッシュにするために 1 か所で決める。
@@ -79,11 +82,11 @@ func (c *Core) Status(ctx context.Context, gameID string) (Plan, error) {
 	}
 	saveFolder, base := game.SaveFolderPath, game.BaseManifestHash
 
-	entries, err := localEntries(ctx, saveFolder)
+	entries, modTime, err := localEntries(ctx, saveFolder)
 	if err != nil {
 		return Plan{}, err
 	}
-	local := LocalState{Entries: entries, Hash: localHash(entries, base)}
+	local := LocalState{Entries: entries, Hash: localHash(entries, base), ModTime: modTime}
 	remote, err := c.readRemote(ctx, gameID)
 	if err != nil {
 		return Plan{}, err
