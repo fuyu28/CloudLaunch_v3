@@ -338,6 +338,57 @@ func TestSaveRemote(t *testing.T) {
 	}
 }
 
+func TestSavedRemote(t *testing.T) {
+	ctx := context.Background()
+
+	tests := []struct {
+		name string
+		env  map[string]string
+		// saved は、SavedRemote を呼ぶ前に SaveRemote で保存する値。nil なら保存しない
+		saved *settings.RemoteInput
+		want  settings.SavedRemote
+	}{
+		{
+			name: "3章/接続情報/何も保存していなければ、設定画面に出す値は空",
+		},
+		{
+			name: "3章/接続情報/設定画面に出す値は、シークレットを除き、保存してあるかだけを返す",
+			saved: &settings.RemoteInput{
+				Endpoint: savedInput.Endpoint, Bucket: savedInput.Bucket,
+				AccessKeyID: savedInput.AccessKeyID, SecretAccessKey: savedInput.SecretAccessKey,
+			},
+			want: settings.SavedRemote{
+				Endpoint: savedInput.Endpoint, Bucket: savedInput.Bucket, AccessKeyID: savedInput.AccessKeyID, HasSecret: true,
+			},
+		},
+		{
+			name:  "3章/接続情報/環境変数があっても、設定画面には保存した値を出す",
+			env:   fullEnv,
+			saved: &savedInput,
+			want: settings.SavedRemote{
+				Endpoint: savedInput.Endpoint, Region: "auto", Bucket: savedInput.Bucket,
+				AccessKeyID: savedInput.AccessKeyID, HasSecret: true,
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newFixture(t, tt.env)
+			if tt.saved != nil {
+				save(t, f, *tt.saved)
+			}
+
+			got, err := f.settings.SavedRemote(ctx)
+			if err != nil {
+				t.Fatalf("SavedRemote: %v", err)
+			}
+			if diff := cmp.Diff(tt.want, got); diff != "" {
+				t.Errorf("SavedRemote (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
 // TestRemoteFromEnv は、環境変数があるときに保存先を読まないことを、保存先の読み出しを失敗させて確かめる。
 func TestRemoteFromEnv(t *testing.T) {
 	ctx := context.Background()

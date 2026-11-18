@@ -138,6 +138,21 @@ func (s *Settings) savedRemote(ctx context.Context) (Remote, error) {
 	return r, nil
 }
 
+// SavedRemote は、設定画面に出す保存した接続情報。画面に出す必要のないシークレットは持たず、保存してあるかだけを持つ。
+// Region は、空なら空のまま持つ。
+type SavedRemote struct {
+	Endpoint    string
+	Region      string
+	Bucket      string
+	AccessKeyID string
+	HasSecret   bool
+}
+
+// SavedRemote は、環境変数が効いていても、保存した値を返す。
+func (s *Settings) SavedRemote(ctx context.Context) (SavedRemote, error) {
+	return SavedRemote{}, nil
+}
+
 func (s *Settings) UsesEnv() bool {
 	for _, k := range []string{envEndpoint, envRegion, envBucket, envAccessKeyID, envSecretAccessKey} {
 		if s.cfg.Getenv(k) != "" {
