@@ -6,6 +6,7 @@
     SyncService,
   } from "../bindings/github.com/fuyu28/CloudLaunch_v3/cmd/cloudlaunch-gui";
   import type {
+    BackupView,
     DialogView,
     HomeView,
     ProgressEvent,
@@ -24,8 +25,9 @@
   // dialogs は、最後の確認で受け取ったダイアログ。変更なしのときは開かずに持ち、カードの「上書き…」から開く
   let dialogs = $state<Record<string, DialogView>>({});
   let dialog = $state<{ gameId: string; title: string; view: DialogView } | null>(null);
-  // backupNotes は、バックアップのフォルダを開いたときの案内。確認の結果の行とは別に出す
-  let backupNotes = $state<Record<string, CardState>>({});
+  // backupNotes は、バックアップのフォルダを開いたときの案内。確認の結果の行とは別に出し、次の確認か転送で消す
+  let backupNotes = $state<Record<string, BackupView>>({});
+  let openingBackups = $state<Record<string, boolean>>({});
 
   HomeService.Load()
     .then((v) => (view = v))
@@ -38,6 +40,7 @@
 
   async function check(gameId: string, title: string) {
     checking[gameId] = true;
+    delete backupNotes[gameId];
     // 新しい確認を始めると、Go は前の確認の plan を捨てる
     delete dialogs[gameId];
     try {
@@ -57,10 +60,13 @@
   }
 
   async function openBackups(gameId: string) {
+    openingBackups[gameId] = true;
     try {
-      backupNotes[gameId] = { status: await BackupService.OpenBackups(gameId), error: "" };
+      backupNotes[gameId] = await BackupService.OpenBackups(gameId);
     } catch (e) {
-      backupNotes[gameId] = { status: "", error: "バックアップのフォルダを開けませんでした: " + String(e) };
+      backupNotes[gameId] = { status: "", error: String(e) };
+    } finally {
+      openingBackups[gameId] = false;
     }
   }
 
@@ -76,6 +82,7 @@
     const { gameId, title, view } = dialog;
     dialog = null;
     delete dialogs[gameId];
+    delete backupNotes[gameId];
     transfers[gameId] = { title, progress: null, cancelError: "" };
     try {
       const v = await SyncService.Transfer(gameId, view.token, direction);
@@ -116,7 +123,7 @@
               {/if}
             </div>
             <div class="buttons">
-              <button onclick={() => openBackups(game.id)}>バックアップ</button>
+              <button disabled={openingBackups[game.id]} onclick={() => openBackups(game.id)}>バックアップ</button>
               <button disabled={checking[game.id] || !!transfer} onclick={() => check(game.id, game.title)}>
                 {checking[game.id] ? "確認中…" : "確認"}
               </button>

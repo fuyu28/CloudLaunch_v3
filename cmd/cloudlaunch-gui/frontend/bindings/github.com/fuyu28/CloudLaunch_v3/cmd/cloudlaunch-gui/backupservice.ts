@@ -5,9 +5,15 @@
 // @ts-ignore: Unused imports
 import { Call as $Call, CancellablePromise as $CancellablePromise, Create as $Create } from "@wailsio/runtime";
 
-/**
- * OpenBackups は、フォルダを開けたら戻し方の案内を、バックアップがまだなければその旨を、カードに出す文として返す。
- */
-export function OpenBackups(gameID: string): $CancellablePromise<string> {
-    return $Call.ByID(1721892122, gameID);
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
+import * as $models from "./models.js";
+
+export function OpenBackups(gameID: string): $CancellablePromise<$models.BackupView> {
+    return $Call.ByID(1721892122, gameID).then(($result: any) => {
+        return $$createType0($result);
+    });
 }
+
+// Private type creation functions
+const $$createType0 = $models.BackupView.createFrom;

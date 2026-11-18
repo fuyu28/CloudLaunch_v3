@@ -354,4 +354,13 @@ func TestBackupDir(t *testing.T) {
 			t.Errorf("BackupDir = %q, want an error", dir)
 		}
 	})
+
+	t.Run("3章/バックアップ/gameId が空か、パスの区切りか . を含むなら、BackupDir はエラーを返す", func(t *testing.T) {
+		e := newEnv(t)
+		for _, id := range []string{"", ".", "..", `..\..`, "../x", "a/b", `a\b`} {
+			if dir, err := e.core.BackupDir(id); err == nil {
+				t.Errorf("BackupDir(%q) = %q, want an error", id, dir)
+			}
+		}
+	})
 }

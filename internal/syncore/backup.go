@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"time"
 )
 
@@ -36,10 +37,14 @@ func (c *Core) checkBackupConfig() error {
 }
 
 // BackupDir は、ゲームのバックアップを並べるフォルダを返す。フォルダは作らないので、バックアップがまだなければ存在しない。
+// gameID は GUI から渡るので、BackupsDir の外や BackupsDir そのものを指す値を拒否する。
 func (c *Core) BackupDir(gameID string) (string, error) {
 	// 空のまま Join すると、作業ディレクトリの下を指す
 	if c.cfg.BackupsDir == "" {
 		return "", errBackupsDirNotSet
+	}
+	if gameID == "" || gameID == "." || gameID == ".." || strings.ContainsAny(gameID, `/\`) {
+		return "", fmt.Errorf("invalid game id %q", gameID)
 	}
 	return c.backupDir(gameID), nil
 }
@@ -49,11 +54,10 @@ func (c *Core) backupDir(gameID string) string {
 }
 
 func (c *Core) makeBackupDir(gameID string) (string, error) {
-	// 空のまま Join すると、作業ディレクトリの下に作ってしまう
-	if c.cfg.BackupsDir == "" {
-		return "", errBackupsDirNotSet
+	dir, err := c.BackupDir(gameID)
+	if err != nil {
+		return "", err
 	}
-	dir := c.backupDir(gameID)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", fmt.Errorf("create backups directory: %w", err)
 	}

@@ -3,6 +3,7 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 
@@ -20,16 +21,35 @@ type BackupService struct {
 	openFolder func(dir string) error
 }
 
-// OpenBackups は、フォルダを開けたら戻し方の案内を、バックアップがまだなければその旨を、カードに出す文として返す。
-func (b *BackupService) OpenBackups(gameID string) (string, error) {
+// BackupView は、カードに出す文。どちらか一方だけが入る。
+type BackupView struct {
+	Status string `json:"status"`
+	Error  string `json:"error"`
+}
+
+func (b *BackupService) OpenBackups(gameID string) BackupView {
+	note, err := b.openBackups(gameID)
+	if err != nil {
+		return BackupView{Error: "バックアップのフォルダを開けませんでした: " + err.Error()}
+	}
+	return BackupView{Status: note}
+}
+
+// openBackups は、Windows では、explorer が窓を開けなくてもエラーを返さない。Wails が explorer の終了コードを見ないため。
+func (b *BackupService) openBackups(gameID string) (string, error) {
 	dir, err := b.save.BackupDir(gameID)
 	if err != nil {
 		return "", err
 	}
-	if _, err := os.Stat(dir); errors.Is(err, fs.ErrNotExist) {
+	info, err := os.Stat(dir)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
 		return noBackups, nil
-	} else if err != nil {
+	case err != nil:
 		return "", err
+	case !info.IsDir():
+		// explorer にファイルを渡すと、関連づけたアプリでそのファイルを開いてしまう
+		return "", fmt.Errorf("%s is not a folder", dir)
 	}
 	if err := b.openFolder(dir); err != nil {
 		return "", err

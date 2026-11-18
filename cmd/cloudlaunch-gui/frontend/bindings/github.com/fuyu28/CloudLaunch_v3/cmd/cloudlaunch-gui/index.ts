@@ -12,6 +12,7 @@ export {
 
 export {
     ActionView,
+    BackupView,
     CheckView,
     CompareRow,
     DialogView,
