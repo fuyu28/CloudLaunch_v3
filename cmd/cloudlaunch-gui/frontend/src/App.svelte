@@ -13,6 +13,7 @@
     TransferDirection,
   } from "../bindings/github.com/fuyu28/CloudLaunch_v3/cmd/cloudlaunch-gui";
   import { SyncProgress } from "../bindings/events";
+  import Settings from "./Settings.svelte";
 
   type CardState = { status: string; error: string };
   type Transfer = { title: string; progress: ProgressEvent | null; cancelError: string };
@@ -36,9 +37,25 @@
     delete backupNotes[gameId];
   }
 
-  HomeService.Load()
-    .then((v) => (view = v))
-    .catch((e) => (loadError = String(e)));
+  // page は、転送の帯と進捗を設定画面でも出し続けるよう、App の中で画面だけを切り替える
+  let page = $state<"home" | "settings">("home");
+
+  function loadHome() {
+    HomeService.Load()
+      .then((v) => {
+        view = v;
+        loadError = "";
+      })
+      .catch((e) => (loadError = String(e)));
+  }
+  loadHome();
+
+  function backToHome() {
+    page = "home";
+    // 設定を保存すると、Go は確認済みの plan を捨てる。古い「上書き…」から開いても、承認は通らないので出さない
+    dialogs = {};
+    loadHome();
+  }
 
   Events.On(SyncProgress, (ev) => {
     const t = transfers[ev.data.gameId];
@@ -106,12 +123,24 @@
 
 </script>
 
+{#if page === "settings"}
+  <Settings onBack={backToHome} />
+{:else}
 <main>
   {#if view?.banner}
     <div class="banner" role="alert">{view.banner}</div>
   {/if}
+  {#if view?.settingsNotice}
+    <div class="banner settings-notice" role="alert">
+      <span>{view.settingsNotice}</span>
+      <button onclick={() => (page = "settings")}>設定を開く</button>
+    </div>
+  {/if}
 
-  <h1>ゲーム</h1>
+  <div class="top">
+    <h1>ゲーム</h1>
+    <button onclick={() => (page = "settings")}>設定</button>
+  </div>
 
   {#if loadError}
     <p class="error">一覧を読み込めませんでした: {loadError}</p>
@@ -160,6 +189,7 @@
     </ul>
   {/if}
 </main>
+{/if}
 
 {#if Object.keys(transfers).length > 0}
   <footer class="transfers">
@@ -221,6 +251,17 @@
     padding: 8px 24px;
     background: #fff4d6;
     border-bottom: 1px solid #e8c766;
+  }
+  .settings-notice {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  .top {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
   }
   .error {
     color: #b3261e;

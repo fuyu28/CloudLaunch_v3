@@ -12,6 +12,7 @@ import (
 // HomeService は Wails のサービスとして、フロントから呼ばれる。
 type HomeService struct {
 	store  *store.Store
+	sync   *SyncService
 	banner string
 }
 
@@ -19,6 +20,8 @@ type HomeView struct {
 	Games []GameCard `json:"games"`
 	// Banner は、空でなければ画面の上の帯に出す
 	Banner string `json:"banner"`
+	// SettingsNotice は、空でなければ、設定画面へ移るボタンと一緒に画面の上の帯に出す
+	SettingsNotice string `json:"settingsNotice"`
 }
 
 type GameCard struct {
@@ -37,7 +40,7 @@ func (h *HomeService) Load(ctx context.Context) (HomeView, error) {
 	for _, g := range games {
 		cards = append(cards, GameCard{ID: g.ID, Title: g.Title, Brand: g.Brand})
 	}
-	return HomeView{Games: cards, Banner: h.banner}, nil
+	return HomeView{Games: cards, Banner: h.banner, SettingsNotice: h.sync.settingsNotice()}, nil
 }
 
 // recoverBanner は、起動時の復旧が終わらなかったときに帯に出す文言を返す。失敗した行はジャーナルに残り、次の起動で
