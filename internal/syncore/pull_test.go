@@ -561,39 +561,40 @@ func TestPull差分の取得(t *testing.T) {
 		}
 	})
 
-	t.Run("6-F1 live からコピーしたファイルの mtime も、manifest の createdAt にする", func(t *testing.T) {
+	t.Run("6-F1 コピーしたファイルの mtime も、manifest の createdAt にする", func(t *testing.T) {
 		e := newEnv(t)
-		plan := pullOverLocal(t, e, local, remote)
+		// slot1.sav は live から、slot3.sav は取得した slot2.sav から stage の中でコピーする
+		plan := pullOverLocal(t, e, local, map[string]string{"slot1.sav": "one", "slot2.sav": "two", "slot3.sav": "two"})
 
 		if err := e.core.Pull(t.Context(), plan, syncore.PullOptions{}); err != nil {
 			t.Fatalf("Pull: %v", err)
 		}
 		// putManifest が書く createdAt
 		want := time.Date(2026, 10, 27, 0, 0, 0, 0, time.UTC)
-		info, err := os.Stat(filepath.Join(e.saveDir, "slot1.sav"))
-		if err != nil {
-			t.Fatalf("stat: %v", err)
-		}
-		if !info.ModTime().Equal(want) {
-			t.Errorf("slot1.sav の mtime = %v, want %v", info.ModTime(), want)
+		for _, rel := range []string{"slot1.sav", "slot3.sav"} {
+			info, err := os.Stat(filepath.Join(e.saveDir, rel))
+			if err != nil {
+				t.Fatalf("stat %s: %v", rel, err)
+			}
+			if !info.ModTime().Equal(want) {
+				t.Errorf("%s の mtime = %v, want %v", rel, info.ModTime(), want)
+			}
 		}
 	})
 
-	t.Run("6-F3 承認後に live のコピーの元が書き換わっていたら、手順 5 で中止し、stage とジャーナルを削除する", func(t *testing.T) {
+	t.Run("6-F3 承認後に live のコピーの元が書き換わっていたら ErrPlanStale、stage とジャーナルを削除する", func(t *testing.T) {
 		e := newEnv(t)
 		plan := pullOverLocal(t, e, local, remote)
 		changed := map[string]string{"slot1.sav": "changed", "slot2.sav": "old"}
 		writeFiles(t, e.saveDir, changed)
 
-		// 手順 6 まで進めば ErrPlanStale になる
-		err := e.core.Pull(t.Context(), plan, syncore.PullOptions{})
-		if err == nil || errors.Is(err, syncore.ErrPlanStale) {
-			t.Fatalf("Pull error = %v, want an error other than ErrPlanStale", err)
+		if err := e.core.Pull(t.Context(), plan, syncore.PullOptions{}); !errors.Is(err, syncore.ErrPlanStale) {
+			t.Fatalf("Pull error = %v, want ErrPlanStale", err)
 		}
 		assertCleanedUp(t, e, changed)
 	})
 
-	t.Run("6-F3 コピーの元が消えていたら、取得に切り替えずに中止し、stage とジャーナルを削除する", func(t *testing.T) {
+	t.Run("6-F3 コピーの元が消えていたら、取得に切り替えずに ErrPlanStale、stage とジャーナルを削除する", func(t *testing.T) {
 		e := newEnv(t)
 		plan := pullOverLocal(t, e, local, remote)
 		if err := os.Remove(filepath.Join(e.saveDir, "slot1.sav")); err != nil {
@@ -601,9 +602,8 @@ func TestPull差分の取得(t *testing.T) {
 		}
 		gets := recordObjectGets(e)
 
-		err := e.core.Pull(t.Context(), plan, syncore.PullOptions{})
-		if err == nil || errors.Is(err, syncore.ErrPlanStale) {
-			t.Fatalf("Pull error = %v, want an error other than ErrPlanStale", err)
+		if err := e.core.Pull(t.Context(), plan, syncore.PullOptions{}); !errors.Is(err, syncore.ErrPlanStale) {
+			t.Fatalf("Pull error = %v, want ErrPlanStale", err)
 		}
 		if diff := cmp.Diff([]string{objectKey("two")}, gets()); diff != "" {
 			t.Errorf("取得した object (-want +got):\n%s", diff)

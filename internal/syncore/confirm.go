@@ -31,23 +31,23 @@ func (p Plan) Changes(d Direction) Changes {
 		existing[e.Path] = e.SHA256
 	}
 	var c Changes
-	var changedBytes int64
 	for _, e := range from {
 		sum, ok := existing[e.Path]
+		delete(existing, e.Path)
 		switch {
 		case !ok:
 			c.Added++
-			changedBytes += e.Size
 		case sum != e.SHA256:
 			c.Modified++
-			changedBytes += e.Size
+		default:
+			continue
 		}
-		delete(existing, e.Path)
+		if d == DirectionUpload {
+			c.Bytes += e.Size
+		}
 	}
 	c.Deleted = len(existing)
-	c.Bytes = changedBytes
 	if d == DirectionDownload {
-		c.Bytes = 0
 		for _, e := range fetchEntries(p.Remote.Manifest.Entries, p.Local.Entries) {
 			c.Bytes += e.Size
 		}
