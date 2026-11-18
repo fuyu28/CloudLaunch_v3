@@ -464,7 +464,7 @@ func TestPull空manifestのbase(t *testing.T) {
 	})
 }
 
-// recordObjectGets は、リモートの object の GET のキーを、呼ばれた順に記録する。
+// recordObjectGets は e.remote.Before を置き換えるので、failOn などの失敗の仕込みと一緒には使えない。
 func recordObjectGets(e env) func() []string {
 	var mu sync.Mutex
 	var keys []string

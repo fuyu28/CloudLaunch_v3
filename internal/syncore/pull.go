@@ -157,8 +157,8 @@ func (c *Core) abortPull(ctx context.Context, opID, stage string, cause error) e
 	return cause
 }
 
-// fetchEntries は、remote の entries のうち、sha256 が local の entries にないものを、sha256 ごとに最初の 1 つだけ返す。
-// Pull が取得するのはこれだけである（6-F2）。
+// fetchEntries は、同じ sha256 のエントリが複数あっても最初の 1 つだけを返す（6-F2）。Changes の Bytes もこれで数え、
+// 確認ダイアログの「転送するサイズ」と Pull の転送量を一致させる。
 func fetchEntries(remote, local []Entry) []Entry {
 	have := make(map[string]bool, len(local))
 	for _, e := range local {
@@ -227,8 +227,8 @@ func (c *Core) copyToStage(src, dst string, mtime time.Time) error {
 	return c.writeStageFile(dst, f, mtime)
 }
 
-// writeStageFile は、取得したファイルもコピーしたファイルも、mtime がゼロ値でなければ mtime に合わせてから、ディスクへ
-// 書き出す（6-F1）。
+// writeStageFile は、取得とコピーで mtime（6-F1）と書き出しの扱いが食い違わないよう、stage への書き込みをまとめる。
+// mtime がゼロ値なら合わせない。
 func (c *Core) writeStageFile(dst string, r io.Reader, mtime time.Time) error {
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return fmt.Errorf("create directory in stage: %w", err)
