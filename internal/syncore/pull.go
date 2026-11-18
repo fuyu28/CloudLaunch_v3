@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/google/uuid"
 	"golang.org/x/sync/errgroup"
@@ -119,7 +120,13 @@ func (c *Core) prepareStage(ctx context.Context, plan Plan, game GameLocal, stag
 	if err := os.Mkdir(stage, 0o755); err != nil {
 		return fmt.Errorf("create stage: %w", err)
 	}
-	if err := c.downloadAll(ctx, plan.GameID, stage, plan.Remote.Manifest.Entries, progress); err != nil {
+	// createdAt は表示のためだけに持つ項目なので、読めなくても Pull を止めない（6-F1）
+	mtime, err := time.Parse(timeLayout, plan.Remote.Manifest.CreatedAt)
+	if err != nil {
+		c.cfg.Logger.WarnContext(ctx, "createdAt is not readable; keep mtime of pulled files", "game", plan.GameID, "createdAt", plan.Remote.Manifest.CreatedAt)
+		mtime = time.Time{}
+	}
+	if err := c.downloadAll(ctx, plan.GameID, stage, plan.Remote.Manifest.Entries, mtime, progress); err != nil {
 		return err
 	}
 
@@ -152,8 +159,8 @@ func (c *Core) abortPull(ctx context.Context, opID, stage string, cause error) e
 	return cause
 }
 
-// downloadAll は、中身が同じファイルも、ファイルごとに取得する。
-func (c *Core) downloadAll(ctx context.Context, gameID, stage string, entries []Entry, progress func(Progress)) error {
+// downloadAll は、中身が同じファイルも、ファイルごとに取得する。mtime がゼロ値でなければ、各ファイルの mtime にする（6-F1）。
+func (c *Core) downloadAll(ctx context.Context, gameID, stage string, entries []Entry, mtime time.Time, progress func(Progress)) error {
 	var size int64
 	for _, e := range entries {
 		size += e.Size
@@ -164,7 +171,7 @@ func (c *Core) downloadAll(ctx context.Context, gameID, stage string, entries []
 	for _, e := range entries {
 		dst := filepath.Join(stage, filepath.FromSlash(e.Path))
 		g.Go(func() error {
-			if err := c.downloadObject(ctx, objectKey(gameID, e.SHA256), dst); err != nil {
+			if err := c.downloadObject(ctx, objectKey(gameID, e.SHA256), dst, mtime); err != nil {
 				reporter.fail()
 				return err
 			}
@@ -175,7 +182,7 @@ func (c *Core) downloadAll(ctx context.Context, gameID, stage string, entries []
 	return g.Wait()
 }
 
-func (c *Core) downloadObject(ctx context.Context, key, dst string) error {
+func (c *Core) downloadObject(ctx context.Context, key, dst string, mtime time.Time) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -187,7 +194,7 @@ func (c *Core) downloadObject(ctx context.Context, key, dst string) error {
 		return fmt.Errorf("download object: %w", err)
 	}
 	defer func() { _ = r.Close() }()
-	if err := c.writeFileSynced(dst, r); err != nil {
+	if err := c.writeFileSyncedAt(dst, r, mtime); err != nil {
 		return fmt.Errorf("write %s: %w", dst, err)
 	}
 	return nil
