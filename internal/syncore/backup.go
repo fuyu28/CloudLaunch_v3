@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 const (
@@ -35,16 +37,29 @@ func (c *Core) checkBackupConfig() error {
 	return nil
 }
 
+// BackupDir はフォルダを作らないので、バックアップがまだなければ、返したパスは存在しない。
+// gameID は GUI から渡るので、UUID の正規の形でなければ拒否する。区切りと . を拒否するだけでは、Windows がパスの要素の
+// 末尾の . と空白を取り除くので、". " などが BackupsDir そのもの（全ゲームのバックアップ）を指す。
+func (c *Core) BackupDir(gameID string) (string, error) {
+	// 空のまま Join すると、作業ディレクトリの下を指す
+	if c.cfg.BackupsDir == "" {
+		return "", errBackupsDirNotSet
+	}
+	if u, err := uuid.Parse(gameID); err != nil || u.String() != gameID {
+		return "", fmt.Errorf("invalid game id %q", gameID)
+	}
+	return c.backupDir(gameID), nil
+}
+
 func (c *Core) backupDir(gameID string) string {
 	return filepath.Join(c.cfg.BackupsDir, gameID)
 }
 
 func (c *Core) makeBackupDir(gameID string) (string, error) {
-	// 空のまま Join すると、作業ディレクトリの下に作ってしまう
-	if c.cfg.BackupsDir == "" {
-		return "", errBackupsDirNotSet
+	dir, err := c.BackupDir(gameID)
+	if err != nil {
+		return "", err
 	}
-	dir := c.backupDir(gameID)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", fmt.Errorf("create backups directory: %w", err)
 	}

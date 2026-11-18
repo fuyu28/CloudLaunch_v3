@@ -1,7 +1,12 @@
 <script lang="ts">
   import { Events } from "@wailsio/runtime";
-  import { HomeService, SyncService } from "../bindings/github.com/fuyu28/CloudLaunch_v3/cmd/cloudlaunch-gui";
+  import {
+    BackupService,
+    HomeService,
+    SyncService,
+  } from "../bindings/github.com/fuyu28/CloudLaunch_v3/cmd/cloudlaunch-gui";
   import type {
+    BackupView,
     DialogView,
     HomeView,
     ProgressEvent,
@@ -20,6 +25,16 @@
   // dialogs は、最後の確認で受け取ったダイアログ。変更なしのときは開かずに持ち、カードの「上書き…」から開く
   let dialogs = $state<Record<string, DialogView>>({});
   let dialog = $state<{ gameId: string; title: string; view: DialogView } | null>(null);
+  // backupNotes は、バックアップのフォルダを開いたときの案内。確認の結果の行とは別に出し、次の確認か転送で消す
+  let backupNotes = $state<Record<string, BackupView>>({});
+  let openingBackups = $state<Record<string, boolean>>({});
+  // backupSeqs は、案内を消した後に届いた古い応答で、案内を出し直さないための番号。表示に使わないので $state にしない
+  const backupSeqs: Record<string, number> = {};
+
+  function clearBackupNote(gameId: string) {
+    backupSeqs[gameId] = (backupSeqs[gameId] ?? 0) + 1;
+    delete backupNotes[gameId];
+  }
 
   HomeService.Load()
     .then((v) => (view = v))
@@ -32,6 +47,7 @@
 
   async function check(gameId: string, title: string) {
     checking[gameId] = true;
+    clearBackupNote(gameId);
     // 新しい確認を始めると、Go は前の確認の plan を捨てる
     delete dialogs[gameId];
     try {
@@ -50,6 +66,20 @@
     }
   }
 
+  async function openBackups(gameId: string) {
+    openingBackups[gameId] = true;
+    const seq = (backupSeqs[gameId] = (backupSeqs[gameId] ?? 0) + 1);
+    let note: BackupView;
+    try {
+      note = await BackupService.OpenBackups(gameId);
+    } catch (e) {
+      note = { status: "", error: String(e) };
+    } finally {
+      openingBackups[gameId] = false;
+    }
+    if (backupSeqs[gameId] === seq) backupNotes[gameId] = note;
+  }
+
   function cancel(gameId: string) {
     SyncService.Cancel(gameId).catch((e) => {
       const t = transfers[gameId];
@@ -62,6 +92,7 @@
     const { gameId, title, view } = dialog;
     dialog = null;
     delete dialogs[gameId];
+    clearBackupNote(gameId);
     transfers[gameId] = { title, progress: null, cancelError: "" };
     try {
       const v = await SyncService.Transfer(gameId, view.token, direction);
@@ -101,9 +132,12 @@
                 <div class="brand">{game.brand}</div>
               {/if}
             </div>
-            <button disabled={checking[game.id] || !!transfer} onclick={() => check(game.id, game.title)}>
-              {checking[game.id] ? "確認中…" : "確認"}
-            </button>
+            <div class="buttons">
+              <button disabled={openingBackups[game.id]} onclick={() => openBackups(game.id)}>バックアップ</button>
+              <button disabled={checking[game.id] || !!transfer} onclick={() => check(game.id, game.title)}>
+                {checking[game.id] ? "確認中…" : "確認"}
+              </button>
+            </div>
           </div>
           {#if transfer}
             <progress max="100" value={transfer.progress?.percent ?? 0}></progress>
@@ -119,6 +153,8 @@
               </div>
             {/if}
           {/if}
+          {#if backupNotes[game.id]?.status}<div class="status">{backupNotes[game.id].status}</div>{/if}
+          {#if backupNotes[game.id]?.error}<div class="error">{backupNotes[game.id].error}</div>{/if}
         </li>
       {/each}
     </ul>
@@ -212,6 +248,10 @@
   }
   .title {
     font-weight: 600;
+  }
+  .buttons {
+    display: flex;
+    gap: 8px;
   }
   .brand,
   .status {

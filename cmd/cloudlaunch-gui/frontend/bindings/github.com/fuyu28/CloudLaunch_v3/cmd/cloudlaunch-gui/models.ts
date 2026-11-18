@@ -54,6 +54,34 @@ export class ActionView {
     }
 }
 
+/**
+ * BackupView は、カードに出す文。どちらか一方だけが入る。
+ */
+export class BackupView {
+    "status": string;
+    "error": string;
+
+    /** Creates a new BackupView instance. */
+    constructor($$source: Partial<BackupView> = {}) {
+        if (!("status" in $$source)) {
+            this["status"] = "";
+        }
+        if (!("error" in $$source)) {
+            this["error"] = "";
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new BackupView instance from a string or object.
+     */
+    static createFrom($$source: any = {}): BackupView {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new BackupView($$parsedSource as Partial<BackupView>);
+    }
+}
+
 export class CheckView {
     /**
      * Superseded は、同じゲームの新しい確認に置き換えられたことを表す。このときはほかの項目を使わず、表示も変えない
