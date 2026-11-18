@@ -36,7 +36,8 @@ func (c *CredentialStore) Credential() (settings.Credential, bool, error) {
 	return settings.Credential{AccessKeyID: f.AccessKeyID, SecretAccessKey: f.SecretAccessKey}, true, nil
 }
 
-// SetCredential は、一時ファイルに書いてからリネームし、書き込みの途中で落ちても、前の資格情報か新しい資格情報のどちらかを残す。
+// SetCredential は、一時ファイルに書いて fsync してからリネームし、書き込みの途中で落ちても、前の資格情報か新しい資格情報の
+// どちらかを残す。fsync しないと、電源が落ちたときに長さ 0 のファイルが残りうる。
 func (c *CredentialStore) SetCredential(cred settings.Credential) error {
 	b, err := json.Marshal(credentialFile(cred))
 	if err != nil {
@@ -54,6 +55,10 @@ func (c *CredentialStore) SetCredential(cred settings.Credential) error {
 		_ = tmp.Close()
 		return fmt.Errorf("write credential: %w", err)
 	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("sync credential: %w", err)
+	}
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("write credential: %w", err)
 	}
@@ -61,12 +66,4 @@ func (c *CredentialStore) SetCredential(cred settings.Credential) error {
 		return fmt.Errorf("write credential: %w", err)
 	}
 	return nil
-}
-
-func (c *CredentialStore) delete() error {
-	err := os.Remove(c.path())
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil
-	}
-	return err
 }

@@ -42,7 +42,7 @@ const usage = `usage:
   cloudlaunch-cli pull --game <gameId> [--overwrite] [--data-dir <dir>]
   cloudlaunch-cli recover [--data-dir <dir>]
 
-status・push・pull・game remote・game import・game delete --remote は、GUI の設定画面で保存したリモートの接続先と鍵を読む。
+status・push・pull・game remote・game import・game delete --remote は、保存したリモートの接続先（DB の設定）と鍵（資格情報）を読む。
 次の環境変数のどれか 1 つでもあれば、保存した値を使わず、すべてを環境変数から読む（開発用）:
   CLOUDLAUNCH_S3_ENDPOINT, CLOUDLAUNCH_S3_BUCKET, CLOUDLAUNCH_S3_ACCESS_KEY_ID, CLOUDLAUNCH_S3_SECRET_ACCESS_KEY,
   CLOUDLAUNCH_S3_REGION（省くと auto）`
@@ -432,12 +432,22 @@ func openCores(ctx context.Context, dataDir string, mode connectMode) (cores, er
 func openRemote(ctx context.Context, set *settings.Settings) (*objstore.S3, error) {
 	r, err := set.Remote(ctx)
 	if errors.Is(err, settings.ErrRemoteNotConfigured) {
+		// 環境変数が 1 つでもあると保存した値を読まないので、設定画面で入れ直しても直らない
+		if set.UsesEnv() {
+			return nil, fmt.Errorf("環境変数 CLOUDLAUNCH_S3_* の接続情報に足りない項目があります。保存した接続情報を使うには、環境変数をすべて外してください: %w", err)
+		}
 		return nil, fmt.Errorf("設定画面で接続情報を入れてください（開発では環境変数 CLOUDLAUNCH_S3_* でも渡せます）: %w", err)
 	}
 	if err != nil {
 		return nil, err
 	}
-	return objstore.New(objstore.Config(r))
+	return objstore.New(objstore.Config{
+		Endpoint:        r.Endpoint,
+		Region:          r.Region,
+		Bucket:          r.Bucket,
+		AccessKeyID:     r.AccessKeyID,
+		SecretAccessKey: r.SecretAccessKey,
+	})
 }
 
 // tombstoneReader は、metasync の取り込みに syncore の tombstone の確認を渡す。metasync は syncore を import できないので、

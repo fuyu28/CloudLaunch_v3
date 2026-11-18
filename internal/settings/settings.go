@@ -36,7 +36,6 @@ const (
 	maxDeviceNameLen = 64
 )
 
-// Local は DB の設定。
 type Local interface {
 	Setting(ctx context.Context, key string) (string, bool, error)
 	// SetSettings は、values のすべてを書くか、何も書かないかのどちらかにする。
@@ -48,7 +47,6 @@ type Credential struct {
 	SecretAccessKey string
 }
 
-// Credentials は、OS の資格情報の置き場所。
 type Credentials interface {
 	Credential() (Credential, bool, error)
 	SetCredential(c Credential) error
@@ -140,7 +138,6 @@ func (s *Settings) savedRemote(ctx context.Context) (Remote, error) {
 	return r, nil
 }
 
-// UsesEnv は、Remote が環境変数から読むかを返す。
 func (s *Settings) UsesEnv() bool {
 	for _, k := range []string{envEndpoint, envRegion, envBucket, envAccessKeyID, envSecretAccessKey} {
 		if s.cfg.Getenv(k) != "" {
@@ -156,7 +153,8 @@ func (s *Settings) SaveRemote(ctx context.Context, in RemoteInput) error {
 	endpoint := strings.TrimSpace(in.Endpoint)
 	region := strings.TrimSpace(in.Region)
 	bucket := strings.TrimSpace(in.Bucket)
-	cred := Credential{AccessKeyID: strings.TrimSpace(in.AccessKeyID), SecretAccessKey: in.SecretAccessKey}
+	// 貼り付けた末尾の改行や空白をシークレットに含めると、保存は通っても R2 の署名が合わず、原因の分かりにくい認証エラーになる
+	cred := Credential{AccessKeyID: strings.TrimSpace(in.AccessKeyID), SecretAccessKey: strings.TrimSpace(in.SecretAccessKey)}
 
 	if u, err := url.Parse(endpoint); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 		return fmt.Errorf("%w: endpoint must be an http or https URL: %q", ErrInvalidSettings, endpoint)
@@ -188,6 +186,7 @@ func (s *Settings) SaveRemote(ctx context.Context, in RemoteInput) error {
 }
 
 // DeviceName は、保存していなければ、読むたびにホスト名を返す。初めから DB に書くと、ホスト名を変えた PC で古い名前が残るため。
+// ホスト名にも保存するときと同じ検証をかけ、通らなければエラーを返す。
 func (s *Settings) DeviceName(ctx context.Context) (string, error) {
 	v, ok, err := s.cfg.Local.Setting(ctx, keyDeviceName)
 	if err != nil {
@@ -200,20 +199,32 @@ func (s *Settings) DeviceName(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("hostname: %w", err)
 	}
+	host, err = checkDeviceName(host)
+	if err != nil {
+		return "", fmt.Errorf("hostname: %w", err)
+	}
 	return host, nil
 }
 
-// SaveDeviceName は、空の deviceName を拒否する。ゲームの tombstone で空の deviceName を不正とする（仕様書 8-T5）ため。
 func (s *Settings) SaveDeviceName(ctx context.Context, name string) error {
-	name = strings.TrimSpace(name)
-	if name == "" {
-		return fmt.Errorf("%w: empty device name", ErrInvalidSettings)
-	}
-	if n := utf8.RuneCountInString(name); n > maxDeviceNameLen {
-		return fmt.Errorf("%w: device name is %d characters, longer than %d", ErrInvalidSettings, n, maxDeviceNameLen)
+	name, err := checkDeviceName(name)
+	if err != nil {
+		return err
 	}
 	if err := s.cfg.Local.SetSettings(ctx, map[string]string{keyDeviceName: name}); err != nil {
 		return fmt.Errorf("write settings: %w", err)
 	}
 	return nil
+}
+
+// checkDeviceName は、前後の空白を除いた名前を返す。空の deviceName は、ゲームの tombstone で不正とする（仕様書 8-T5）ので拒否する。
+func checkDeviceName(name string) (string, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "", fmt.Errorf("%w: empty device name", ErrInvalidSettings)
+	}
+	if n := utf8.RuneCountInString(name); n > maxDeviceNameLen {
+		return "", fmt.Errorf("%w: device name is %d characters, longer than %d", ErrInvalidSettings, n, maxDeviceNameLen)
+	}
+	return name, nil
 }

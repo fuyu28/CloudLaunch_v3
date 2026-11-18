@@ -14,7 +14,7 @@ import (
 func newTestCredentialStore(t *testing.T) *CredentialStore {
 	t.Helper()
 	c := NewCredentialStore(fmt.Sprintf("CloudLaunchTest/%d", time.Now().UnixNano()), t.TempDir())
-	t.Cleanup(func() { _ = c.delete() })
+	t.Cleanup(func() { deleteTestCredential(t, c) })
 	return c
 }
 

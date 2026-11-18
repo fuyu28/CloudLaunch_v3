@@ -213,20 +213,44 @@ func TestRemoteNotConfigured(t *testing.T) {
 func TestSaveRemote(t *testing.T) {
 	ctx := context.Background()
 
-	t.Run("3章/接続情報/保存するとき、シークレットが空なら今の値を残す", func(t *testing.T) {
+	keep := []struct {
+		name   string
+		secret string
+	}{
+		{"3章/接続情報/保存するとき、シークレットが空なら今の値を残す", ""},
+		{"3章/接続情報/保存するとき、シークレットが空白だけなら今の値を残す", " \n"},
+	}
+	for _, tt := range keep {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newFixture(t, nil)
+			save(t, f, savedInput)
+			in := savedInput
+			in.Bucket, in.SecretAccessKey = "new-bucket", tt.secret
+			save(t, f, in)
+
+			got, err := f.settings.Remote(ctx)
+			if err != nil {
+				t.Fatalf("Remote: %v", err)
+			}
+			want := savedRemote
+			want.Bucket = "new-bucket"
+			if diff := cmp.Diff(want, got); diff != "" {
+				t.Errorf("Remote (-want +got):\n%s", diff)
+			}
+		})
+	}
+
+	t.Run("3章/接続情報/シークレットの前後の空白を除いて保存する", func(t *testing.T) {
 		f := newFixture(t, nil)
-		save(t, f, savedInput)
 		in := savedInput
-		in.AccessKeyID, in.SecretAccessKey = "new-key", ""
+		in.SecretAccessKey = " saved-secret\n"
 		save(t, f, in)
 
 		got, err := f.settings.Remote(ctx)
 		if err != nil {
 			t.Fatalf("Remote: %v", err)
 		}
-		want := savedRemote
-		want.AccessKeyID = "new-key"
-		if diff := cmp.Diff(want, got); diff != "" {
+		if diff := cmp.Diff(savedRemote, got); diff != "" {
 			t.Errorf("Remote (-want +got):\n%s", diff)
 		}
 	})
@@ -236,6 +260,7 @@ func TestSaveRemote(t *testing.T) {
 		edit func(in *settings.RemoteInput)
 	}{
 		{"3章/接続情報/資格情報がないときに、シークレットが空なら拒否する", func(in *settings.RemoteInput) { in.SecretAccessKey = "" }},
+		{"3章/接続情報/資格情報がないときに、シークレットが空白だけなら拒否する", func(in *settings.RemoteInput) { in.SecretAccessKey = " " }},
 		{"3章/接続情報/エンドポイントが http か https の URL でなければ拒否する（スキームがない）", func(in *settings.RemoteInput) { in.Endpoint = "account.r2.cloudflarestorage.com" }},
 		{"3章/接続情報/エンドポイントが http か https の URL でなければ拒否する（ftp）", func(in *settings.RemoteInput) { in.Endpoint = "ftp://example.com" }},
 		{"3章/接続情報/エンドポイントが http か https の URL でなければ拒否する（ホストがない）", func(in *settings.RemoteInput) { in.Endpoint = "https://" }},
@@ -317,21 +342,30 @@ func TestDeviceName(t *testing.T) {
 		})
 	}
 
-	t.Run("3章/deviceName/保存していなくて、ホスト名を取れなければエラーを返す", func(t *testing.T) {
-		s, err := store.Open(ctx, filepath.Join(t.TempDir(), "cloudlaunch.db"))
-		if err != nil {
-			t.Fatalf("store.Open: %v", err)
-		}
-		t.Cleanup(func() { _ = s.Close() })
-		set := settings.New(settings.Config{
-			Local:       s,
-			Credentials: &memCredentials{},
-			Getenv:      func(string) string { return "" },
-			Hostname:    func() (string, error) { return "", errors.New("no hostname") },
-		})
+	hostErrors := []struct {
+		name     string
+		hostname func() (string, error)
+	}{
+		{"3章/deviceName/保存していなくて、ホスト名を取れなければエラーを返す", func() (string, error) { return "", errors.New("no hostname") }},
+		{"3章/deviceName/保存していなくて、ホスト名が空ならエラーを返す", func() (string, error) { return " ", nil }},
+	}
+	for _, tt := range hostErrors {
+		t.Run(tt.name, func(t *testing.T) {
+			s, err := store.Open(ctx, filepath.Join(t.TempDir(), "cloudlaunch.db"))
+			if err != nil {
+				t.Fatalf("store.Open: %v", err)
+			}
+			t.Cleanup(func() { _ = s.Close() })
+			set := settings.New(settings.Config{
+				Local:       s,
+				Credentials: &memCredentials{},
+				Getenv:      func(string) string { return "" },
+				Hostname:    tt.hostname,
+			})
 
-		if _, err := set.DeviceName(ctx); err == nil {
-			t.Error("DeviceName: err = nil, want error")
-		}
-	})
+			if _, err := set.DeviceName(ctx); err == nil {
+				t.Error("DeviceName: err = nil, want error")
+			}
+		})
+	}
 }

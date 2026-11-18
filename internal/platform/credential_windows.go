@@ -31,14 +31,3 @@ func (c *CredentialStore) SetCredential(cred settings.Credential) error {
 	}
 	return nil
 }
-
-func (c *CredentialStore) delete() error {
-	g, err := wincred.GetGenericCredential(c.target)
-	if errors.Is(err, wincred.ErrElementNotFound) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	return g.Delete()
-}
