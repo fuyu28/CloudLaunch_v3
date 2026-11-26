@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"strings"
 
 	"golang.org/x/term"
@@ -28,7 +29,12 @@ func openSettings(ctx context.Context, name string, args []string) (*settings.Se
 	if err != nil {
 		return nil, nil, err
 	}
-	return settings.New(settings.Config{Local: s, Credentials: platform.NewCredentialStore(platform.R2CredentialTarget, dir)}), s, nil
+	return newSettings(s, dir), s, nil
+}
+
+// newSettings は、config で書く資格情報と、status・push などで読む資格情報の置き場所を揃えるため、CLI のどこからもこれで作る。
+func newSettings(s *store.Store, dir string) *settings.Settings {
+	return settings.New(settings.Config{Local: s, Credentials: platform.NewCredentialStore(platform.R2CredentialTarget, dir)})
 }
 
 // prompter は、Enter だけなら今の値を返す。GUI の設定画面が、保存した値を入力欄に入れてから保存させるのと揃える。
@@ -68,7 +74,27 @@ func (p prompter) askSecret(label string, saved bool) (string, error) {
 	} else {
 		_, _ = fmt.Fprintf(p.out, "%s: ", label)
 	}
-	b, err := term.ReadPassword(int(os.Stdin.Fd()))
+	fd := int(os.Stdin.Fd())
+	// ReadPassword はエコーを切るが、入力中に Ctrl-C で終わると戻さないので、端末に打った文字が出ないまま残る
+	if state, err := term.GetState(fd); err == nil {
+		interrupted := make(chan os.Signal, 1)
+		signal.Notify(interrupted, os.Interrupt)
+		done := make(chan struct{})
+		defer func() {
+			signal.Stop(interrupted)
+			close(done)
+		}()
+		go func() {
+			select {
+			case <-interrupted:
+				_ = term.Restore(fd, state)
+				_, _ = fmt.Fprintln(p.out)
+				os.Exit(130)
+			case <-done:
+			}
+		}()
+	}
+	b, err := term.ReadPassword(fd)
 	_, _ = fmt.Fprintln(p.out)
 	if err != nil {
 		return "", fmt.Errorf("read %s: %w", label, err)
@@ -87,9 +113,11 @@ func configRemote(ctx context.Context, args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
+	// 保存した値を読めなくても、入れ直して保存すれば直るので、今の値を出さずに尋ねる。GUI の設定画面と揃える
 	saved, err := set.SavedRemote(ctx)
 	if err != nil {
-		return err
+		saved = settings.SavedRemote{}
+		_, _ = fmt.Fprintf(stdout, "保存した接続情報を読めませんでした。入れ直してください: %v\n", err)
 	}
 
 	in := settings.RemoteInput{}
@@ -100,7 +128,8 @@ func configRemote(ctx context.Context, args []string, stdout io.Writer) error {
 	}{
 		{"エンドポイント", saved.Endpoint, &in.Endpoint},
 		{"バケット", saved.Bucket, &in.Bucket},
-		{"Region（空なら auto）", saved.Region, &in.Region},
+		// Enter だけでは今の値が残り、空に戻せないので、「空なら auto」ではなく値で案内する
+		{"Region（R2 は auto）", saved.Region, &in.Region},
 		{"アクセスキー ID", saved.AccessKeyID, &in.AccessKeyID},
 	} {
 		if *q.dst, err = p.ask(q.label, q.current); err != nil {
@@ -174,17 +203,19 @@ func configShow(ctx context.Context, args []string, stdout io.Writer) error {
 	if region == "" {
 		region = "-（auto）"
 	}
-	device, err := set.DeviceName(ctx)
-	if err != nil {
-		device = "決められません: " + err.Error()
+	device, deviceErr := set.DeviceName(ctx)
+	if deviceErr != nil {
+		device = "決められません: " + deviceErr.Error()
 	}
 	if _, err := fmt.Fprintf(stdout, "エンドポイント: %s\nバケット: %s\nRegion: %s\nアクセスキー ID: %s\nシークレットアクセスキー: %s\ndeviceName: %s\n",
 		orDash(r.Endpoint), orDash(r.Bucket), region, orDash(r.AccessKeyID), secret, device); err != nil {
 		return err
 	}
-	_, err = set.Remote(ctx)
-	if errors.Is(err, settings.ErrRemoteNotConfigured) {
-		_, err = fmt.Fprintln(stdout, "接続情報は未設定です。cloudlaunch-cli config remote で入れてください")
+	// settings.Remote が ErrRemoteNotConfigured を返す条件と同じ
+	if r.Endpoint == "" || r.Bucket == "" || r.AccessKeyID == "" || !r.HasSecret {
+		if _, err := fmt.Fprintln(stdout, "接続情報は未設定です。cloudlaunch-cli config remote で入れてください"); err != nil {
+			return err
+		}
 	}
-	return err
+	return nil
 }

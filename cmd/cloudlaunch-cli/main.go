@@ -402,7 +402,7 @@ func openCores(ctx context.Context, dataDir string, mode connectMode) (cores, er
 	var remote *objstore.S3
 	var deviceName string
 	if mode != connectNone {
-		set := settings.New(settings.Config{Local: s, Credentials: platform.NewCredentialStore(platform.R2CredentialTarget, dir)})
+		set := newSettings(s, dir)
 		if remote, err = openRemote(ctx, set); err == nil && mode == connectSync {
 			deviceName, err = set.DeviceName(ctx)
 		}
