@@ -21,6 +21,12 @@ import (
 const maxImageSize = 10 << 20
 
 var (
+	// ErrImageTooLarge と ErrImageFormat は、8-I2 で拒否した理由。画像を設定する画面が、理由を分けて伝えるために使う
+	ErrImageTooLarge = errors.New("image exceeds 10 MiB")
+	ErrImageFormat   = errors.New("image is not PNG, JPEG or WebP")
+)
+
+var (
 	pngMagic  = []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'}
 	jpegMagic = []byte{0xff, 0xd8, 0xff}
 )
@@ -87,11 +93,11 @@ func readCheckedImage(r io.Reader) ([]byte, error) {
 // checkImage は、大きさと形式を確かめる。形式は先頭のバイトだけで判定し、画像として解読できるかは確かめない。
 func checkImage(body []byte) error {
 	if len(body) > maxImageSize {
-		return fmt.Errorf("image exceeds %d bytes", maxImageSize)
+		return ErrImageTooLarge
 	}
 	webp := len(body) >= 12 && string(body[:4]) == "RIFF" && string(body[8:12]) == "WEBP"
 	if !bytes.HasPrefix(body, pngMagic) && !bytes.HasPrefix(body, jpegMagic) && !webp {
-		return errors.New("image is not PNG, JPEG or WebP")
+		return ErrImageFormat
 	}
 	return nil
 }
