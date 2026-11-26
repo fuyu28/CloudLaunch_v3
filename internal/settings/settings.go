@@ -1,5 +1,5 @@
-// R2 の接続情報と deviceName を、環境変数・DB の設定・資格情報から組み立て、保存する（仕様書 3 章）。CLI と GUI が同じ順番で
-// 読むよう、ここに 1 つだけ置く。
+// R2 の接続情報と deviceName を、DB の設定と資格情報から組み立て、保存する（仕様書 3 章）。CLI と GUI が同じ値を読むよう、
+// ここに 1 つだけ置く。
 package settings
 
 import (
@@ -15,9 +15,6 @@ import (
 var (
 	// ErrRemoteNotConfigured は、接続情報が揃っていないことを表す。つなぐ前に見分けて、設定を入れるよう案内するために使う
 	ErrRemoteNotConfigured = errors.New("remote is not configured")
-	// ErrEnvIncomplete は、ErrRemoteNotConfigured のうち、環境変数が効いていて足りない項目があることを表す。保存した値を
-	// 読まないので、設定画面で入れ直しても直らず、環境変数を外すよう案内するために使う
-	ErrEnvIncomplete = errors.New("CLOUDLAUNCH_S3_* is incomplete")
 	// ErrInvalidSettings は、保存しようとした値が検証を通らなかったことを表す。何も保存していない
 	ErrInvalidSettings = errors.New("invalid settings")
 )
@@ -27,12 +24,6 @@ const (
 	keyRegion     = "remote.region"
 	keyBucket     = "remote.bucket"
 	keyDeviceName = "deviceName"
-
-	envEndpoint        = "CLOUDLAUNCH_S3_ENDPOINT"
-	envRegion          = "CLOUDLAUNCH_S3_REGION"
-	envBucket          = "CLOUDLAUNCH_S3_BUCKET"
-	envAccessKeyID     = "CLOUDLAUNCH_S3_ACCESS_KEY_ID"
-	envSecretAccessKey = "CLOUDLAUNCH_S3_SECRET_ACCESS_KEY"
 
 	defaultRegion = "auto"
 	// maxDeviceNameLen は rune の数。deviceName は確認ダイアログと tombstone の表示に出るだけなので、画面に収まる長さで止める
@@ -58,8 +49,6 @@ type Credentials interface {
 type Config struct {
 	Local       Local
 	Credentials Credentials
-	// Getenv は、nil なら os.Getenv を使う
-	Getenv func(key string) string
 	// Hostname は、nil なら os.Hostname を使う
 	Hostname func() (string, error)
 }
@@ -69,9 +58,6 @@ type Settings struct {
 }
 
 func New(cfg Config) *Settings {
-	if cfg.Getenv == nil {
-		cfg.Getenv = os.Getenv
-	}
 	if cfg.Hostname == nil {
 		cfg.Hostname = os.Hostname
 	}
@@ -86,7 +72,7 @@ type Remote struct {
 	SecretAccessKey string
 }
 
-// RemoteInput は、設定画面で入れた接続情報。SecretAccessKey が空なら、保存してある値を残す。
+// RemoteInput は、設定画面か CLI の config で入れた接続情報。SecretAccessKey が空なら、保存してある値を残す。
 type RemoteInput struct {
 	Endpoint        string
 	Region          string
@@ -95,29 +81,13 @@ type RemoteInput struct {
 	SecretAccessKey string
 }
 
-// Remote は、CLOUDLAUNCH_S3_* のどれか 1 つでもあれば、すべてを環境変数から読み、保存した値と混ぜない。どこから読んだかに
-// 気づきにくい組み合わせを作らないため。Region だけは、空なら auto にする。
+// Remote は、保存した Region が空なら auto にする。
 func (s *Settings) Remote(ctx context.Context) (Remote, error) {
-	var r Remote
-	env := s.UsesEnv()
-	if env {
-		r = Remote{
-			Endpoint:        s.cfg.Getenv(envEndpoint),
-			Region:          s.cfg.Getenv(envRegion),
-			Bucket:          s.cfg.Getenv(envBucket),
-			AccessKeyID:     s.cfg.Getenv(envAccessKeyID),
-			SecretAccessKey: s.cfg.Getenv(envSecretAccessKey),
-		}
-	} else {
-		var err error
-		if r, err = s.savedRemote(ctx); err != nil {
-			return Remote{}, err
-		}
+	r, err := s.savedRemote(ctx)
+	if err != nil {
+		return Remote{}, err
 	}
 	if r.Endpoint == "" || r.Bucket == "" || r.AccessKeyID == "" || r.SecretAccessKey == "" {
-		if env {
-			return Remote{}, fmt.Errorf("%w: %w", ErrEnvIncomplete, ErrRemoteNotConfigured)
-		}
 		return Remote{}, ErrRemoteNotConfigured
 	}
 	if r.Region == "" {
@@ -145,8 +115,8 @@ func (s *Settings) savedRemote(ctx context.Context) (Remote, error) {
 	return r, nil
 }
 
-// SavedRemote は、設定画面に出す保存した接続情報。画面に出す必要のないシークレットは持たず、保存してあるかだけを持つ。
-// Region は、空なら空のまま持つ。
+// SavedRemote は、設定画面と CLI の config に出す保存した接続情報。画面に出す必要のないシークレットは持たず、保存してあるかだけを
+// 持つ。Region は、空なら空のまま持つ。
 type SavedRemote struct {
 	Endpoint    string
 	Region      string
@@ -155,7 +125,6 @@ type SavedRemote struct {
 	HasSecret   bool
 }
 
-// SavedRemote は、環境変数が効いていても、保存した値を返す。
 func (s *Settings) SavedRemote(ctx context.Context) (SavedRemote, error) {
 	r, err := s.savedRemote(ctx)
 	if err != nil {
@@ -164,15 +133,6 @@ func (s *Settings) SavedRemote(ctx context.Context) (SavedRemote, error) {
 	return SavedRemote{
 		Endpoint: r.Endpoint, Region: r.Region, Bucket: r.Bucket, AccessKeyID: r.AccessKeyID, HasSecret: r.SecretAccessKey != "",
 	}, nil
-}
-
-func (s *Settings) UsesEnv() bool {
-	for _, k := range []string{envEndpoint, envRegion, envBucket, envAccessKeyID, envSecretAccessKey} {
-		if s.cfg.Getenv(k) != "" {
-			return true
-		}
-	}
-	return false
 }
 
 // SaveRemote は、資格情報を書いてから DB の設定を書く。2 つは 1 つのトランザクションにできないので、DB の書き込みに失敗すると、

@@ -41,11 +41,12 @@ const usage = `usage:
   cloudlaunch-cli push --game <gameId> [--overwrite] [--data-dir <dir>]
   cloudlaunch-cli pull --game <gameId> [--overwrite] [--data-dir <dir>]
   cloudlaunch-cli recover [--data-dir <dir>]
+  cloudlaunch-cli config remote [--data-dir <dir>]
+  cloudlaunch-cli config device-name [--data-dir <dir>]
+  cloudlaunch-cli config show [--data-dir <dir>]
 
 status・push・pull・game remote・game import・game delete --remote は、保存したリモートの接続先（DB の設定）と鍵（資格情報）を読む。
-次の環境変数のどれか 1 つでもあれば、保存した値を使わず、すべてを環境変数から読む（開発用）:
-  CLOUDLAUNCH_S3_ENDPOINT, CLOUDLAUNCH_S3_BUCKET, CLOUDLAUNCH_S3_ACCESS_KEY_ID, CLOUDLAUNCH_S3_SECRET_ACCESS_KEY,
-  CLOUDLAUNCH_S3_REGION（省くと auto）`
+config remote と config device-name は、値を端末で尋ねる。Enter だけなら今の値を残す。`
 
 func main() {
 	if err := run(context.Background(), os.Args[1:], os.Stdout); err != nil {
@@ -80,6 +81,12 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 			return legacyImport(ctx, args[2:], stdout)
 		case "legacy link":
 			return legacyLink(ctx, args[2:], stdout)
+		case "config remote":
+			return configRemote(ctx, args[2:], stdout)
+		case "config device-name":
+			return configDeviceName(ctx, args[2:], stdout)
+		case "config show":
+			return configShow(ctx, args[2:], stdout)
 		}
 	}
 	switch args[0] {
@@ -395,7 +402,7 @@ func openCores(ctx context.Context, dataDir string, mode connectMode) (cores, er
 	var remote *objstore.S3
 	var deviceName string
 	if mode != connectNone {
-		set := settings.New(settings.Config{Local: s, Credentials: platform.NewCredentialStore(platform.R2CredentialTarget, dir)})
+		set := newSettings(s, dir)
 		if remote, err = openRemote(ctx, set); err == nil && mode == connectSync {
 			deviceName, err = set.DeviceName(ctx)
 		}
@@ -431,12 +438,10 @@ func openCores(ctx context.Context, dataDir string, mode connectMode) (cores, er
 
 func openRemote(ctx context.Context, set *settings.Settings) (*objstore.S3, error) {
 	r, err := set.Remote(ctx)
-	switch {
-	case errors.Is(err, settings.ErrEnvIncomplete):
-		return nil, fmt.Errorf("環境変数 CLOUDLAUNCH_S3_* の接続情報に足りない項目があります。保存した接続情報を使うには、環境変数をすべて外してください: %w", err)
-	case errors.Is(err, settings.ErrRemoteNotConfigured):
-		return nil, fmt.Errorf("設定画面で接続情報を入れてください（開発では環境変数 CLOUDLAUNCH_S3_* でも渡せます）: %w", err)
-	case err != nil:
+	if errors.Is(err, settings.ErrRemoteNotConfigured) {
+		return nil, fmt.Errorf("接続情報が未設定です。GUI の設定画面か cloudlaunch-cli config remote で入れてください: %w", err)
+	}
+	if err != nil {
 		return nil, err
 	}
 	return objstore.New(objstore.Config{
