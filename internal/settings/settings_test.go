@@ -204,6 +204,8 @@ func TestRemoteNotConfigured(t *testing.T) {
 		env  map[string]string
 		// setup は、Remote を呼ぶ前の状態を作る
 		setup func(t *testing.T, f fixture)
+		// wantEnv は、環境変数が効いていて、ErrEnvIncomplete も返すこと
+		wantEnv bool
 	}{
 		{
 			name:  "3章/接続情報/何も保存していなければ、ErrRemoteNotConfigured を返す",
@@ -225,11 +227,12 @@ func TestRemoteNotConfigured(t *testing.T) {
 			},
 		},
 		{
-			name: "3章/接続情報/環境変数で足りない項目があれば、ErrRemoteNotConfigured を返す",
+			name: "3章/接続情報/環境変数で足りない項目があれば、ErrRemoteNotConfigured と ErrEnvIncomplete を返す",
 			env:  map[string]string{"CLOUDLAUNCH_S3_ENDPOINT": "http://localhost:7070"},
 			setup: func(t *testing.T, f fixture) {
 				save(t, f, savedInput)
 			},
+			wantEnv: true,
 		},
 	}
 	for _, tt := range tests {
@@ -240,6 +243,9 @@ func TestRemoteNotConfigured(t *testing.T) {
 			_, err := f.settings.Remote(ctx)
 			if !errors.Is(err, settings.ErrRemoteNotConfigured) {
 				t.Errorf("Remote: err = %v, want ErrRemoteNotConfigured", err)
+			}
+			if got := errors.Is(err, settings.ErrEnvIncomplete); got != tt.wantEnv {
+				t.Errorf("Remote: errors.Is(err, ErrEnvIncomplete) = %v, want %v", got, tt.wantEnv)
 			}
 		})
 	}
