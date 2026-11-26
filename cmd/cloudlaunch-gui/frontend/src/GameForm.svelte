@@ -8,7 +8,6 @@
     LinkView,
   } from "../bindings/github.com/fuyu28/CloudLaunch_v3/cmd/cloudlaunch-gui";
 
-  // onBack の registered は、ゲームを登録できたか。登録したら、一覧を読み直す
   let { onBack }: { onBack: (registered: boolean) => void } = $props();
 
   type PathField = "saveFolderPath" | "exePath" | "imagePath";
@@ -16,10 +15,8 @@
 
   let form = $state<GameForm>({ title: "", brand: "", saveFolderPath: "", exePath: "", imagePath: "" });
   let check = $state<FormCheck | null>(null);
-  // touched は、離れたか選んだ欄。Go はフォーム全体を検査するので、まだ触っていない空の欄の「入れてください」を出さないために使う。
-  // 登録を押したら、すべての欄の結果を出す
+  // Go はフォーム全体を検査するので、まだ触っていない空の欄に「入れてください」を出さないよう、触った欄の結果だけを出す
   let touched = $state<Partial<Record<CheckField, boolean>>>({});
-  // checkError は、検査かダイアログの呼び出しそのものの失敗。次にどちらかが通ったら消す
   let checkError = $state("");
   let error = $state("");
   let busy = $state(false);
@@ -27,13 +24,12 @@
   // 表示に使わないので $state にしない
   let checkSeq = 0;
 
-  // 登録した後の状態。gameId が入ったら、入力の画面から旧履歴の取り込みか結果の表示に切り替える
   let gameId = $state("");
   let warning = $state("");
   let legacy = $state<LegacyView | null>(null);
   let selectedLegacy = $state("");
   let linkResult = $state<LinkView | null>(null);
-  // choosingLegacy は、取り込むかを選ぶ間。取り込みに失敗しても、選び直すか取り込まずに済ませられるよう、選ぶ表示を残す
+  // 取り込みに失敗しても、選び直すか取り込まずに済ませられるよう、選ぶ表示を残す
   let choosingLegacy = $derived(!!legacy && !linkResult?.status);
 
   // runCheck と pick は、登録の間は何もしない。番号を進めると、登録の応答の欄ごとのエラーを古い応答として捨ててしまう。
