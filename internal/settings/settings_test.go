@@ -65,8 +65,8 @@ type fixture struct {
 	creds    *memCredentials
 }
 
-// newFixture は、env にない環境変数を空として返し、ホスト名を "host-pc" にする。
-func newFixture(t *testing.T, env map[string]string) fixture {
+// newFixture は、ホスト名を "host-pc" にする。
+func newFixture(t *testing.T) fixture {
 	t.Helper()
 	s, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "cloudlaunch.db"))
 	if err != nil {
@@ -79,7 +79,6 @@ func newFixture(t *testing.T, env map[string]string) fixture {
 		settings: settings.New(settings.Config{
 			Local:       local,
 			Credentials: creds,
-			Getenv:      func(k string) string { return env[k] },
 			Hostname:    func() (string, error) { return "host-pc", nil },
 		}),
 		local: local,
@@ -103,14 +102,6 @@ var savedRemote = settings.Remote{
 	SecretAccessKey: "saved-secret",
 }
 
-var fullEnv = map[string]string{
-	"CLOUDLAUNCH_S3_ENDPOINT":          "http://localhost:7070",
-	"CLOUDLAUNCH_S3_REGION":            "us-east-1",
-	"CLOUDLAUNCH_S3_BUCKET":            "env-bucket",
-	"CLOUDLAUNCH_S3_ACCESS_KEY_ID":     "env-key",
-	"CLOUDLAUNCH_S3_SECRET_ACCESS_KEY": "env-secret",
-}
-
 func save(t *testing.T, f fixture, in settings.RemoteInput) {
 	t.Helper()
 	if err := f.settings.SaveRemote(context.Background(), in); err != nil {
@@ -123,43 +114,17 @@ func TestRemote(t *testing.T) {
 
 	tests := []struct {
 		name string
-		env  map[string]string
 		// saved は、Remote を呼ぶ前に SaveRemote で保存する値。nil なら保存しない
-		saved   *settings.RemoteInput
-		want    settings.Remote
-		wantEnv bool
+		saved *settings.RemoteInput
+		want  settings.Remote
 	}{
 		{
-			name:  "3章/接続情報/環境変数がなければ、DB の設定と資格情報から読む",
+			name:  "3章/接続情報/DB の設定と資格情報から読む",
 			saved: &savedInput,
 			want:  savedRemote,
 		},
 		{
-			name:  "3章/接続情報/環境変数が 1 つでもあれば、すべて環境変数から読み、保存した値を使わない",
-			env:   fullEnv,
-			saved: &savedInput,
-			want: settings.Remote{
-				Endpoint: "http://localhost:7070", Region: "us-east-1", Bucket: "env-bucket",
-				AccessKeyID: "env-key", SecretAccessKey: "env-secret",
-			},
-			wantEnv: true,
-		},
-		{
-			name: "3章/接続情報/Region が空なら auto にする（環境変数）",
-			env: map[string]string{
-				"CLOUDLAUNCH_S3_ENDPOINT":          "http://localhost:7070",
-				"CLOUDLAUNCH_S3_BUCKET":            "env-bucket",
-				"CLOUDLAUNCH_S3_ACCESS_KEY_ID":     "env-key",
-				"CLOUDLAUNCH_S3_SECRET_ACCESS_KEY": "env-secret",
-			},
-			want: settings.Remote{
-				Endpoint: "http://localhost:7070", Region: "auto", Bucket: "env-bucket",
-				AccessKeyID: "env-key", SecretAccessKey: "env-secret",
-			},
-			wantEnv: true,
-		},
-		{
-			name: "3章/接続情報/Region が空なら auto にする（保存した値）",
+			name: "3章/接続情報/Region が空なら auto にする",
 			saved: &settings.RemoteInput{
 				Endpoint: savedInput.Endpoint, Bucket: savedInput.Bucket,
 				AccessKeyID: savedInput.AccessKeyID, SecretAccessKey: savedInput.SecretAccessKey,
@@ -177,7 +142,7 @@ func TestRemote(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			f := newFixture(t, tt.env)
+			f := newFixture(t)
 			if tt.saved != nil {
 				save(t, f, *tt.saved)
 			}
@@ -189,11 +154,33 @@ func TestRemote(t *testing.T) {
 			if diff := cmp.Diff(tt.want, got); diff != "" {
 				t.Errorf("Remote (-want +got):\n%s", diff)
 			}
-			if gotEnv := f.settings.UsesEnv(); gotEnv != tt.wantEnv {
-				t.Errorf("UsesEnv = %v, want %v", gotEnv, tt.wantEnv)
-			}
 		})
 	}
+}
+
+// TestRemoteIgnoresEnv は、t.Setenv で本物の環境変数を設定するので、ほかのテストと分ける。
+func TestRemoteIgnoresEnv(t *testing.T) {
+	t.Run("3章/接続情報/環境変数があっても、DB の設定と資格情報から読む", func(t *testing.T) {
+		for k, v := range map[string]string{
+			"CLOUDLAUNCH_S3_ENDPOINT":          "http://localhost:7070",
+			"CLOUDLAUNCH_S3_REGION":            "us-east-1",
+			"CLOUDLAUNCH_S3_BUCKET":            "env-bucket",
+			"CLOUDLAUNCH_S3_ACCESS_KEY_ID":     "env-key",
+			"CLOUDLAUNCH_S3_SECRET_ACCESS_KEY": "env-secret",
+		} {
+			t.Setenv(k, v)
+		}
+		f := newFixture(t)
+		save(t, f, savedInput)
+
+		got, err := f.settings.Remote(context.Background())
+		if err != nil {
+			t.Fatalf("Remote: %v", err)
+		}
+		if diff := cmp.Diff(savedRemote, got); diff != "" {
+			t.Errorf("Remote (-want +got):\n%s", diff)
+		}
+	})
 }
 
 func TestRemoteNotConfigured(t *testing.T) {
@@ -201,11 +188,8 @@ func TestRemoteNotConfigured(t *testing.T) {
 
 	tests := []struct {
 		name string
-		env  map[string]string
 		// setup は、Remote を呼ぶ前の状態を作る
 		setup func(t *testing.T, f fixture)
-		// wantEnv は、環境変数が効いていて、ErrEnvIncomplete も返すこと
-		wantEnv bool
 	}{
 		{
 			name:  "3章/接続情報/何も保存していなければ、ErrRemoteNotConfigured を返す",
@@ -226,26 +210,15 @@ func TestRemoteNotConfigured(t *testing.T) {
 				}
 			},
 		},
-		{
-			name: "3章/接続情報/環境変数で足りない項目があれば、ErrRemoteNotConfigured と ErrEnvIncomplete を返す",
-			env:  map[string]string{"CLOUDLAUNCH_S3_ENDPOINT": "http://localhost:7070"},
-			setup: func(t *testing.T, f fixture) {
-				save(t, f, savedInput)
-			},
-			wantEnv: true,
-		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			f := newFixture(t, tt.env)
+			f := newFixture(t)
 			tt.setup(t, f)
 
 			_, err := f.settings.Remote(ctx)
 			if !errors.Is(err, settings.ErrRemoteNotConfigured) {
 				t.Errorf("Remote: err = %v, want ErrRemoteNotConfigured", err)
-			}
-			if got := errors.Is(err, settings.ErrEnvIncomplete); got != tt.wantEnv {
-				t.Errorf("Remote: errors.Is(err, ErrEnvIncomplete) = %v, want %v", got, tt.wantEnv)
 			}
 		})
 	}
@@ -263,7 +236,7 @@ func TestSaveRemote(t *testing.T) {
 	}
 	for _, tt := range keep {
 		t.Run(tt.name, func(t *testing.T) {
-			f := newFixture(t, nil)
+			f := newFixture(t)
 			save(t, f, savedInput)
 			in := savedInput
 			in.Bucket, in.SecretAccessKey = "new-bucket", tt.secret
@@ -282,7 +255,7 @@ func TestSaveRemote(t *testing.T) {
 	}
 
 	t.Run("3章/接続情報/アクセスキー ID を変えるとき、シークレットが空なら拒否する", func(t *testing.T) {
-		f := newFixture(t, nil)
+		f := newFixture(t)
 		save(t, f, savedInput)
 		in := savedInput
 		in.AccessKeyID, in.SecretAccessKey = "new-key", ""
@@ -301,7 +274,7 @@ func TestSaveRemote(t *testing.T) {
 	})
 
 	t.Run("3章/接続情報/シークレットの前後の空白を除いて保存する", func(t *testing.T) {
-		f := newFixture(t, nil)
+		f := newFixture(t)
 		in := savedInput
 		in.SecretAccessKey = " saved-secret\n"
 		save(t, f, in)
@@ -329,7 +302,7 @@ func TestSaveRemote(t *testing.T) {
 	}
 	for _, tt := range invalid {
 		t.Run(tt.name, func(t *testing.T) {
-			f := newFixture(t, nil)
+			f := newFixture(t)
 			in := savedInput
 			tt.edit(&in)
 
@@ -349,7 +322,6 @@ func TestSavedRemote(t *testing.T) {
 
 	tests := []struct {
 		name string
-		env  map[string]string
 		// saved は、SavedRemote を呼ぶ前に SaveRemote で保存する値。nil なら保存しない
 		saved *settings.RemoteInput
 		want  settings.SavedRemote
@@ -367,19 +339,10 @@ func TestSavedRemote(t *testing.T) {
 				Endpoint: savedInput.Endpoint, Bucket: savedInput.Bucket, AccessKeyID: savedInput.AccessKeyID, HasSecret: true,
 			},
 		},
-		{
-			name:  "3章/接続情報/環境変数があっても、設定画面には保存した値を出す",
-			env:   fullEnv,
-			saved: &savedInput,
-			want: settings.SavedRemote{
-				Endpoint: savedInput.Endpoint, Region: "auto", Bucket: savedInput.Bucket,
-				AccessKeyID: savedInput.AccessKeyID, HasSecret: true,
-			},
-		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			f := newFixture(t, tt.env)
+			f := newFixture(t)
 			if tt.saved != nil {
 				save(t, f, *tt.saved)
 			}
@@ -395,35 +358,6 @@ func TestSavedRemote(t *testing.T) {
 	}
 }
 
-// TestRemoteFromEnv は、環境変数があるときに保存先を読まないことを、保存先の読み出しを失敗させて確かめる。
-func TestRemoteFromEnv(t *testing.T) {
-	ctx := context.Background()
-
-	t.Run("3章/接続情報/環境変数がすべてあれば、保存先を読まずに環境変数から読む", func(t *testing.T) {
-		f := newFixture(t, fullEnv)
-		f.local.readErr, f.creds.readErr = errInjected, errInjected
-
-		got, err := f.settings.Remote(ctx)
-		if err != nil {
-			t.Fatalf("Remote: %v", err)
-		}
-		if got.Bucket != "env-bucket" {
-			t.Errorf("Remote.Bucket = %q, want env-bucket", got.Bucket)
-		}
-	})
-
-	t.Run("3章/接続情報/環境変数が Region だけでも、保存した値を読まずに ErrRemoteNotConfigured を返す", func(t *testing.T) {
-		f := newFixture(t, map[string]string{"CLOUDLAUNCH_S3_REGION": "us-east-1"})
-		save(t, f, savedInput)
-		f.local.readErr, f.creds.readErr = errInjected, errInjected
-
-		_, err := f.settings.Remote(ctx)
-		if !errors.Is(err, settings.ErrRemoteNotConfigured) {
-			t.Errorf("Remote: err = %v, want ErrRemoteNotConfigured", err)
-		}
-	})
-}
-
 // TestSaveRemoteFailure は、資格情報と DB の設定を 1 つのトランザクションで書けないことから残る状態を確かめる。
 func TestSaveRemoteFailure(t *testing.T) {
 	ctx := context.Background()
@@ -437,7 +371,7 @@ func TestSaveRemoteFailure(t *testing.T) {
 	}
 
 	t.Run("3章/接続情報/資格情報の書き込みに失敗したら、DB の設定を変えない", func(t *testing.T) {
-		f := newFixture(t, nil)
+		f := newFixture(t)
 		save(t, f, savedInput)
 		f.creds.writeErr = errInjected
 
@@ -454,7 +388,7 @@ func TestSaveRemoteFailure(t *testing.T) {
 	})
 
 	t.Run("3章/接続情報/DB の書き込みに失敗したら、新しい資格情報と古い DB の設定が残り、もう一度保存すれば揃う", func(t *testing.T) {
-		f := newFixture(t, nil)
+		f := newFixture(t)
 		save(t, f, savedInput)
 		f.local.writeErr = errInjected
 
@@ -499,7 +433,7 @@ func TestDeviceName(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			f := newFixture(t, nil)
+			f := newFixture(t)
 			if tt.saved != "" {
 				if err := f.settings.SaveDeviceName(ctx, tt.saved); err != nil {
 					t.Fatalf("SaveDeviceName: %v", err)
@@ -525,7 +459,7 @@ func TestDeviceName(t *testing.T) {
 	}
 	for _, tt := range invalid {
 		t.Run(tt.name, func(t *testing.T) {
-			f := newFixture(t, nil)
+			f := newFixture(t)
 
 			err := f.settings.SaveDeviceName(ctx, tt.in)
 			if !errors.Is(err, settings.ErrInvalidSettings) {
@@ -558,7 +492,6 @@ func TestDeviceName(t *testing.T) {
 			set := settings.New(settings.Config{
 				Local:       s,
 				Credentials: &memCredentials{},
-				Getenv:      func(string) string { return "" },
 				Hostname:    tt.hostname,
 			})
 
