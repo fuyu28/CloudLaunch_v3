@@ -36,7 +36,10 @@
   // choosingLegacy は、取り込むかを選ぶ間。取り込みに失敗しても、選び直すか取り込まずに済ませられるよう、選ぶ表示を残す
   let choosingLegacy = $derived(!!legacy && !linkResult?.status);
 
+  // runCheck と pick は、登録の間は何もしない。番号を進めると、登録の応答の欄ごとのエラーを古い応答として捨ててしまう。
+  // 欄を無効にするだけでは、フォーカスのある欄が無効になったときの blur で呼ばれうるので、ここでも止める
   async function runCheck(field: CheckField) {
+    if (busy) return;
     touched[field] = true;
     const seq = ++checkSeq;
     try {
@@ -50,10 +53,12 @@
   }
 
   async function pick(field: PathField, checkField: CheckField, call: (current: string) => Promise<string>) {
+    if (busy) return;
     try {
       const path = await call(form[field]);
       checkError = "";
-      if (!path) return;
+      // ダイアログを開いている間に登録を押されたら、選んだパスで登録の後の欄を書き換えない
+      if (!path || busy) return;
       form[field] = path;
       runCheck(checkField);
     } catch (e) {
@@ -116,6 +121,7 @@
 
   {#if !gameId}
     <section>
+      <fieldset disabled={busy}>
       <label>
         タイトル
         <input bind:value={form.title} onblur={() => runCheck("title")} />
@@ -153,6 +159,7 @@
         <span class="hint">PNG・JPEG・WebP で、10 MiB まで</span>
         {@render fieldNote("image")}
       </label>
+      </fieldset>
       <div class="actions">
         <button class="primary" disabled={busy} onclick={register}>{busy ? "登録中…" : "登録"}</button>
       </div>
@@ -216,6 +223,13 @@
   h2 {
     margin: 0;
     font-size: 1.05em;
+  }
+  fieldset {
+    display: grid;
+    gap: 12px;
+    margin: 0;
+    padding: 0;
+    border: none;
   }
   label {
     display: grid;
