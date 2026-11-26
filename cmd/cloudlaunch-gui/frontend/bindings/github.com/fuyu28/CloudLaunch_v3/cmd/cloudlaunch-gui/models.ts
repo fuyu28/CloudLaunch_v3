@@ -418,9 +418,11 @@ export class SettingsView {
     "envNotice": string;
 
     /**
-     * Error は、空でなければ、値を読めなかったことを出す
+     * RemoteError と DeviceError は、その欄の値を読めなかったときに入る。読めなくても、入れ直して保存すれば直るので、
+     * 欄は空のまま出す
      */
-    "error": string;
+    "remoteError": string;
+    "deviceError": string;
 
     /** Creates a new SettingsView instance. */
     constructor($$source: Partial<SettingsView> = {}) {
@@ -445,8 +447,11 @@ export class SettingsView {
         if (!("envNotice" in $$source)) {
             this["envNotice"] = "";
         }
-        if (!("error" in $$source)) {
-            this["error"] = "";
+        if (!("remoteError" in $$source)) {
+            this["remoteError"] = "";
+        }
+        if (!("deviceError" in $$source)) {
+            this["deviceError"] = "";
         }
 
         Object.assign(this, $$source);

@@ -186,41 +186,40 @@ func (s *SyncService) beginCheck(gameID string, cancel context.CancelFunc) (*gam
 // setupMessage は、接続情報が揃っていないことを、どこを直せばよいかの案内にする。
 func setupMessage(err error) string {
 	switch {
-	case errors.Is(err, errEnvIncomplete):
+	case errors.Is(err, settings.ErrEnvIncomplete):
 		return "環境変数 CLOUDLAUNCH_S3_* の接続情報に足りない項目があります。環境変数をすべて外すと、設定で保存した値を使います"
 	case errors.Is(err, settings.ErrRemoteNotConfigured):
 		return "接続情報が未設定です。「設定」から入れてください"
 	}
-	return "同期の設定を読めません: " + err.Error()
+	return "同期の設定を読めません。「設定」を確かめてください: " + err.Error()
 }
 
-// settingsNotice は、接続情報が揃っていないときに、一覧の上の帯に出す文言を返す。それ以外の設定のエラーは、確認のときに伝える。
+// settingsNotice は、同期の設定を用意できなかったときに、一覧の上の帯に出す文言を返す。接続情報のほか、deviceName の
+// 既定のホスト名が検証を通らないときも、設定画面で deviceName を保存すれば直るので、帯から設定画面へ移れるようにする。
 func (s *SyncService) settingsNotice() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if errors.Is(s.setupErr, settings.ErrRemoteNotConfigured) {
-		return setupMessage(s.setupErr)
+	if s.setupErr == nil {
+		return ""
 	}
-	return ""
+	return setupMessage(s.setupErr)
 }
 
-var errBusy = errors.New("sync in progress")
-
-// beginReplace は、確認中か転送中のゲームがあれば errBusy を返す。返さなければ、endReplace を呼ぶまで、新しい確認と転送を
-// 始めない。
-func (s *SyncService) beginReplace() error {
+// beginReplace は、終了の処理を始めた後か、確認中か転送中のゲームがあれば false を返す。true を返したら、endReplace を
+// 呼ぶまで、新しい確認と転送を始めない。
+func (s *SyncService) beginReplace() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.replacing {
-		return errBusy
+	if s.closed || s.replacing {
+		return false
 	}
 	for _, op := range s.ops {
 		if op.cancel != nil || op.transferring {
-			return errBusy
+			return false
 		}
 	}
 	s.replacing = true
-	return nil
+	return true
 }
 
 // endReplace は、c が nil ならコアを差し替えずに、確認と転送を受け付け直す。差し替えるときは、確認を終えて承認を待つ plan を
@@ -241,9 +240,9 @@ func (s *SyncService) endReplace(c *cores, setupErr error) {
 func (s *SyncService) Transfer(ctx context.Context, gameID, token string, direction TransferDirection) TransferView {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	op, c := s.beginTransfer(gameID, token, cancel)
-	if op == nil {
-		return TransferView{Error: "確認した後に状況が変わりました。もう一度確認してください"}
+	op, c, refused := s.beginTransfer(gameID, token, cancel)
+	if refused != "" {
+		return TransferView{Error: refused}
 	}
 	defer s.finish(gameID, op)
 
@@ -288,17 +287,22 @@ func (s *SyncService) Transfer(ctx context.Context, gameID, token string, direct
 	return TransferView{Error: explainSyncError(err)}
 }
 
-func (s *SyncService) beginTransfer(gameID, token string, cancel context.CancelFunc) (*gameOp, cores) {
+// beginTransfer は、転送を始められなければ、その理由の文言を返す。保存の途中なら、保存に失敗したときに確認し直さずに
+// 済むよう、plan を捨てずに残す。
+func (s *SyncService) beginTransfer(gameID, token string, cancel context.CancelFunc) (*gameOp, cores, string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.replacing {
+		return nil, cores{}, "設定を保存しているところです。保存が終わってからもう一度実行してください"
+	}
 	op := s.ops[gameID]
-	if s.closed || s.replacing || op == nil || op.token != token || op.plan == nil || op.transferring {
-		return nil, cores{}
+	if s.closed || op == nil || op.token != token || op.plan == nil || op.transferring {
+		return nil, cores{}, "確認した後に状況が変わりました。もう一度確認してください"
 	}
 	op.transferring = true
 	op.cancel = cancel
 	s.transfers.Add(1)
-	return op, s.cores
+	return op, s.cores, ""
 }
 
 // ServiceShutdown は、Wails が終了するときに、DB を閉じる前に呼ぶ。転送を打ち切り、終わるまで待つ。閉じた DB に Push・Pull の

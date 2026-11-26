@@ -50,10 +50,14 @@
   }
   loadHome();
 
-  function backToHome() {
+  function backToHome(saved: boolean) {
     page = "home";
-    // 設定を保存すると、Go は確認済みの plan を捨てる。古い「上書き…」から開いても、承認は通らないので出さない
-    dialogs = {};
+    // 設定を保存すると、Go は確認済みの plan を捨てる。古い「上書き…」から開いても承認は通らず、カードの判定も古い接続先の
+    // ものなので、どちらも消す。保存していなければ plan はまだ使えるので残す
+    if (saved) {
+      dialogs = {};
+      cards = {};
+    }
     loadHome();
   }
 
@@ -75,7 +79,8 @@
       cards[gameId] = { status: v.status, error: v.error };
       if (v.dialog) {
         dialogs[gameId] = v.dialog;
-        if (v.dialog.open) dialog = { gameId, title, view: v.dialog };
+        // 設定画面にいる間に確認が終わったら開かず、一覧に戻ってから「上書き…」から開けるようにする
+        if (v.dialog.open && page === "home") dialog = { gameId, title, view: v.dialog };
       }
     } catch (e) {
       checking[gameId] = false;

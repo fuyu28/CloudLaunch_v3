@@ -113,9 +113,6 @@ type cores struct {
 	games *gamesync.Core
 }
 
-// errEnvIncomplete は、環境変数が効いていて、設定画面で入れ直しても直らないことを表す。
-var errEnvIncomplete = errors.New("CLOUDLAUNCH_S3_* is incomplete")
-
 // openCores は、接続情報か deviceName を読めなくても、リモートにつながないコアとそのエラーを返す。一覧と起動時の復旧は
 // 使えるので起動は止めず、確認のときに伝える。
 func openCores(ctx context.Context, dir string, s *store.Store, logger *slog.Logger, set *settings.Settings) (cores, error) {
@@ -125,8 +122,6 @@ func openCores(ctx context.Context, dir string, s *store.Store, logger *slog.Log
 		remote, remoteErr = objstore.New(objstore.Config{
 			Endpoint: r.Endpoint, Region: r.Region, Bucket: r.Bucket, AccessKeyID: r.AccessKeyID, SecretAccessKey: r.SecretAccessKey,
 		})
-	} else if errors.Is(remoteErr, settings.ErrRemoteNotConfigured) && set.UsesEnv() {
-		remoteErr = fmt.Errorf("%w: %w", errEnvIncomplete, remoteErr)
 	}
 	deviceName, deviceErr := set.DeviceName(ctx)
 

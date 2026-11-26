@@ -2,7 +2,10 @@
   import { SettingsService } from "../bindings/github.com/fuyu28/CloudLaunch_v3/cmd/cloudlaunch-gui";
   import type { SaveView, SettingsView } from "../bindings/github.com/fuyu28/CloudLaunch_v3/cmd/cloudlaunch-gui";
 
-  let { onBack }: { onBack: () => void } = $props();
+  // onBack の saved は、この画面で 1 回でも保存できたか。保存すると Go は確認済みの plan を捨てる
+  let { onBack }: { onBack: (saved: boolean) => void } = $props();
+
+  type Section = "remote" | "device";
 
   let view = $state<SettingsView | null>(null);
   let loadError = $state("");
@@ -11,21 +14,29 @@
   let remoteResult = $state<SaveView | null>(null);
   let deviceResult = $state<SaveView | null>(null);
   let saving = $state(false);
+  let saved = false;
 
-  async function load() {
+  // load は、sections の欄だけを読んだ値に揃える。片方を保存した後に、もう片方の入力中の値を消さないため
+  async function load(sections: Section[]) {
+    let v: SettingsView;
     try {
-      const v = await SettingsService.Load();
-      view = v;
-      if (v.error) return;
-      remote = { endpoint: v.endpoint, region: v.region, bucket: v.bucket, accessKeyId: v.accessKeyId, secretAccessKey: "" };
-      deviceName = v.deviceName;
+      v = await SettingsService.Load();
     } catch (e) {
       loadError = String(e);
+      return;
     }
+    if (view && !sections.includes("remote")) {
+      v = { ...v, endpoint: view.endpoint, region: view.region, bucket: view.bucket, accessKeyId: view.accessKeyId };
+    }
+    view = v;
+    if (sections.includes("remote")) {
+      remote = { endpoint: v.endpoint, region: v.region, bucket: v.bucket, accessKeyId: v.accessKeyId, secretAccessKey: "" };
+    }
+    if (sections.includes("device")) deviceName = v.deviceName;
   }
-  load();
+  load(["remote", "device"]);
 
-  async function save(call: () => Promise<SaveView>, setResult: (r: SaveView) => void) {
+  async function save(section: Section, call: () => Promise<SaveView>, setResult: (r: SaveView) => void) {
     saving = true;
     let r: SaveView;
     try {
@@ -36,27 +47,28 @@
       saving = false;
     }
     setResult(r);
-    // 保存できたら、「保存済み」の表示と入力欄を、保存した値に揃える
-    if (!r.error) await load();
+    if (!r.error) {
+      saved = true;
+      await load([section]);
+    }
   }
 </script>
 
 <main>
   <div class="top">
     <h1>設定</h1>
-    <button onclick={onBack}>一覧へ戻る</button>
+    <button onclick={() => onBack(saved)}>一覧へ戻る</button>
   </div>
 
   {#if loadError}
     <p class="error">設定を読み込めませんでした: {loadError}</p>
   {:else if view === null}
     <p>読み込み中…</p>
-  {:else if view.error}
-    <p class="error">{view.error}</p>
   {:else}
     <section>
       <h2>R2 の接続情報</h2>
       {#if view.envNotice}<p class="notice">{view.envNotice}</p>{/if}
+      {#if view.remoteError}<p class="error">{view.remoteError}</p>{/if}
       <label>
         エンドポイント
         <input bind:value={remote.endpoint} placeholder="https://<アカウント ID>.r2.cloudflarestorage.com" />
@@ -89,7 +101,7 @@
       <div class="actions">
         <button
           disabled={saving}
-          onclick={() => save(() => SettingsService.SaveRemote($state.snapshot(remote)), (r) => (remoteResult = r))}
+          onclick={() => save("remote", () => SettingsService.SaveRemote($state.snapshot(remote)), (r) => (remoteResult = r))}
         >
           接続情報を保存
         </button>
@@ -100,6 +112,7 @@
 
     <section>
       <h2>この PC の名前（deviceName）</h2>
+      {#if view.deviceError}<p class="error">{view.deviceError}</p>{/if}
       <label>
         deviceName
         <input bind:value={deviceName} />
@@ -108,7 +121,7 @@
       <div class="actions">
         <button
           disabled={saving}
-          onclick={() => save(() => SettingsService.SaveDeviceName(deviceName), (r) => (deviceResult = r))}
+          onclick={() => save("device", () => SettingsService.SaveDeviceName(deviceName), (r) => (deviceResult = r))}
         >
           deviceName を保存
         </button>
