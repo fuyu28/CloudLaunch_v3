@@ -73,8 +73,9 @@ func runApp(dir, logPath string, logFile *os.File) error {
 	defer func() { _ = s.Close() }()
 
 	set := settings.New(settings.Config{Local: s, Credentials: platform.NewCredentialStore(platform.R2CredentialTarget, dir)})
-	open := func(ctx context.Context) (cores, error) { return openCores(ctx, dir, s, logger, set) }
-	c, setupErr := open(ctx)
+	open := func(ctx context.Context) (cores, setupErrors) { return openCores(ctx, dir, s, logger, set) }
+	c, setup := open(ctx)
+	setup.log(logger)
 
 	// 復旧した行は Recover がログに出す
 	_, err = c.save.Recover(ctx)
@@ -84,7 +85,7 @@ func runApp(dir, logPath string, logFile *os.File) error {
 
 	// バックアップの置き場所は設定で変わらないので、BackupService のコアは設定を保存しても作り直さない
 	backups := &BackupService{save: c.save}
-	syncs := newSyncService(c, logger, setupErr)
+	syncs := newSyncService(c, logger, setup)
 	app := application.New(application.Options{
 		Name: "CloudLaunch",
 		Services: []application.Service{
@@ -113,9 +114,24 @@ type cores struct {
 	games *gamesync.Core
 }
 
-// openCores は、接続情報か deviceName を読めなくても、リモートにつながないコアとそのエラーを返す。一覧と起動時の復旧は
+// setupErrors は、コアを用意できなかった理由を、接続情報と deviceName に分けて持つ。errors.Join でまとめると、帯で
+// ErrRemoteNotConfigured の案内だけを出して deviceName のエラーを落とし、保存するたびに直す箇所が 1 つずつしか分からないため。
+type setupErrors struct {
+	remote error
+	device error
+}
+
+func (e setupErrors) ok() bool { return e.remote == nil && e.device == nil }
+
+func (e setupErrors) log(logger *slog.Logger) {
+	if !e.ok() {
+		logger.Warn("sync is not set up", "remote", e.remote, "device", e.device)
+	}
+}
+
+// openCores は、接続情報か deviceName を読めなくても、リモートにつながないコアとその理由を返す。一覧と起動時の復旧は
 // 使えるので起動は止めず、確認のときに伝える。
-func openCores(ctx context.Context, dir string, s *store.Store, logger *slog.Logger, set *settings.Settings) (cores, error) {
+func openCores(ctx context.Context, dir string, s *store.Store, logger *slog.Logger, set *settings.Settings) (cores, setupErrors) {
 	var remote *objstore.S3
 	r, remoteErr := set.Remote(ctx)
 	if remoteErr == nil {
@@ -142,5 +158,5 @@ func openCores(ctx context.Context, dir string, s *store.Store, logger *slog.Log
 	}
 	save := syncore.New(cfg)
 	games := gamesync.New(gamesync.Config{Save: save, Meta: metasync.New(metaCfg), Logger: logger})
-	return cores{save: save, games: games}, errors.Join(remoteErr, deviceErr)
+	return cores{save: save, games: games}, setupErrors{remote: remoteErr, device: deviceErr}
 }

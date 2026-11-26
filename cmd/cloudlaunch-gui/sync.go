@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -39,17 +40,18 @@ type SyncService struct {
 	emit   func(ProgressEvent)
 
 	mu sync.Mutex
-	// cores と setupErr は、設定を保存すると差し替わる。確認と転送は、始めるときにロックの中で読んだものを最後まで使う
+	// cores と setup は、設定を保存すると差し替わる。確認と転送は、始めるときにロックの中で読んだものを最後まで使う
 	cores cores
-	// setupErr は、リモートの接続情報か deviceName を用意できなかったときに入る。このときは確認を受け付けない
-	setupErr error
+	// setup は、リモートの接続情報か deviceName を用意できなかったときに入る。このときは確認を受け付けない
+	setup setupErrors
 	// replacing は、設定を保存してコアを差し替える間、確認と転送を始めないために使う
 	replacing bool
 	ops       map[string]*gameOp
 	tokens    uint64
-	// closed は、終了の処理を始めた後に転送を始めないために使う
-	closed    bool
-	transfers sync.WaitGroup
+	// closed は、終了の処理を始めた後に転送と設定の保存を始めないために使う
+	closed bool
+	// writers は、走っている転送と設定の保存。終了のときに、DB を閉じる前に終わるのを待つ
+	writers sync.WaitGroup
 }
 
 // gameOp は、ゲームごとの今の操作。確認中と転送中は cancel が、確認を終えて承認を待つ間は plan が入る。ダイアログを閉じても
@@ -113,11 +115,11 @@ type TransferView struct {
 	Error  string `json:"error"`
 }
 
-func newSyncService(c cores, logger *slog.Logger, setupErr error) *SyncService {
+func newSyncService(c cores, logger *slog.Logger, setup setupErrors) *SyncService {
 	return &SyncService{
-		cores:    c,
-		logger:   logger,
-		setupErr: setupErr,
+		cores:  c,
+		logger: logger,
+		setup:  setup,
 		emit: func(e ProgressEvent) {
 			application.Get().Event.Emit(progressEvent, e)
 		},
@@ -166,8 +168,8 @@ func (s *SyncService) beginCheck(gameID string, cancel context.CancelFunc) (*gam
 	if s.replacing {
 		return nil, cores{}, "設定を保存しているところです。保存が終わってからもう一度確認してください"
 	}
-	if s.setupErr != nil {
-		return nil, cores{}, setupMessage(s.setupErr)
+	if !s.setup.ok() {
+		return nil, cores{}, setupMessage(s.setup) + "。「設定」から直してください"
 	}
 	if prev := s.ops[gameID]; prev != nil {
 		if prev.transferring {
@@ -183,15 +185,23 @@ func (s *SyncService) beginCheck(gameID string, cancel context.CancelFunc) (*gam
 	return op, s.cores, ""
 }
 
-// setupMessage は、接続情報が揃っていないことを、どこを直せばよいかの案内にする。
-func setupMessage(err error) string {
+// setupMessage は、接続情報と deviceName のうち、直す必要のあるものをすべて挙げる。設定画面の中でも出すので、
+// 設定画面へ移る案内は含めない。
+func setupMessage(e setupErrors) string {
+	var msgs []string
 	switch {
-	case errors.Is(err, settings.ErrEnvIncomplete):
-		return "環境変数 CLOUDLAUNCH_S3_* の接続情報に足りない項目があります。環境変数をすべて外すと、設定で保存した値を使います"
-	case errors.Is(err, settings.ErrRemoteNotConfigured):
-		return "接続情報が未設定です。「設定」から入れてください"
+	case e.remote == nil:
+	case errors.Is(e.remote, settings.ErrEnvIncomplete):
+		msgs = append(msgs, "環境変数 CLOUDLAUNCH_S3_* の接続情報に足りない項目があります。環境変数をすべて外すと、設定で保存した値を使います")
+	case errors.Is(e.remote, settings.ErrRemoteNotConfigured):
+		msgs = append(msgs, "接続情報が未設定です")
+	default:
+		msgs = append(msgs, "接続情報を読めません: "+e.remote.Error())
 	}
-	return "同期の設定を読めません。「設定」を確かめてください: " + err.Error()
+	if e.device != nil {
+		msgs = append(msgs, "deviceName を決められません: "+e.device.Error())
+	}
+	return strings.Join(msgs, "。")
 }
 
 // settingsNotice は、同期の設定を用意できなかったときに、一覧の上の帯に出す文言を返す。接続情報のほか、deviceName の
@@ -199,37 +209,42 @@ func setupMessage(err error) string {
 func (s *SyncService) settingsNotice() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.setupErr == nil {
+	if s.setup.ok() {
 		return ""
 	}
-	return setupMessage(s.setupErr)
+	return setupMessage(s.setup)
 }
 
-// beginReplace は、終了の処理を始めた後か、確認中か転送中のゲームがあれば false を返す。true を返したら、endReplace を
-// 呼ぶまで、新しい確認と転送を始めない。
-func (s *SyncService) beginReplace() bool {
+// beginReplace は、設定を保存できなければ、その理由の文言を返す。返さなければ、endReplace を呼ぶまで、新しい確認と転送を
+// 始めず、終了の処理は endReplace まで待つ。
+func (s *SyncService) beginReplace() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.closed || s.replacing {
-		return false
+	if s.closed {
+		return "アプリを終了しているところなので、保存できません"
+	}
+	if s.replacing {
+		return "設定を保存しているところです。保存が終わってからもう一度保存してください"
 	}
 	for _, op := range s.ops {
 		if op.cancel != nil || op.transferring {
-			return false
+			return "確認中か転送中のゲームがあるので、保存できません。終わってからもう一度保存してください"
 		}
 	}
 	s.replacing = true
-	return true
+	s.writers.Add(1)
+	return ""
 }
 
 // endReplace は、c が nil ならコアを差し替えずに、確認と転送を受け付け直す。差し替えるときは、確認を終えて承認を待つ plan を
 // 捨てる。古いコアで作った plan を新しい接続先で実行すると、利用者が見ていない相手に転送するため。捨てた plan の
 // ダイアログから承認すると、Transfer は「状況が変わりました」で止まる。
-func (s *SyncService) endReplace(c *cores, setupErr error) {
+func (s *SyncService) endReplace(c *cores, setup setupErrors) {
+	defer s.writers.Done()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if c != nil {
-		s.cores, s.setupErr = *c, setupErr
+		s.cores, s.setup = *c, setup
 		clear(s.ops)
 	}
 	s.replacing = false
@@ -301,12 +316,13 @@ func (s *SyncService) beginTransfer(gameID, token string, cancel context.CancelF
 	}
 	op.transferring = true
 	op.cancel = cancel
-	s.transfers.Add(1)
+	s.writers.Add(1)
 	return op, s.cores, ""
 }
 
-// ServiceShutdown は、Wails が終了するときに、DB を閉じる前に呼ぶ。転送を打ち切り、終わるまで待つ。閉じた DB に Push・Pull の
-// 後始末が当たって、中断と同じ状態を余分に残さないため。
+// ServiceShutdown は、Wails が終了するときに、DB を閉じる前に呼ぶ。転送を打ち切り、転送と設定の保存が終わるまで待つ。
+// 閉じた DB に Push・Pull の後始末が当たって、中断と同じ状態を余分に残さないため。設定の保存は、資格情報を書いた後に
+// DB を書くので、途中で DB が閉じると、新しいアクセスキーと古いエンドポイントの組が残るため。
 func (s *SyncService) ServiceShutdown() error {
 	s.mu.Lock()
 	s.closed = true
@@ -316,13 +332,13 @@ func (s *SyncService) ServiceShutdown() error {
 		}
 	}
 	s.mu.Unlock()
-	s.transfers.Wait()
+	s.writers.Wait()
 	return nil
 }
 
 // finish は、終わった操作がまだ今の操作のときだけ消す。転送中は新しい確認を受け付けないので、ほかの操作に置き換わってはいない。
 func (s *SyncService) finish(gameID string, op *gameOp) {
-	defer s.transfers.Done()
+	defer s.writers.Done()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.ops[gameID] == op {

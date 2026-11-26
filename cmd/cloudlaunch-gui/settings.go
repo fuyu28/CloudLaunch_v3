@@ -13,7 +13,7 @@ type SettingsService struct {
 	settings *settings.Settings
 	sync     *SyncService
 	// open は、保存した設定からコアを作り直す
-	open   func(ctx context.Context) (cores, error)
+	open   func(ctx context.Context) (cores, setupErrors)
 	logger *slog.Logger
 }
 
@@ -86,21 +86,22 @@ func (v *SettingsService) save(ctx context.Context, write func(context.Context) 
 	// 画面の再読み込みなどで呼び出しが取り消されても、書き込みとコアの作り直しを途中で止めない。止めると、取り消しのエラーが
 	// 同期の設定のエラーとして残り、保存し直すか再起動するまで確認できなくなる
 	ctx = context.WithoutCancel(ctx)
-	if !v.sync.beginReplace() {
-		return SaveView{Error: "確認中か転送中のゲームがあるので、保存できません。終わってからもう一度保存してください"}
+	if refused := v.sync.beginReplace(); refused != "" {
+		return SaveView{Error: refused}
 	}
 	if err := write(ctx); err != nil {
-		v.sync.endReplace(nil, nil)
+		v.sync.endReplace(nil, setupErrors{})
 		if errors.Is(err, settings.ErrInvalidSettings) {
 			return SaveView{Error: "入力を確かめてください: " + err.Error()}
 		}
 		v.logger.Error("save settings failed", "err", err)
 		return SaveView{Error: "保存できませんでした: " + err.Error()}
 	}
-	c, setupErr := v.open(ctx)
-	v.sync.endReplace(&c, setupErr)
-	if setupErr != nil {
-		return SaveView{Status: "保存しました。" + setupMessage(setupErr)}
+	c, setup := v.open(ctx)
+	v.sync.endReplace(&c, setup)
+	if !setup.ok() {
+		setup.log(v.logger)
+		return SaveView{Status: "保存しました。" + setupMessage(setup)}
 	}
 	return SaveView{Status: "保存しました"}
 }

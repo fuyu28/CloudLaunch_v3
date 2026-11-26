@@ -16,48 +16,42 @@
   let saving = $state(false);
   let saved = false;
 
-  // load は、sections の欄だけを読んだ値に揃える。片方を保存した後に、もう片方の入力中の値を消さないため
+  // load は、入力欄のうち sections の欄だけを読んだ値に揃える。片方を保存した後に、もう片方の入力中の値を消さないため。
+  // 読めなければ、そのエラーを投げる
   async function load(sections: Section[]) {
-    let v: SettingsView;
-    try {
-      v = await SettingsService.Load();
-    } catch (e) {
-      loadError = String(e);
-      return;
-    }
-    if (view && !sections.includes("remote")) {
-      v = { ...v, endpoint: view.endpoint, region: view.region, bucket: view.bucket, accessKeyId: view.accessKeyId };
-    }
+    const v = await SettingsService.Load();
     view = v;
     if (sections.includes("remote")) {
       remote = { endpoint: v.endpoint, region: v.region, bucket: v.bucket, accessKeyId: v.accessKeyId, secretAccessKey: "" };
     }
     if (sections.includes("device")) deviceName = v.deviceName;
   }
-  load(["remote", "device"]);
+  load(["remote", "device"]).catch((e) => (loadError = String(e)));
 
   async function save(section: Section, call: () => Promise<SaveView>, setResult: (r: SaveView) => void) {
     saving = true;
     let r: SaveView;
     try {
       r = await call();
+      if (!r.error) {
+        saved = true;
+        // 読み直せなくても保存はできているので、フォームを残して、結果の下に出す
+        await load([section]).catch((e) => (r = { ...r, error: "保存した値を読み直せませんでした: " + String(e) }));
+      }
     } catch (e) {
       r = { status: "", error: String(e) };
     } finally {
       saving = false;
     }
     setResult(r);
-    if (!r.error) {
-      saved = true;
-      await load([section]);
-    }
   }
 </script>
 
 <main>
   <div class="top">
     <h1>設定</h1>
-    <button onclick={() => onBack(saved)}>一覧へ戻る</button>
+    <!-- 保存中に戻ると、保存の結果を知らないまま一覧に戻り、保存で捨てられた plan のダイアログを残すので、終わるまで待たせる -->
+    <button disabled={saving} onclick={() => onBack(saved)}>一覧へ戻る</button>
   </div>
 
   {#if loadError}
