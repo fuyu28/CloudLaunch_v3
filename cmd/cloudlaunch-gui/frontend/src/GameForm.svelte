@@ -105,7 +105,6 @@
 {#snippet fieldNote(field: CheckField)}
   {@const c: FieldCheck | undefined = touched[field] ? check?.[field] : undefined}
   {#if c?.error}<span class="error">{c.error}</span>{/if}
-  {#if c?.warning}<span class="warning">{c.warning}</span>{/if}
 {/snippet}
 
 <main>
@@ -248,9 +247,6 @@
   }
   .error {
     color: #b3261e;
-  }
-  .warning {
-    color: #8a5a00;
   }
   .actions {
     display: flex;

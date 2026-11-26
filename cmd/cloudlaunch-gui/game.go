@@ -43,10 +43,9 @@ type GameForm struct {
 	ImagePath      string `json:"imagePath"`
 }
 
-// FieldCheck は、1 つの欄の検査の結果。Error があれば登録しない。Warning は出すだけで、登録は止めない。
+// FieldCheck は、1 つの欄の検査の結果。Error があれば登録しない。
 type FieldCheck struct {
-	Error   string `json:"error"`
-	Warning string `json:"warning"`
+	Error string `json:"error"`
 }
 
 type FormCheck struct {
@@ -245,7 +244,8 @@ func cleanPath(p string) string {
 	return filepath.Clean(p)
 }
 
-// checkSaveFolder は、フォルダがなくても拒否しない。まだ遊んでいないゲームは、仕様書 4 章の「local なし」として扱える。
+// checkSaveFolder は、フォルダがなければ拒否する。ゲームは一度起動してから登録するので、ないのは打ち間違いで、そのまま
+// 登録すると確認がいつも「変更なし」になり、セーブが同期されていないことに気づけないため。
 func checkSaveFolder(p string) FieldCheck {
 	if r := checkAbs(p, "セーブフォルダ"); r.Error != "" {
 		return r
@@ -253,7 +253,7 @@ func checkSaveFolder(p string) FieldCheck {
 	info, err := os.Stat(p)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
-		return FieldCheck{Warning: "フォルダがありません。まだ遊んでいないゲームなら、このまま登録できます"}
+		return FieldCheck{Error: "フォルダが見つかりません"}
 	case err != nil:
 		return FieldCheck{Error: "フォルダを確かめられません: " + err.Error()}
 	case !info.IsDir():

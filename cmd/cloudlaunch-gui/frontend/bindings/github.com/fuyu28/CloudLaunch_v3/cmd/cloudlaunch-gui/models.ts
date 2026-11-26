@@ -223,19 +223,15 @@ export class DialogView {
 }
 
 /**
- * FieldCheck は、1 つの欄の検査の結果。Error があれば登録しない。Warning は出すだけで、登録は止めない。
+ * FieldCheck は、1 つの欄の検査の結果。Error があれば登録しない。
  */
 export class FieldCheck {
     "error": string;
-    "warning": string;
 
     /** Creates a new FieldCheck instance. */
     constructor($$source: Partial<FieldCheck> = {}) {
         if (!("error" in $$source)) {
             this["error"] = "";
-        }
-        if (!("warning" in $$source)) {
-            this["warning"] = "";
         }
 
         Object.assign(this, $$source);
