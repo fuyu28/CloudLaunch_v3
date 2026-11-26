@@ -43,7 +43,8 @@ type prompter struct {
 	out io.Writer
 }
 
-// newPrompter は、標準入力が端末でなければ拒否する。パイプで何行も流す入力は、項目の順番を取り違えやすいため。
+// newPrompter は、標準入力が端末でなければ拒否する。シークレットは端末でないと読めない（term.ReadPassword）ので、ほかの項目を
+// 入れさせた後で失敗させないよう、最初に確かめる。config device-name もパイプで受け付けず、2 つのコマンドの振る舞いを揃える。
 func newPrompter(out io.Writer) (prompter, error) {
 	if !term.IsTerminal(int(os.Stdin.Fd())) {
 		return prompter{}, errors.New("config は端末から実行してください。値は対話で尋ねます")
