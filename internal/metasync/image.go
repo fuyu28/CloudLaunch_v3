@@ -32,12 +32,9 @@ func (c *Core) imagePath(sha string) string {
 // CacheImage は、画像を検証して（仕様書 8-I2）キャッシュに入れ、sha256 を返す。上限の 1 バイト先までしか読まない。
 // リモートには触れない。リモートへは、次の同期で game.json を PUT する前に PUT する（8-I1）。
 func (c *Core) CacheImage(r io.Reader) (string, error) {
-	body, err := io.ReadAll(io.LimitReader(r, maxImageSize+1))
+	body, err := readCheckedImage(r)
 	if err != nil {
-		return "", fmt.Errorf("read image: %w", err)
-	}
-	if err := checkImage(body); err != nil {
-		return "", fmt.Errorf("8-I2: %w", err)
+		return "", err
 	}
 	sha := sha256Hex(body)
 	// Windows では、表示や同期で開かれているファイルへのリネームが失敗するので、すでにあれば書き直さない
@@ -68,6 +65,23 @@ func (c *Core) SetImage(ctx context.Context, gameID string, r io.Reader, now tim
 		return "", err
 	}
 	return sha, nil
+}
+
+// CheckImage は、CacheImage と同じく画像を検証する（仕様書 8-I2）が、キャッシュには入れない。上限の 1 バイト先までしか読まない。
+func CheckImage(r io.Reader) error {
+	_, err := readCheckedImage(r)
+	return err
+}
+
+func readCheckedImage(r io.Reader) ([]byte, error) {
+	body, err := io.ReadAll(io.LimitReader(r, maxImageSize+1))
+	if err != nil {
+		return nil, fmt.Errorf("read image: %w", err)
+	}
+	if err := checkImage(body); err != nil {
+		return nil, fmt.Errorf("8-I2: %w", err)
+	}
+	return body, nil
 }
 
 // checkImage は、大きさと形式を確かめる。形式は先頭のバイトだけで判定し、画像として解読できるかは確かめない。
