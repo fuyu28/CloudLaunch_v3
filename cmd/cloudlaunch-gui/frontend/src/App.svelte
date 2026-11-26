@@ -13,6 +13,7 @@
     TransferDirection,
   } from "../bindings/github.com/fuyu28/CloudLaunch_v3/cmd/cloudlaunch-gui";
   import { SyncProgress } from "../bindings/events";
+  import Settings from "./Settings.svelte";
 
   type CardState = { status: string; error: string };
   type Transfer = { title: string; progress: ProgressEvent | null; cancelError: string };
@@ -36,9 +37,34 @@
     delete backupNotes[gameId];
   }
 
-  HomeService.Load()
-    .then((v) => (view = v))
-    .catch((e) => (loadError = String(e)));
+  // page は、転送の帯と進捗を設定画面でも出し続けるよう、App の中で画面だけを切り替える
+  let page = $state<"home" | "settings">("home");
+
+  function loadHome() {
+    HomeService.Load()
+      .then((v) => {
+        view = v;
+        loadError = "";
+      })
+      .catch((e) => (loadError = String(e)));
+  }
+  loadHome();
+
+  // settingsGen は、設定を保存した回数。Go で終わった確認の応答が、保存の後に遅れて届いたときに、消した判定とダイアログを
+  // 戻さないために使う。表示に使わないので $state にしない
+  let settingsGen = 0;
+
+  function backToHome(saved: boolean) {
+    page = "home";
+    // 設定を保存すると、Go は確認済みの plan を捨てる。古い「上書き…」から開いても承認は通らず、カードの判定も古い接続先の
+    // ものなので、どちらも消す。保存していなければ plan はまだ使えるので残す
+    if (saved) {
+      settingsGen++;
+      dialogs = {};
+      cards = {};
+    }
+    loadHome();
+  }
 
   Events.On(SyncProgress, (ev) => {
     const t = transfers[ev.data.gameId];
@@ -50,19 +76,23 @@
     clearBackupNote(gameId);
     // 新しい確認を始めると、Go は前の確認の plan を捨てる
     delete dialogs[gameId];
+    const gen = settingsGen;
     try {
       const v = await SyncService.Check(gameId);
       // 置き換えた新しい確認が、まだ走っている
       if (v.superseded) return;
       checking[gameId] = false;
+      // 確認の後に設定を保存したので、この判定は古い接続先のもので、plan も捨てられている
+      if (gen !== settingsGen) return;
       cards[gameId] = { status: v.status, error: v.error };
       if (v.dialog) {
         dialogs[gameId] = v.dialog;
-        if (v.dialog.open) dialog = { gameId, title, view: v.dialog };
+        // 設定画面にいる間に確認が終わったら開かず、一覧に戻ってから「上書き…」から開けるようにする
+        if (v.dialog.open && page === "home") dialog = { gameId, title, view: v.dialog };
       }
     } catch (e) {
       checking[gameId] = false;
-      cards[gameId] = { status: "", error: String(e) };
+      if (gen === settingsGen) cards[gameId] = { status: "", error: String(e) };
     }
   }
 
@@ -106,12 +136,24 @@
 
 </script>
 
+{#if page === "settings"}
+  <Settings onBack={backToHome} />
+{:else}
 <main>
   {#if view?.banner}
     <div class="banner" role="alert">{view.banner}</div>
   {/if}
+  {#if view?.settingsNotice}
+    <div class="banner settings-notice" role="alert">
+      <span>{view.settingsNotice}</span>
+      <button onclick={() => (page = "settings")}>設定を開く</button>
+    </div>
+  {/if}
 
-  <h1>ゲーム</h1>
+  <div class="top">
+    <h1>ゲーム</h1>
+    <button onclick={() => (page = "settings")}>設定</button>
+  </div>
 
   {#if loadError}
     <p class="error">一覧を読み込めませんでした: {loadError}</p>
@@ -160,6 +202,7 @@
     </ul>
   {/if}
 </main>
+{/if}
 
 {#if Object.keys(transfers).length > 0}
   <footer class="transfers">
@@ -221,6 +264,17 @@
     padding: 8px 24px;
     background: #fff4d6;
     border-bottom: 1px solid #e8c766;
+  }
+  .settings-notice {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  .top {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
   }
   .error {
     color: #b3261e;

@@ -263,6 +263,11 @@ export class HomeView {
      */
     "banner": string;
 
+    /**
+     * SettingsNotice は、空でなければ、設定画面へ移るボタンと一緒に画面の上の帯に出す
+     */
+    "settingsNotice": string;
+
     /** Creates a new HomeView instance. */
     constructor($$source: Partial<HomeView> = {}) {
         if (!("games" in $$source)) {
@@ -270,6 +275,9 @@ export class HomeView {
         }
         if (!("banner" in $$source)) {
             this["banner"] = "";
+        }
+        if (!("settingsNotice" in $$source)) {
+            this["settingsNotice"] = "";
         }
 
         Object.assign(this, $$source);
@@ -322,6 +330,139 @@ export class ProgressEvent {
             $$parsedSource["progress"] = $$createField1_0($$parsedSource["progress"]);
         }
         return new ProgressEvent($$parsedSource as Partial<ProgressEvent>);
+    }
+}
+
+/**
+ * RemoteForm は、設定画面で入れた接続情報。SecretAccessKey が空なら、保存してある値を残す。
+ */
+export class RemoteForm {
+    "endpoint": string;
+    "region": string;
+    "bucket": string;
+    "accessKeyId": string;
+    "secretAccessKey": string;
+
+    /** Creates a new RemoteForm instance. */
+    constructor($$source: Partial<RemoteForm> = {}) {
+        if (!("endpoint" in $$source)) {
+            this["endpoint"] = "";
+        }
+        if (!("region" in $$source)) {
+            this["region"] = "";
+        }
+        if (!("bucket" in $$source)) {
+            this["bucket"] = "";
+        }
+        if (!("accessKeyId" in $$source)) {
+            this["accessKeyId"] = "";
+        }
+        if (!("secretAccessKey" in $$source)) {
+            this["secretAccessKey"] = "";
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new RemoteForm instance from a string or object.
+     */
+    static createFrom($$source: any = {}): RemoteForm {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new RemoteForm($$parsedSource as Partial<RemoteForm>);
+    }
+}
+
+/**
+ * SaveView は、保存の結果。どちらか一方だけが入る。
+ */
+export class SaveView {
+    "status": string;
+    "error": string;
+
+    /** Creates a new SaveView instance. */
+    constructor($$source: Partial<SaveView> = {}) {
+        if (!("status" in $$source)) {
+            this["status"] = "";
+        }
+        if (!("error" in $$source)) {
+            this["error"] = "";
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new SaveView instance from a string or object.
+     */
+    static createFrom($$source: any = {}): SaveView {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new SaveView($$parsedSource as Partial<SaveView>);
+    }
+}
+
+/**
+ * SettingsView は、設定画面に出す値。シークレットは WebView に渡さず、保存してあるかだけを渡す。
+ */
+export class SettingsView {
+    "endpoint": string;
+    "region": string;
+    "bucket": string;
+    "accessKeyId": string;
+    "secretSaved": boolean;
+    "deviceName": string;
+
+    /**
+     * EnvNotice は、環境変数の接続情報を使っているときに入る
+     */
+    "envNotice": string;
+
+    /**
+     * RemoteError と DeviceError は、その欄の値を読めなかったときに入る。読めなくても、入れ直して保存すれば直るので、
+     * 欄は空のまま出す
+     */
+    "remoteError": string;
+    "deviceError": string;
+
+    /** Creates a new SettingsView instance. */
+    constructor($$source: Partial<SettingsView> = {}) {
+        if (!("endpoint" in $$source)) {
+            this["endpoint"] = "";
+        }
+        if (!("region" in $$source)) {
+            this["region"] = "";
+        }
+        if (!("bucket" in $$source)) {
+            this["bucket"] = "";
+        }
+        if (!("accessKeyId" in $$source)) {
+            this["accessKeyId"] = "";
+        }
+        if (!("secretSaved" in $$source)) {
+            this["secretSaved"] = false;
+        }
+        if (!("deviceName" in $$source)) {
+            this["deviceName"] = "";
+        }
+        if (!("envNotice" in $$source)) {
+            this["envNotice"] = "";
+        }
+        if (!("remoteError" in $$source)) {
+            this["remoteError"] = "";
+        }
+        if (!("deviceError" in $$source)) {
+            this["deviceError"] = "";
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new SettingsView instance from a string or object.
+     */
+    static createFrom($$source: any = {}): SettingsView {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new SettingsView($$parsedSource as Partial<SettingsView>);
     }
 }
 

@@ -8,12 +8,13 @@ import (
 	"fmt"
 	"log/slog"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 
-	"github.com/fuyu28/CloudLaunch_v3/internal/gamesync"
+	"github.com/fuyu28/CloudLaunch_v3/internal/settings"
 	"github.com/fuyu28/CloudLaunch_v3/internal/syncore"
 )
 
@@ -35,19 +36,22 @@ type ProgressEvent struct {
 }
 
 type SyncService struct {
-	save   *syncore.Core
-	games  *gamesync.Core
 	logger *slog.Logger
-	// setupErr は、リモートの接続情報か deviceName を用意できなかったときに入る。このときは確認を受け付けない
-	setupErr error
-	emit     func(ProgressEvent)
+	emit   func(ProgressEvent)
 
-	mu     sync.Mutex
-	ops    map[string]*gameOp
-	tokens uint64
-	// closed は、終了の処理を始めた後に転送を始めないために使う
-	closed    bool
-	transfers sync.WaitGroup
+	mu sync.Mutex
+	// cores と setup は、設定を保存すると差し替わる。確認と転送は、始めるときにロックの中で読んだものを最後まで使う
+	cores cores
+	// setup は、リモートの接続情報か deviceName を用意できなかったときに入る。このときは確認を受け付けない
+	setup setupErrors
+	// replacing は、設定を保存してコアを差し替える間、確認と転送を始めないために使う
+	replacing bool
+	ops       map[string]*gameOp
+	tokens    uint64
+	// closed は、終了の処理を始めた後に転送と設定の保存を始めないために使う
+	closed bool
+	// writers は、走っている転送と設定の保存。終了のときに、DB を閉じる前に終わるのを待つ
+	writers sync.WaitGroup
 }
 
 // gameOp は、ゲームごとの今の操作。確認中と転送中は cancel が、確認を終えて承認を待つ間は plan が入る。ダイアログを閉じても
@@ -111,12 +115,11 @@ type TransferView struct {
 	Error  string `json:"error"`
 }
 
-func newSyncService(save *syncore.Core, games *gamesync.Core, logger *slog.Logger, setupErr error) *SyncService {
+func newSyncService(c cores, logger *slog.Logger, setup setupErrors) *SyncService {
 	return &SyncService{
-		save:     save,
-		games:    games,
-		logger:   logger,
-		setupErr: setupErr,
+		cores:  c,
+		logger: logger,
+		setup:  setup,
 		emit: func(e ProgressEvent) {
 			application.Get().Event.Emit(progressEvent, e)
 		},
@@ -127,19 +130,16 @@ func newSyncService(save *syncore.Core, games *gamesync.Core, logger *slog.Logge
 // Check は、同じゲームの前の確認を打ち切ってから判定する。判定が base の記録に当たれば、データを転送しないので確認を取らずに
 // 記録する（仕様書 4 章）。ゲームの tombstone があれば、gamesync が 8-T2 の扱いにする。
 func (s *SyncService) Check(ctx context.Context, gameID string) CheckView {
-	if s.setupErr != nil {
-		return CheckView{Error: "同期の設定を読めません: " + s.setupErr.Error()}
-	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	op := s.beginCheck(gameID, cancel)
-	if op == nil {
-		return CheckView{Error: "転送中なので確認できません"}
+	op, c, refused := s.beginCheck(gameID, cancel)
+	if refused != "" {
+		return CheckView{Error: refused}
 	}
 
-	plan, err := s.games.Check(ctx, gameID)
+	plan, err := c.games.Check(ctx, gameID)
 	if err == nil && plan.RecordBase {
-		err = s.save.RecordBase(ctx, plan)
+		err = c.save.RecordBase(ctx, plan)
 	}
 
 	s.mu.Lock()
@@ -161,13 +161,19 @@ func (s *SyncService) Check(ctx context.Context, gameID string) CheckView {
 	return view
 }
 
-// beginCheck は、転送中のゲームには nil を返す。
-func (s *SyncService) beginCheck(gameID string, cancel context.CancelFunc) *gameOp {
+// beginCheck は、確認を始められなければ、その理由の文言を返す。
+func (s *SyncService) beginCheck(gameID string, cancel context.CancelFunc) (*gameOp, cores, string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.replacing {
+		return nil, cores{}, "設定を保存しているところです。保存が終わってからもう一度確認してください"
+	}
+	if !s.setup.ok() {
+		return nil, cores{}, setupMessage(s.setup) + "。「設定」から直してください"
+	}
 	if prev := s.ops[gameID]; prev != nil {
 		if prev.transferring {
-			return nil
+			return nil, cores{}, "転送中なので確認できません"
 		}
 		if prev.cancel != nil {
 			prev.cancel()
@@ -176,7 +182,72 @@ func (s *SyncService) beginCheck(gameID string, cancel context.CancelFunc) *game
 	s.tokens++
 	op := &gameOp{token: strconv.FormatUint(s.tokens, 10), cancel: cancel}
 	s.ops[gameID] = op
-	return op
+	return op, s.cores, ""
+}
+
+// setupMessage は、接続情報と deviceName のうち、直す必要のあるものをすべて挙げる。設定画面の中でも出すので、
+// 設定画面へ移る案内は含めない。
+func setupMessage(e setupErrors) string {
+	var msgs []string
+	switch {
+	case e.remote == nil:
+	case errors.Is(e.remote, settings.ErrEnvIncomplete):
+		msgs = append(msgs, "環境変数 CLOUDLAUNCH_S3_* の接続情報に足りない項目があります。環境変数をすべて外すと、設定で保存した値を使います")
+	case errors.Is(e.remote, settings.ErrRemoteNotConfigured):
+		msgs = append(msgs, "接続情報が未設定です")
+	default:
+		msgs = append(msgs, "接続情報を読めません: "+e.remote.Error())
+	}
+	if e.device != nil {
+		msgs = append(msgs, "deviceName を決められません: "+e.device.Error())
+	}
+	return strings.Join(msgs, "。")
+}
+
+// settingsNotice は、同期の設定を用意できなかったときに、一覧の上の帯に出す文言を返す。接続情報のほか、deviceName の
+// 既定のホスト名が検証を通らないときも、設定画面で deviceName を保存すれば直るので、帯から設定画面へ移れるようにする。
+func (s *SyncService) settingsNotice() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.setup.ok() {
+		return ""
+	}
+	return setupMessage(s.setup)
+}
+
+// beginReplace は、設定を保存できなければ、その理由の文言を返す。返さなければ、endReplace を呼ぶまで、新しい確認と転送を
+// 始めず、終了の処理は endReplace まで待つ。
+func (s *SyncService) beginReplace() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return "アプリを終了しているところなので、保存できません"
+	}
+	if s.replacing {
+		return "設定を保存しているところです。保存が終わってからもう一度保存してください"
+	}
+	for _, op := range s.ops {
+		if op.cancel != nil || op.transferring {
+			return "確認中か転送中のゲームがあるので、保存できません。終わってからもう一度保存してください"
+		}
+	}
+	s.replacing = true
+	s.writers.Add(1)
+	return ""
+}
+
+// endReplace は、c が nil ならコアを差し替えずに、確認と転送を受け付け直す。差し替えるときは、確認を終えて承認を待つ plan を
+// 捨てる。古いコアで作った plan を新しい接続先で実行すると、利用者が見ていない相手に転送するため。捨てた plan の
+// ダイアログから承認すると、Transfer は「状況が変わりました」で止まる。
+func (s *SyncService) endReplace(c *cores, setup setupErrors) {
+	defer s.writers.Done()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if c != nil {
+		s.cores, s.setup = *c, setup
+		clear(s.ops)
+	}
+	s.replacing = false
 }
 
 // Transfer は、token が今の確認のものでなければ実行しない。確認し直した後に、古いダイアログから承認されたときに当たる。
@@ -184,9 +255,9 @@ func (s *SyncService) beginCheck(gameID string, cancel context.CancelFunc) *game
 func (s *SyncService) Transfer(ctx context.Context, gameID, token string, direction TransferDirection) TransferView {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	op := s.beginTransfer(gameID, token, cancel)
-	if op == nil {
-		return TransferView{Error: "確認した後に状況が変わりました。もう一度確認してください"}
+	op, c, refused := s.beginTransfer(gameID, token, cancel)
+	if refused != "" {
+		return TransferView{Error: refused}
 	}
 	defer s.finish(gameID, op)
 
@@ -197,10 +268,10 @@ func (s *SyncService) Transfer(ctx context.Context, gameID, token string, direct
 	switch direction {
 	case TransferUpload:
 		overwrite = plan.Decision != syncore.DecisionPush
-		err = s.save.Push(ctx, plan, syncore.PushOptions{Overwrite: overwrite, Progress: notify})
+		err = c.save.Push(ctx, plan, syncore.PushOptions{Overwrite: overwrite, Progress: notify})
 	case TransferDownload:
 		overwrite = plan.Decision != syncore.DecisionPull
-		err = s.save.Pull(ctx, plan, syncore.PullOptions{Overwrite: overwrite, Progress: notify})
+		err = c.save.Pull(ctx, plan, syncore.PullOptions{Overwrite: overwrite, Progress: notify})
 	default:
 		err = fmt.Errorf("unknown transfer direction %q", direction)
 	}
@@ -216,7 +287,7 @@ func (s *SyncService) Transfer(ctx context.Context, gameID, token string, direct
 	// 承認の後にほかの PC で削除されたときは、直後に 8-T2 の扱いにする（8-T7）。Push が PUT した object を残さないため。
 	// 削除で消えた object を取得できずにも失敗し、ErrRemoteDeleted にならないので、どの失敗でも確かめる。ctx は
 	// キャンセルと終了で打ち切れるよう、転送のものを使う
-	t, deleted, terr := s.save.HandleTombstone(ctx, gameID)
+	t, deleted, terr := c.save.HandleTombstone(ctx, gameID)
 	if deleted {
 		v := TransferView{Error: fmt.Sprintf("リモートで削除されました（%s、%s）", t.DeviceName, formatTime(t.DeletedAt))}
 		if terr != nil {
@@ -231,21 +302,27 @@ func (s *SyncService) Transfer(ctx context.Context, gameID, token string, direct
 	return TransferView{Error: explainSyncError(err)}
 }
 
-func (s *SyncService) beginTransfer(gameID, token string, cancel context.CancelFunc) *gameOp {
+// beginTransfer は、転送を始められなければ、その理由の文言を返す。保存の途中なら、保存に失敗したときに確認し直さずに
+// 済むよう、plan を捨てずに残す。
+func (s *SyncService) beginTransfer(gameID, token string, cancel context.CancelFunc) (*gameOp, cores, string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.replacing {
+		return nil, cores{}, "設定を保存しているところです。保存が終わってからもう一度実行してください"
+	}
 	op := s.ops[gameID]
 	if s.closed || op == nil || op.token != token || op.plan == nil || op.transferring {
-		return nil
+		return nil, cores{}, "確認した後に状況が変わりました。もう一度確認してください"
 	}
 	op.transferring = true
 	op.cancel = cancel
-	s.transfers.Add(1)
-	return op
+	s.writers.Add(1)
+	return op, s.cores, ""
 }
 
-// ServiceShutdown は、Wails が終了するときに、DB を閉じる前に呼ぶ。転送を打ち切り、終わるまで待つ。閉じた DB に Push・Pull の
-// 後始末が当たって、中断と同じ状態を余分に残さないため。
+// ServiceShutdown は、Wails が終了するときに、DB を閉じる前に呼ぶ。転送を打ち切り、転送と設定の保存が終わるまで待つ。
+// 閉じた DB に Push・Pull の後始末が当たって、中断と同じ状態を余分に残さないため。設定の保存は、資格情報を書いた後に
+// DB を書くので、途中で DB が閉じると、新しいアクセスキーと古いエンドポイントの組が残るため。
 func (s *SyncService) ServiceShutdown() error {
 	s.mu.Lock()
 	s.closed = true
@@ -255,13 +332,13 @@ func (s *SyncService) ServiceShutdown() error {
 		}
 	}
 	s.mu.Unlock()
-	s.transfers.Wait()
+	s.writers.Wait()
 	return nil
 }
 
 // finish は、終わった操作がまだ今の操作のときだけ消す。転送中は新しい確認を受け付けないので、ほかの操作に置き換わってはいない。
 func (s *SyncService) finish(gameID string, op *gameOp) {
-	defer s.transfers.Done()
+	defer s.writers.Done()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.ops[gameID] == op {

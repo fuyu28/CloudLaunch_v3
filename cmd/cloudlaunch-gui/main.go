@@ -18,6 +18,7 @@ import (
 	"github.com/fuyu28/CloudLaunch_v3/internal/metasync"
 	"github.com/fuyu28/CloudLaunch_v3/internal/objstore"
 	"github.com/fuyu28/CloudLaunch_v3/internal/platform"
+	"github.com/fuyu28/CloudLaunch_v3/internal/settings"
 	"github.com/fuyu28/CloudLaunch_v3/internal/store"
 	"github.com/fuyu28/CloudLaunch_v3/internal/syncore"
 )
@@ -71,44 +72,27 @@ func runApp(dir, logPath string, logFile *os.File) error {
 	}
 	defer func() { _ = s.Close() }()
 
-	// deviceName は DB の設定に置き、初期値をホスト名にする（仕様書 3 章）。設定画面（#142）ができるまでは初期値を渡す
-	host, hostErr := os.Hostname()
-	if hostErr != nil {
-		hostErr = fmt.Errorf("hostname: %w", hostErr)
-	}
-	cfg := syncore.Config{
-		Local:      s,
-		Logger:     logger,
-		DeviceName: host,
-		BackupsDir: filepath.Join(dir, "backups"),
-		Locker:     platform.NewFileLock(filepath.Join(dir, "sync.lock")),
-		Processes:  platform.Processes{},
-		Rename:     platform.Rename,
-	}
-	metaCfg := metasync.Config{Local: s, Logger: logger, ImageDir: filepath.Join(dir, "images")}
-	// 接続情報や deviceName がなくても一覧と起動時の復旧は使えるので、起動は止めず、確認のときに伝える。nil の *objstore.S3 を
-	// インターフェースに入れると nil と比べて等しくならないので、読めたときだけ入れる
-	remote, remoteErr := openRemote()
-	if remoteErr == nil {
-		cfg.Remote = remote
-		metaCfg.Remote = remote
-	}
-	core := syncore.New(cfg)
-	games := gamesync.New(gamesync.Config{Save: core, Meta: metasync.New(metaCfg), Logger: logger})
+	set := settings.New(settings.Config{Local: s, Credentials: platform.NewCredentialStore(platform.R2CredentialTarget, dir)})
+	open := func(ctx context.Context) (cores, setupErrors) { return openCores(ctx, dir, s, logger, set) }
+	c, setup := open(ctx)
+	setup.log(logger)
 
 	// 復旧した行は Recover がログに出す
-	_, err = core.Recover(ctx)
+	_, err = c.save.Recover(ctx)
 	if err != nil {
 		logger.Error("recover failed", "err", err)
 	}
 
-	backups := &BackupService{save: core}
+	// バックアップの置き場所は設定で変わらないので、BackupService のコアは設定を保存しても作り直さない
+	backups := &BackupService{save: c.save}
+	syncs := newSyncService(c, logger, setup)
 	app := application.New(application.Options{
 		Name: "CloudLaunch",
 		Services: []application.Service{
-			application.NewService(&HomeService{store: s, banner: recoverBanner(err, logPath)}),
-			application.NewService(newSyncService(core, games, logger, errors.Join(hostErr, remoteErr))),
+			application.NewService(&HomeService{store: s, sync: syncs, banner: recoverBanner(err, logPath)}),
+			application.NewService(syncs),
 			application.NewService(backups),
+			application.NewService(&SettingsService{settings: set, sync: syncs, open: open, logger: logger}),
 		},
 		Assets: application.AssetOptions{Handler: application.AssetFileServerFS(assets)},
 		// Wails は画面のファイルの要求ごとに INFO を出し、同期のログが埋もれるので、WARN 以上だけにする
@@ -124,13 +108,55 @@ func runApp(dir, logPath string, logFile *os.File) error {
 	return app.Run()
 }
 
-// openRemote は、CLI と同じ環境変数から接続情報を読む。設定画面と資格情報マネージャーは #142 で足す。
-func openRemote() (*objstore.S3, error) {
-	return objstore.New(objstore.Config{
-		Endpoint:        os.Getenv("CLOUDLAUNCH_S3_ENDPOINT"),
-		Region:          os.Getenv("CLOUDLAUNCH_S3_REGION"),
-		Bucket:          os.Getenv("CLOUDLAUNCH_S3_BUCKET"),
-		AccessKeyID:     os.Getenv("CLOUDLAUNCH_S3_ACCESS_KEY_ID"),
-		SecretAccessKey: os.Getenv("CLOUDLAUNCH_S3_SECRET_ACCESS_KEY"),
-	})
+// cores は、接続情報と deviceName から組み立てるコア。設定を保存するたびに作り直す。
+type cores struct {
+	save  *syncore.Core
+	games *gamesync.Core
+}
+
+// setupErrors は、コアを用意できなかった理由を、接続情報と deviceName に分けて持つ。errors.Join でまとめると、帯で
+// ErrRemoteNotConfigured の案内だけを出して deviceName のエラーを落とし、保存するたびに直す箇所が 1 つずつしか分からないため。
+type setupErrors struct {
+	remote error
+	device error
+}
+
+func (e setupErrors) ok() bool { return e.remote == nil && e.device == nil }
+
+func (e setupErrors) log(logger *slog.Logger) {
+	if !e.ok() {
+		logger.Warn("sync is not set up", "remote", e.remote, "device", e.device)
+	}
+}
+
+// openCores は、接続情報か deviceName を読めなくても、リモートにつながないコアとその理由を返す。一覧と起動時の復旧は
+// 使えるので起動は止めず、確認のときに伝える。
+func openCores(ctx context.Context, dir string, s *store.Store, logger *slog.Logger, set *settings.Settings) (cores, setupErrors) {
+	var remote *objstore.S3
+	r, remoteErr := set.Remote(ctx)
+	if remoteErr == nil {
+		remote, remoteErr = objstore.New(objstore.Config{
+			Endpoint: r.Endpoint, Region: r.Region, Bucket: r.Bucket, AccessKeyID: r.AccessKeyID, SecretAccessKey: r.SecretAccessKey,
+		})
+	}
+	deviceName, deviceErr := set.DeviceName(ctx)
+
+	cfg := syncore.Config{
+		Local:      s,
+		Logger:     logger,
+		DeviceName: deviceName,
+		BackupsDir: filepath.Join(dir, "backups"),
+		Locker:     platform.NewFileLock(filepath.Join(dir, "sync.lock")),
+		Processes:  platform.Processes{},
+		Rename:     platform.Rename,
+	}
+	metaCfg := metasync.Config{Local: s, Logger: logger, ImageDir: filepath.Join(dir, "images")}
+	// nil の *objstore.S3 をインターフェースに入れると nil と比べて等しくならないので、つないだときだけ入れる
+	if remoteErr == nil {
+		cfg.Remote = remote
+		metaCfg.Remote = remote
+	}
+	save := syncore.New(cfg)
+	games := gamesync.New(gamesync.Config{Save: save, Meta: metasync.New(metaCfg), Logger: logger})
+	return cores{save: save, games: games}, setupErrors{remote: remoteErr, device: deviceErr}
 }

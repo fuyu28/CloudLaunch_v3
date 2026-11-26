@@ -431,14 +431,12 @@ func openCores(ctx context.Context, dataDir string, mode connectMode) (cores, er
 
 func openRemote(ctx context.Context, set *settings.Settings) (*objstore.S3, error) {
 	r, err := set.Remote(ctx)
-	if errors.Is(err, settings.ErrRemoteNotConfigured) {
-		// 環境変数が 1 つでもあると保存した値を読まないので、設定画面で入れ直しても直らない
-		if set.UsesEnv() {
-			return nil, fmt.Errorf("環境変数 CLOUDLAUNCH_S3_* の接続情報に足りない項目があります。保存した接続情報を使うには、環境変数をすべて外してください: %w", err)
-		}
+	switch {
+	case errors.Is(err, settings.ErrEnvIncomplete):
+		return nil, fmt.Errorf("環境変数 CLOUDLAUNCH_S3_* の接続情報に足りない項目があります。保存した接続情報を使うには、環境変数をすべて外してください: %w", err)
+	case errors.Is(err, settings.ErrRemoteNotConfigured):
 		return nil, fmt.Errorf("設定画面で接続情報を入れてください（開発では環境変数 CLOUDLAUNCH_S3_* でも渡せます）: %w", err)
-	}
-	if err != nil {
+	case err != nil:
 		return nil, err
 	}
 	return objstore.New(objstore.Config{

@@ -15,6 +15,9 @@ import (
 var (
 	// ErrRemoteNotConfigured は、接続情報が揃っていないことを表す。つなぐ前に見分けて、設定を入れるよう案内するために使う
 	ErrRemoteNotConfigured = errors.New("remote is not configured")
+	// ErrEnvIncomplete は、ErrRemoteNotConfigured のうち、環境変数が効いていて足りない項目があることを表す。保存した値を
+	// 読まないので、設定画面で入れ直しても直らず、環境変数を外すよう案内するために使う
+	ErrEnvIncomplete = errors.New("CLOUDLAUNCH_S3_* is incomplete")
 	// ErrInvalidSettings は、保存しようとした値が検証を通らなかったことを表す。何も保存していない
 	ErrInvalidSettings = errors.New("invalid settings")
 )
@@ -96,7 +99,8 @@ type RemoteInput struct {
 // 気づきにくい組み合わせを作らないため。Region だけは、空なら auto にする。
 func (s *Settings) Remote(ctx context.Context) (Remote, error) {
 	var r Remote
-	if s.UsesEnv() {
+	env := s.UsesEnv()
+	if env {
 		r = Remote{
 			Endpoint:        s.cfg.Getenv(envEndpoint),
 			Region:          s.cfg.Getenv(envRegion),
@@ -111,6 +115,9 @@ func (s *Settings) Remote(ctx context.Context) (Remote, error) {
 		}
 	}
 	if r.Endpoint == "" || r.Bucket == "" || r.AccessKeyID == "" || r.SecretAccessKey == "" {
+		if env {
+			return Remote{}, fmt.Errorf("%w: %w", ErrEnvIncomplete, ErrRemoteNotConfigured)
+		}
 		return Remote{}, ErrRemoteNotConfigured
 	}
 	if r.Region == "" {
@@ -136,6 +143,27 @@ func (s *Settings) savedRemote(ctx context.Context) (Remote, error) {
 		r.AccessKeyID, r.SecretAccessKey = c.AccessKeyID, c.SecretAccessKey
 	}
 	return r, nil
+}
+
+// SavedRemote は、設定画面に出す保存した接続情報。画面に出す必要のないシークレットは持たず、保存してあるかだけを持つ。
+// Region は、空なら空のまま持つ。
+type SavedRemote struct {
+	Endpoint    string
+	Region      string
+	Bucket      string
+	AccessKeyID string
+	HasSecret   bool
+}
+
+// SavedRemote は、環境変数が効いていても、保存した値を返す。
+func (s *Settings) SavedRemote(ctx context.Context) (SavedRemote, error) {
+	r, err := s.savedRemote(ctx)
+	if err != nil {
+		return SavedRemote{}, err
+	}
+	return SavedRemote{
+		Endpoint: r.Endpoint, Region: r.Region, Bucket: r.Bucket, AccessKeyID: r.AccessKeyID, HasSecret: r.SecretAccessKey != "",
+	}, nil
 }
 
 func (s *Settings) UsesEnv() bool {

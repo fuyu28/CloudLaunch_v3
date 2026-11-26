@@ -3,10 +3,12 @@
 
 import * as BackupService from "./backupservice.js";
 import * as HomeService from "./homeservice.js";
+import * as SettingsService from "./settingsservice.js";
 import * as SyncService from "./syncservice.js";
 export {
     BackupService,
     HomeService,
+    SettingsService,
     SyncService
 };
 
@@ -19,6 +21,9 @@ export {
     GameCard,
     HomeView,
     ProgressEvent,
+    RemoteForm,
+    SaveView,
+    SettingsView,
     TransferDirection,
     TransferView
 } from "./models.js";
