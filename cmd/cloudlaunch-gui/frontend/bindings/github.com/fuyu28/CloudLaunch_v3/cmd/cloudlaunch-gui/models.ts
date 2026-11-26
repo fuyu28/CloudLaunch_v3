@@ -222,6 +222,83 @@ export class DialogView {
     }
 }
 
+/**
+ * FieldCheck は、1 つの欄の検査の結果。Error があれば登録しない。Warning は出すだけで、登録は止めない。
+ */
+export class FieldCheck {
+    "error": string;
+    "warning": string;
+
+    /** Creates a new FieldCheck instance. */
+    constructor($$source: Partial<FieldCheck> = {}) {
+        if (!("error" in $$source)) {
+            this["error"] = "";
+        }
+        if (!("warning" in $$source)) {
+            this["warning"] = "";
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new FieldCheck instance from a string or object.
+     */
+    static createFrom($$source: any = {}): FieldCheck {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new FieldCheck($$parsedSource as Partial<FieldCheck>);
+    }
+}
+
+export class FormCheck {
+    "title": FieldCheck;
+    "saveFolder": FieldCheck;
+    "exe": FieldCheck;
+    "image": FieldCheck;
+
+    /** Creates a new FormCheck instance. */
+    constructor($$source: Partial<FormCheck> = {}) {
+        if (!("title" in $$source)) {
+            this["title"] = (new FieldCheck());
+        }
+        if (!("saveFolder" in $$source)) {
+            this["saveFolder"] = (new FieldCheck());
+        }
+        if (!("exe" in $$source)) {
+            this["exe"] = (new FieldCheck());
+        }
+        if (!("image" in $$source)) {
+            this["image"] = (new FieldCheck());
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new FormCheck instance from a string or object.
+     */
+    static createFrom($$source: any = {}): FormCheck {
+        const $$createField0_0 = $$createType6;
+        const $$createField1_0 = $$createType6;
+        const $$createField2_0 = $$createType6;
+        const $$createField3_0 = $$createType6;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("title" in $$parsedSource) {
+            $$parsedSource["title"] = $$createField0_0($$parsedSource["title"]);
+        }
+        if ("saveFolder" in $$parsedSource) {
+            $$parsedSource["saveFolder"] = $$createField1_0($$parsedSource["saveFolder"]);
+        }
+        if ("exe" in $$parsedSource) {
+            $$parsedSource["exe"] = $$createField2_0($$parsedSource["exe"]);
+        }
+        if ("image" in $$parsedSource) {
+            $$parsedSource["image"] = $$createField3_0($$parsedSource["image"]);
+        }
+        return new FormCheck($$parsedSource as Partial<FormCheck>);
+    }
+}
+
 export class GameCard {
     "id": string;
     "title": string;
@@ -252,6 +329,46 @@ export class GameCard {
     static createFrom($$source: any = {}): GameCard {
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         return new GameCard($$parsedSource as Partial<GameCard>);
+    }
+}
+
+/**
+ * GameForm は、登録の画面で入れた値。ImagePath が空なら画像を設定しない。
+ */
+export class GameForm {
+    "title": string;
+    "brand": string;
+    "saveFolderPath": string;
+    "exePath": string;
+    "imagePath": string;
+
+    /** Creates a new GameForm instance. */
+    constructor($$source: Partial<GameForm> = {}) {
+        if (!("title" in $$source)) {
+            this["title"] = "";
+        }
+        if (!("brand" in $$source)) {
+            this["brand"] = "";
+        }
+        if (!("saveFolderPath" in $$source)) {
+            this["saveFolderPath"] = "";
+        }
+        if (!("exePath" in $$source)) {
+            this["exePath"] = "";
+        }
+        if (!("imagePath" in $$source)) {
+            this["imagePath"] = "";
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new GameForm instance from a string or object.
+     */
+    static createFrom($$source: any = {}): GameForm {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new GameForm($$parsedSource as Partial<GameForm>);
     }
 }
 
@@ -287,12 +404,110 @@ export class HomeView {
      * Creates a new HomeView instance from a string or object.
      */
     static createFrom($$source: any = {}): HomeView {
-        const $$createField0_0 = $$createType7;
+        const $$createField0_0 = $$createType8;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("games" in $$parsedSource) {
             $$parsedSource["games"] = $$createField0_0($$parsedSource["games"]);
         }
         return new HomeView($$parsedSource as Partial<HomeView>);
+    }
+}
+
+export class LegacyGameView {
+    "id": string;
+    "title": string;
+
+    /**
+     * Summary は、件数・合計時間・最後に遊んだ日時
+     */
+    "summary": string;
+
+    /** Creates a new LegacyGameView instance. */
+    constructor($$source: Partial<LegacyGameView> = {}) {
+        if (!("id" in $$source)) {
+            this["id"] = "";
+        }
+        if (!("title" in $$source)) {
+            this["title"] = "";
+        }
+        if (!("summary" in $$source)) {
+            this["summary"] = "";
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new LegacyGameView instance from a string or object.
+     */
+    static createFrom($$source: any = {}): LegacyGameView {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new LegacyGameView($$parsedSource as Partial<LegacyGameView>);
+    }
+}
+
+/**
+ * LegacyView は、取り込む旧ゲームの選択肢。Suggested があれば提案として先に出し（9-K1）、なければ Candidates から選ばせる（9-K2）。
+ */
+export class LegacyView {
+    "suggested": LegacyGameView | null;
+
+    /**
+     * Candidates は、Suggested を除いた候補
+     */
+    "candidates": LegacyGameView[];
+
+    /** Creates a new LegacyView instance. */
+    constructor($$source: Partial<LegacyView> = {}) {
+        if (!("suggested" in $$source)) {
+            this["suggested"] = null;
+        }
+        if (!("candidates" in $$source)) {
+            this["candidates"] = [];
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new LegacyView instance from a string or object.
+     */
+    static createFrom($$source: any = {}): LegacyView {
+        const $$createField0_0 = $$createType10;
+        const $$createField1_0 = $$createType11;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("suggested" in $$parsedSource) {
+            $$parsedSource["suggested"] = $$createField0_0($$parsedSource["suggested"]);
+        }
+        if ("candidates" in $$parsedSource) {
+            $$parsedSource["candidates"] = $$createField1_0($$parsedSource["candidates"]);
+        }
+        return new LegacyView($$parsedSource as Partial<LegacyView>);
+    }
+}
+
+export class LinkView {
+    "status": string;
+    "error": string;
+
+    /** Creates a new LinkView instance. */
+    constructor($$source: Partial<LinkView> = {}) {
+        if (!("status" in $$source)) {
+            this["status"] = "";
+        }
+        if (!("error" in $$source)) {
+            this["error"] = "";
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new LinkView instance from a string or object.
+     */
+    static createFrom($$source: any = {}): LinkView {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new LinkView($$parsedSource as Partial<LinkView>);
     }
 }
 
@@ -324,12 +539,68 @@ export class ProgressEvent {
      * Creates a new ProgressEvent instance from a string or object.
      */
     static createFrom($$source: any = {}): ProgressEvent {
-        const $$createField1_0 = $$createType8;
+        const $$createField1_0 = $$createType12;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("progress" in $$parsedSource) {
             $$parsedSource["progress"] = $$createField1_0($$parsedSource["progress"]);
         }
         return new ProgressEvent($$parsedSource as Partial<ProgressEvent>);
+    }
+}
+
+/**
+ * RegisterView は、登録の結果。GameID が空なら登録していない。そのときは Check か Error に理由が入る。
+ */
+export class RegisterView {
+    "check": FormCheck;
+    "error": string;
+    "gameId": string;
+
+    /**
+     * Legacy は、未紐付けの旧履歴があるときだけ入る（仕様書 9-K4）
+     */
+    "legacy": LegacyView | null;
+
+    /**
+     * Warning は、登録はできたが、旧履歴と照合できなかったときに入る
+     */
+    "warning": string;
+
+    /** Creates a new RegisterView instance. */
+    constructor($$source: Partial<RegisterView> = {}) {
+        if (!("check" in $$source)) {
+            this["check"] = (new FormCheck());
+        }
+        if (!("error" in $$source)) {
+            this["error"] = "";
+        }
+        if (!("gameId" in $$source)) {
+            this["gameId"] = "";
+        }
+        if (!("legacy" in $$source)) {
+            this["legacy"] = null;
+        }
+        if (!("warning" in $$source)) {
+            this["warning"] = "";
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new RegisterView instance from a string or object.
+     */
+    static createFrom($$source: any = {}): RegisterView {
+        const $$createField0_0 = $$createType13;
+        const $$createField3_0 = $$createType15;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("check" in $$parsedSource) {
+            $$parsedSource["check"] = $$createField0_0($$parsedSource["check"]);
+        }
+        if ("legacy" in $$parsedSource) {
+            $$parsedSource["legacy"] = $$createField3_0($$parsedSource["legacy"]);
+        }
+        return new RegisterView($$parsedSource as Partial<RegisterView>);
     }
 }
 
@@ -500,6 +771,13 @@ const $$createType2 = CompareRow.createFrom;
 const $$createType3 = $Create.Array($$createType2);
 const $$createType4 = ActionView.createFrom;
 const $$createType5 = $Create.Array($$createType4);
-const $$createType6 = GameCard.createFrom;
-const $$createType7 = $Create.Array($$createType6);
-const $$createType8 = syncore$0.Progress.createFrom;
+const $$createType6 = FieldCheck.createFrom;
+const $$createType7 = GameCard.createFrom;
+const $$createType8 = $Create.Array($$createType7);
+const $$createType9 = LegacyGameView.createFrom;
+const $$createType10 = $Create.Nullable($$createType9);
+const $$createType11 = $Create.Array($$createType9);
+const $$createType12 = syncore$0.Progress.createFrom;
+const $$createType13 = FormCheck.createFrom;
+const $$createType14 = LegacyView.createFrom;
+const $$createType15 = $Create.Nullable($$createType14);
