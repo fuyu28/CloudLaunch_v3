@@ -100,7 +100,7 @@ internal/platform/     OS 固有の処理（PC 全体の同期ロックに使う
 - ツールのバージョンは `mise.toml` で固定する。clone したら `mise install` と `lefthook install` を実行する
 - GUI は `mise run gui` でビルドして起動する。Go のサービスやイベントを変えたら `mise run gui-bindings` でバインディングを生成し直してコミットする。Linux では、wails3 のインストールと GUI のビルドに GTK4 版の WebKitGTK（Ubuntu では `libgtk-4-dev`・`libwebkitgtk-6.0-dev`）が、日本語の表示にフォント（`fonts-noto-cjk`）が要る
 - リント（`.golangci.yml`）は、Wails の cgo を使わない実装（`purego` のタグ）で GUI のコードを型検査する。WebKitGTK のない CI の Ubuntu でも、Linux 向けの GUI のコードを検査するためである。CI の Ubuntu のテストは GUI のパッケージを外す。テストに `purego` を付けると、標準ライブラリの crypto もアセンブリのない実装に変わるためである（`docs/adr/2026-11-17_01-30_gui-skeleton.md`）
-- アプリが使うリモートの接続情報は、GUI の設定画面か CLI の `config remote` で保存する。versitygw と R2 のように接続先を切り替えるときは、CLI の `--data-dir` で接続先ごとにデータの置き場所を分け、それぞれで `config remote` を実行する。同じ DB のまま接続先を変えると、DB に記録した base とリモートの対応が混ざるため（`docs/adr/2026-11-27_00-38_settings-no-env.md`）
+- アプリ（CLI と GUI）は R2 だけにつなぎ、接続情報は GUI の設定画面か CLI の `config remote` で保存する。versitygw は objstore の契約テストだけで使う（`docs/adr/2026-11-27_00-38_settings-no-env.md`）
 - 契約テストの接続先などの環境変数は `.env` に書き、mise（`mise.toml` の `[env]`）で読み込む。`.env` は git に入れず、`.env.example` を写して作る
 - コミット時に lefthook の pre-commit フックが走る
   - ステージした `.go` ファイルにフォーマッタ（gofmt・goimports）をかけ、直した結果をステージに戻す
