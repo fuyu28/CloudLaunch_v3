@@ -1,5 +1,5 @@
 # 手元で objstore の契約テストを本物の S3 互換サーバーに対して走らせるための versitygw。
-# 起動後に次の環境変数を付けて go test を実行する:
+# mise run test-contract が、立てるところから、次の環境変数を付けて go test を実行するところまで行う:
 #   CLOUDLAUNCH_TEST_S3_ENDPOINT=http://127.0.0.1:7070 CLOUDLAUNCH_TEST_S3_BUCKET=cloudlaunch-test
 #   CLOUDLAUNCH_TEST_S3_ACCESS_KEY_ID=testuser CLOUDLAUNCH_TEST_S3_SECRET_ACCESS_KEY=testsecret
 services:
