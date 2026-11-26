@@ -50,11 +50,16 @@
   }
   loadHome();
 
+  // settingsGen は、設定を保存した回数。Go で終わった確認の応答が、保存の後に遅れて届いたときに、消した判定とダイアログを
+  // 戻さないために使う。表示に使わないので $state にしない
+  let settingsGen = 0;
+
   function backToHome(saved: boolean) {
     page = "home";
     // 設定を保存すると、Go は確認済みの plan を捨てる。古い「上書き…」から開いても承認は通らず、カードの判定も古い接続先の
     // ものなので、どちらも消す。保存していなければ plan はまだ使えるので残す
     if (saved) {
+      settingsGen++;
       dialogs = {};
       cards = {};
     }
@@ -71,11 +76,14 @@
     clearBackupNote(gameId);
     // 新しい確認を始めると、Go は前の確認の plan を捨てる
     delete dialogs[gameId];
+    const gen = settingsGen;
     try {
       const v = await SyncService.Check(gameId);
       // 置き換えた新しい確認が、まだ走っている
       if (v.superseded) return;
       checking[gameId] = false;
+      // 確認の後に設定を保存したので、この判定は古い接続先のもので、plan も捨てられている
+      if (gen !== settingsGen) return;
       cards[gameId] = { status: v.status, error: v.error };
       if (v.dialog) {
         dialogs[gameId] = v.dialog;
@@ -84,7 +92,7 @@
       }
     } catch (e) {
       checking[gameId] = false;
-      cards[gameId] = { status: "", error: String(e) };
+      if (gen === settingsGen) cards[gameId] = { status: "", error: String(e) };
     }
   }
 
