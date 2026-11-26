@@ -33,7 +33,7 @@ export function PickImage(current: string): $CancellablePromise<string> {
 }
 
 /**
- * PickSaveFolder・PickExe・PickImage は、キャンセルされたら空を返す。current があれば、そのフォルダ（ファイルならその親）から開く。
+ * PickSaveFolder・PickExe・PickImage は、キャンセルされたら空を返す。current があれば、その近くの、あるフォルダから開く。
  */
 export function PickSaveFolder(current: string): $CancellablePromise<string> {
     return $Call.ByID(2830436691, current);

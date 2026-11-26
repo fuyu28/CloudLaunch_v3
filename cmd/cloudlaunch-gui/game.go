@@ -22,8 +22,9 @@ import (
 	"github.com/fuyu28/CloudLaunch_v3/internal/store"
 )
 
-// maxImageBytes は、仕様書 8-I2 の 10 MiB。metasync の検査で拒否された理由を、大きさと形式に分けて伝えるためだけに使う。
-const maxImageBytes = 10 << 20
+// dialogCancelled は、Windows の Wails がダイアログのキャンセルで返すエラーの文。そのエラーの値は Wails の internal の
+// パッケージにあり、errors.Is で比べられないので、文で見分ける。ほかの OS はキャンセルで空のパスを返す。
+const dialogCancelled = "cancelled by user"
 
 type GameService struct {
 	store  *store.Store
@@ -90,7 +91,7 @@ type LinkView struct {
 }
 
 func (g *GameService) CheckForm(form GameForm) FormCheck {
-	c, _ := checkForm(form)
+	c, _ := checkForm(form, true)
 	return c
 }
 
@@ -99,7 +100,8 @@ func (g *GameService) CheckForm(form GameForm) FormCheck {
 func (g *GameService) Register(ctx context.Context, form GameForm) RegisterView {
 	// 画面の再読み込みなどで呼び出しが取り消されても、登録と照合を途中で止めない。登録できたのに失敗と出さないため
 	ctx = context.WithoutCancel(ctx)
-	check, f := checkForm(form)
+	// 画像は CacheImage が同じ 8-I2 を検査するので、ここでは読まない。同じ最大 10 MiB を 2 回読まないため
+	check, f := checkForm(form, false)
 	if !check.ok() {
 		return RegisterView{Check: check}
 	}
@@ -107,7 +109,7 @@ func (g *GameService) Register(ctx context.Context, form GameForm) RegisterView 
 	if f.ImagePath != "" {
 		var err error
 		if sha, err = g.cacheImage(f.ImagePath); err != nil {
-			check.Image.Error = imageError(f.ImagePath, err)
+			check.Image.Error = imageError(err)
 			return RegisterView{Check: check}
 		}
 	}
@@ -161,9 +163,9 @@ func (g *GameService) LinkLegacy(ctx context.Context, gameID, legacyGameID strin
 	return LinkView{Status: status}
 }
 
-// PickSaveFolder・PickExe・PickImage は、キャンセルされたら空を返す。current があれば、そのフォルダ（ファイルならその親）から開く。
+// PickSaveFolder・PickExe・PickImage は、キャンセルされたら空を返す。current があれば、その近くの、あるフォルダから開く。
 func (g *GameService) PickSaveFolder(current string) (string, error) {
-	return g.pick(&application.OpenFileDialogOptions{
+	return g.pickPath(&application.OpenFileDialogOptions{
 		Title: "セーブフォルダを選ぶ", CanChooseDirectories: true, CanCreateDirectories: true, Directory: startDir(current),
 	})
 }
@@ -173,35 +175,45 @@ func (g *GameService) PickExe(current string) (string, error) {
 	if runtime.GOOS == "windows" {
 		opts.Filters = []application.FileFilter{{DisplayName: "実行ファイル (*.exe)", Pattern: "*.exe"}}
 	}
-	return g.pick(opts)
+	return g.pickPath(opts)
 }
 
 func (g *GameService) PickImage(current string) (string, error) {
-	return g.pick(&application.OpenFileDialogOptions{
+	return g.pickPath(&application.OpenFileDialogOptions{
 		Title: "画像を選ぶ", CanChooseFiles: true, Directory: startDir(current),
 		Filters: []application.FileFilter{{DisplayName: "画像 (*.png, *.jpg, *.webp)", Pattern: "*.png;*.jpg;*.jpeg;*.webp"}},
 	})
 }
 
+// startDir は、current から親へたどり、最初にあるフォルダを返す。なければ空を返す。Windows の Wails は、開くフォルダが
+// ないとダイアログを出さずにエラーを返すため。まだないセーブフォルダを入れた欄からも開けるようにする。
 func startDir(current string) string {
 	current = strings.TrimSpace(current)
 	if current == "" || !filepath.IsAbs(current) {
 		return ""
 	}
-	info, err := os.Stat(current)
-	switch {
-	case err != nil:
-		// 消えたパスでも、親のフォルダが残っていればそこから開ける
-		return filepath.Dir(current)
-	case info.IsDir():
-		return current
-	default:
-		return filepath.Dir(current)
+	for dir := filepath.Clean(current); ; dir = filepath.Dir(dir) {
+		if info, err := os.Stat(dir); err == nil && info.IsDir() {
+			return dir
+		}
+		if filepath.Dir(dir) == dir {
+			return ""
+		}
 	}
 }
 
-// checkForm は、前後の空白を除き、パスを filepath.Clean で整えた値も返す。登録にはこの値を使う。
-func checkForm(form GameForm) (FormCheck, GameForm) {
+// pickPath は、キャンセルを空のパスにそろえる。
+func (g *GameService) pickPath(opts *application.OpenFileDialogOptions) (string, error) {
+	p, err := g.pick(opts)
+	if err != nil && err.Error() == dialogCancelled {
+		return "", nil
+	}
+	return p, err
+}
+
+// checkForm は、前後の空白を除き、パスを filepath.Clean で整えた値も返す。登録にはこの値を使う。readImage が false なら、
+// 画像は絶対パスかどうかだけを確かめる。
+func checkForm(form GameForm, readImage bool) (FormCheck, GameForm) {
 	f := GameForm{
 		Title:          strings.TrimSpace(form.Title),
 		Brand:          strings.TrimSpace(form.Brand),
@@ -215,7 +227,11 @@ func checkForm(form GameForm) (FormCheck, GameForm) {
 	}
 	c.SaveFolder = checkSaveFolder(f.SaveFolderPath)
 	c.Exe = checkExe(f.ExePath)
-	if f.ImagePath != "" {
+	switch {
+	case f.ImagePath == "":
+	case !filepath.IsAbs(f.ImagePath):
+		c.Image.Error = "絶対パスで入れてください"
+	case readImage:
 		c.Image = checkImageFile(f.ImagePath)
 	}
 	return c, f
@@ -278,40 +294,29 @@ func checkAbs(p, label string) FieldCheck {
 
 // checkImageFile は、キャッシュに入れずに 8-I2 を検査する。選び直すたびに、使わない画像をキャッシュに増やさないため。
 func checkImageFile(p string) FieldCheck {
-	if !filepath.IsAbs(p) {
-		return FieldCheck{Error: "絶対パスで入れてください"}
-	}
 	f, err := os.Open(p)
 	if err != nil {
-		return FieldCheck{Error: imageError(p, err)}
+		return FieldCheck{Error: imageError(err)}
 	}
 	defer func() { _ = f.Close() }()
 	if err := metasync.CheckImage(f); err != nil {
-		return FieldCheck{Error: imageError(p, err)}
+		return FieldCheck{Error: imageError(err)}
 	}
 	return FieldCheck{}
 }
 
-// imageError は、metasync が拒否した理由を、ファイルの大きさから大きさと形式に分ける。metasync のエラーは
-// センチネルでないため。
-func imageError(p string, err error) string {
-	if errors.Is(err, fs.ErrNotExist) {
+// imageError は、登録ではキャッシュへの書き込みの失敗も受け取るので、8-I2 と見つからないとき以外は、理由を決めつけずに
+// エラーをそのまま出す。
+func imageError(err error) string {
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
 		return "画像のファイルが見つかりません"
+	case errors.Is(err, metasync.ErrImageTooLarge):
+		return "10 MiB を超える画像は使えません"
+	case errors.Is(err, metasync.ErrImageFormat):
+		return "PNG・JPEG・WebP の画像を選んでください"
 	}
-	if info, serr := os.Stat(p); serr == nil {
-		if info.IsDir() {
-			return "フォルダではなく、画像のファイルを選んでください"
-		}
-		if info.Size() > maxImageBytes {
-			return "10 MiB を超える画像は使えません"
-		}
-	}
-	// 開けない・読めないときは *fs.PathError になる。それ以外は形式で拒否されたもの
-	var pathErr *fs.PathError
-	if errors.As(err, &pathErr) {
-		return "画像を読めません: " + err.Error()
-	}
-	return "PNG・JPEG・WebP の画像を選んでください"
+	return "画像を使えません: " + err.Error()
 }
 
 func legacyView(m legacy.MatchResult) *LegacyView {

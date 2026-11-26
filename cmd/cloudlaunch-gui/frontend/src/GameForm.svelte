@@ -12,9 +12,15 @@
   let { onBack }: { onBack: (registered: boolean) => void } = $props();
 
   type PathField = "saveFolderPath" | "exePath" | "imagePath";
+  type CheckField = keyof FormCheck;
 
   let form = $state<GameForm>({ title: "", brand: "", saveFolderPath: "", exePath: "", imagePath: "" });
   let check = $state<FormCheck | null>(null);
+  // touched は、離れたか選んだ欄。Go はフォーム全体を検査するので、まだ触っていない空の欄の「入れてください」を出さないために使う。
+  // 登録を押したら、すべての欄の結果を出す
+  let touched = $state<Partial<Record<CheckField, boolean>>>({});
+  // checkError は、検査かダイアログの呼び出しそのものの失敗。次にどちらかが通ったら消す
+  let checkError = $state("");
   let error = $state("");
   let busy = $state(false);
   // checkSeq は、検査を始めた順の番号。後から始めた検査や登録の後に届いた古い応答で、欄の文を戻さないために使う。
@@ -30,30 +36,36 @@
   // choosingLegacy は、取り込むかを選ぶ間。取り込みに失敗しても、選び直すか取り込まずに済ませられるよう、選ぶ表示を残す
   let choosingLegacy = $derived(!!legacy && !linkResult?.status);
 
-  async function runCheck() {
+  async function runCheck(field: CheckField) {
+    touched[field] = true;
     const seq = ++checkSeq;
     try {
       const c = await GameService.CheckForm($state.snapshot(form));
-      if (seq === checkSeq) check = c;
+      if (seq !== checkSeq) return;
+      check = c;
+      checkError = "";
     } catch (e) {
-      if (seq === checkSeq) error = "入力を確かめられませんでした: " + String(e);
+      if (seq === checkSeq) checkError = "入力を確かめられませんでした: " + String(e);
     }
   }
 
-  async function pick(field: PathField, call: (current: string) => Promise<string>) {
+  async function pick(field: PathField, checkField: CheckField, call: (current: string) => Promise<string>) {
     try {
       const path = await call(form[field]);
+      checkError = "";
       if (!path) return;
       form[field] = path;
-      runCheck();
+      runCheck(checkField);
     } catch (e) {
-      error = "選べませんでした: " + String(e);
+      checkError = "選べませんでした: " + String(e);
     }
   }
 
   async function register() {
     busy = true;
     error = "";
+    checkError = "";
+    touched = { title: true, saveFolder: true, exe: true, image: true };
     const seq = ++checkSeq;
     try {
       const v = await GameService.Register($state.snapshot(form));
@@ -89,7 +101,8 @@
   }
 </script>
 
-{#snippet fieldNote(c: FieldCheck | undefined)}
+{#snippet fieldNote(field: CheckField)}
+  {@const c: FieldCheck | undefined = touched[field] ? check?.[field] : undefined}
   {#if c?.error}<span class="error">{c.error}</span>{/if}
   {#if c?.warning}<span class="warning">{c.warning}</span>{/if}
 {/snippet}
@@ -105,8 +118,8 @@
     <section>
       <label>
         タイトル
-        <input bind:value={form.title} onblur={runCheck} />
-        {@render fieldNote(check?.title)}
+        <input bind:value={form.title} onblur={() => runCheck("title")} />
+        {@render fieldNote("title")}
       </label>
       <label>
         ブランド（任意）
@@ -115,34 +128,35 @@
       <label>
         セーブフォルダ
         <span class="path">
-          <input bind:value={form.saveFolderPath} onblur={runCheck} />
-          <button onclick={() => pick("saveFolderPath", GameService.PickSaveFolder)}>参照…</button>
+          <input bind:value={form.saveFolderPath} onblur={() => runCheck("saveFolder")} />
+          <button onclick={() => pick("saveFolderPath", "saveFolder", GameService.PickSaveFolder)}>参照…</button>
         </span>
-        {@render fieldNote(check?.saveFolder)}
+        {@render fieldNote("saveFolder")}
       </label>
       <label>
         実行ファイル
         <span class="path">
-          <input bind:value={form.exePath} onblur={runCheck} />
-          <button onclick={() => pick("exePath", GameService.PickExe)}>参照…</button>
+          <input bind:value={form.exePath} onblur={() => runCheck("exe")} />
+          <button onclick={() => pick("exePath", "exe", GameService.PickExe)}>参照…</button>
         </span>
         <span class="hint">
           ランチャーではなく、ゲーム本体の exe を選んでください。ランチャーを選ぶと、実行中かどうかを見分けられず、遊んでいる間のセーブを同期してしまうことがあります
         </span>
-        {@render fieldNote(check?.exe)}
+        {@render fieldNote("exe")}
       </label>
       <label>
         画像（任意）
         <span class="path">
-          <input bind:value={form.imagePath} onblur={runCheck} />
-          <button onclick={() => pick("imagePath", GameService.PickImage)}>参照…</button>
+          <input bind:value={form.imagePath} onblur={() => runCheck("image")} />
+          <button onclick={() => pick("imagePath", "image", GameService.PickImage)}>参照…</button>
         </span>
         <span class="hint">PNG・JPEG・WebP で、10 MiB まで</span>
-        {@render fieldNote(check?.image)}
+        {@render fieldNote("image")}
       </label>
       <div class="actions">
         <button class="primary" disabled={busy} onclick={register}>{busy ? "登録中…" : "登録"}</button>
       </div>
+      {#if checkError}<p class="error">{checkError}</p>{/if}
       {#if error}<p class="error">{error}</p>{/if}
     </section>
   {:else}
