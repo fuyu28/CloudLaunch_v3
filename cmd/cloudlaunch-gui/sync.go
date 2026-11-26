@@ -191,8 +191,6 @@ func setupMessage(e setupErrors) string {
 	var msgs []string
 	switch {
 	case e.remote == nil:
-	case errors.Is(e.remote, settings.ErrEnvIncomplete):
-		msgs = append(msgs, "環境変数 CLOUDLAUNCH_S3_* の接続情報に足りない項目があります。環境変数をすべて外すと、設定で保存した値を使います")
 	case errors.Is(e.remote, settings.ErrRemoteNotConfigured):
 		msgs = append(msgs, "接続情報が未設定です")
 	default:

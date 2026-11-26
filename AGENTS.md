@@ -46,7 +46,7 @@ internal/syncore/      セーブ同期のコア（仕様書 2・4〜7 章）。�
 internal/metasync/     メタ情報の同期（仕様書 8 章）
 internal/gamesync/     1 ゲームのセーブとメタ情報の同期の手順（仕様書 8-M1〜8-M3）。syncore と metasync を組み合わせる
 internal/legacy/       旧版からのプレイ履歴の取り込み（仕様書 9 章）
-internal/settings/     R2 の接続情報と deviceName の読み書き（仕様書 3 章）。環境変数・DB の設定・資格情報を、CLI と GUI で同じ順番で読む
+internal/settings/     R2 の接続情報と deviceName の読み書き（仕様書 3 章）。DB の設定と資格情報を、CLI と GUI で同じように読む。環境変数からは読まない
 internal/store/        SQLite（goose の migration を含む）
 internal/objstore/     S3 互換オブジェクトストアのクライアント
 internal/platform/     OS 固有の処理（PC 全体の同期ロックに使うファイルロック、reparse point の検出、プロセス検出、資格情報の置き場所）
@@ -63,7 +63,7 @@ internal/platform/     OS 固有の処理（PC 全体の同期ロックに使う
 - SQLite には `database/sql` で生の SQL を書く
 - ログは `log/slog` を使い、コアは `*slog.Logger` を受け取る。出力先は配線の側で決める
 - OS 固有の処理は、同じパッケージの中でファイル名の接尾辞（`_windows.go` / `_linux.go`）で分ける。製品として保証するのは Windows で、Linux の実装は開発用の最小限にとどめる。macOS は扱わない
-- CLI は標準の `flag` で書き、`status` / `push` / `pull` / `recover` と、`game add` / `game edit` / `game set-image` / `game remote` / `game import` / `game delete` / `game reupload`、`session add`、`legacy import` / `legacy link` を持つ。v1 の CLI は同期コアを動かして確かめるための道具で、ゲームの管理は GUI で行う
+- CLI は標準の `flag` で書き、`status` / `push` / `pull` / `recover` と、`game add` / `game edit` / `game set-image` / `game remote` / `game import` / `game delete` / `game reupload`、`session add`、`legacy import` / `legacy link`、`config remote` / `config device-name` / `config show` を持つ。v1 の CLI は同期コアを動かして確かめるための道具で、ゲームの管理は GUI で行う
 - GUI でもテストの要るロジック（ゲームの起動と終了の待機、プレイ時間の計測）は `cmd/cloudlaunch-gui/` に置かず、`internal/` のパッケージに置いて TDD で書く（理由: `docs/adr/2026-11-15_01-56_gui-svelte-wails3.md`）
 
 ## テスト
@@ -100,7 +100,8 @@ internal/platform/     OS 固有の処理（PC 全体の同期ロックに使う
 - ツールのバージョンは `mise.toml` で固定する。clone したら `mise install` と `lefthook install` を実行する
 - GUI は `mise run gui` でビルドして起動する。Go のサービスやイベントを変えたら `mise run gui-bindings` でバインディングを生成し直してコミットする。Linux では、wails3 のインストールと GUI のビルドに GTK4 版の WebKitGTK（Ubuntu では `libgtk-4-dev`・`libwebkitgtk-6.0-dev`）が、日本語の表示にフォント（`fonts-noto-cjk`）が要る
 - リント（`.golangci.yml`）は、Wails の cgo を使わない実装（`purego` のタグ）で GUI のコードを型検査する。WebKitGTK のない CI の Ubuntu でも、Linux 向けの GUI のコードを検査するためである。CI の Ubuntu のテストは GUI のパッケージを外す。テストに `purego` を付けると、標準ライブラリの crypto もアセンブリのない実装に変わるためである（`docs/adr/2026-11-17_01-30_gui-skeleton.md`）
-- リモートの接続情報などの環境変数は `.env` に書き、mise（`mise.toml` の `[env]`）で読み込む。`.env` は git に入れず、`.env.example` を写して作る
+- アプリが使うリモートの接続情報は、GUI の設定画面か CLI の `config remote` で保存する。versitygw と R2 のように接続先を切り替えるときは、CLI の `--data-dir` で接続先ごとにデータの置き場所を分け、それぞれで `config remote` を実行する。同じ DB のまま接続先を変えると、DB に記録した base とリモートの対応が混ざるため（`docs/adr/2026-11-27_00-38_settings-no-env.md`）
+- 契約テストの接続先などの環境変数は `.env` に書き、mise（`mise.toml` の `[env]`）で読み込む。`.env` は git に入れず、`.env.example` を写して作る
 - コミット時に lefthook の pre-commit フックが走る
   - ステージした `.go` ファイルにフォーマッタ（gofmt・goimports）をかけ、直した結果をステージに戻す
   - モジュール全体に golangci-lint を `GOOS=windows` と `GOOS=linux` の両方でかける。golangci-lint は実行する OS 向けのファイルしか解析しないため、本番で動く Windows 向けのコードを検査するには `GOOS=windows` が要る

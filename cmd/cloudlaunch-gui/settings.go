@@ -24,8 +24,6 @@ type SettingsView struct {
 	AccessKeyID string `json:"accessKeyId"`
 	SecretSaved bool   `json:"secretSaved"`
 	DeviceName  string `json:"deviceName"`
-	// EnvNotice は、環境変数の接続情報を使っているときに入る
-	EnvNotice string `json:"envNotice"`
 	// RemoteError と DeviceError は、その欄の値を読めなかったときに入る。読めなくても、入れ直して保存すれば直るので、
 	// 欄は空のまま出す
 	RemoteError string `json:"remoteError"`
@@ -60,9 +58,6 @@ func (v *SettingsService) Load(ctx context.Context) SettingsView {
 		view.DeviceError = "deviceName を決められませんでした。入れて保存してください: " + err.Error()
 	} else {
 		view.DeviceName = name
-	}
-	if v.settings.UsesEnv() {
-		view.EnvNotice = "環境変数 CLOUDLAUNCH_S3_* の接続情報を使っています。保存した接続情報は、環境変数をすべて外すまで使いません"
 	}
 	return view
 }

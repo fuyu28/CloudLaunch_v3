@@ -61,7 +61,6 @@
   {:else}
     <section>
       <h2>R2 の接続情報</h2>
-      {#if view.envNotice}<p class="notice">{view.envNotice}</p>{/if}
       {#if view.remoteError}<p class="error">{view.remoteError}</p>{/if}
       <label>
         エンドポイント
@@ -160,13 +159,6 @@
   .status {
     font-size: 0.875em;
     color: #6e6e73;
-  }
-  .notice {
-    margin: 0;
-    padding: 8px 12px;
-    background: #fff4d6;
-    border: 1px solid #e8c766;
-    border-radius: 4px;
   }
   .error {
     color: #b3261e;

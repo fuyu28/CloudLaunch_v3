@@ -413,11 +413,6 @@ export class SettingsView {
     "deviceName": string;
 
     /**
-     * EnvNotice は、環境変数の接続情報を使っているときに入る
-     */
-    "envNotice": string;
-
-    /**
      * RemoteError と DeviceError は、その欄の値を読めなかったときに入る。読めなくても、入れ直して保存すれば直るので、
      * 欄は空のまま出す
      */
@@ -443,9 +438,6 @@ export class SettingsView {
         }
         if (!("deviceName" in $$source)) {
             this["deviceName"] = "";
-        }
-        if (!("envNotice" in $$source)) {
-            this["envNotice"] = "";
         }
         if (!("remoteError" in $$source)) {
             this["remoteError"] = "";
