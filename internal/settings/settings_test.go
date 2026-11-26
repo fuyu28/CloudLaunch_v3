@@ -358,6 +358,40 @@ func TestSavedRemote(t *testing.T) {
 	}
 }
 
+// TestRemoteReadError は、保存先を読めないときに、未設定とは区別できるエラーを返すことを確かめる。GUI の設定画面と CLI の
+// config は、読めなくても入れ直して保存できるよう、このエラーで振る舞いを分ける。
+func TestRemoteReadError(t *testing.T) {
+	ctx := context.Background()
+
+	tests := []struct {
+		name string
+		fail func(f fixture)
+	}{
+		{
+			name: "3章/接続情報/DB の設定を読めなければ、未設定ではなく読めなかったエラーを返す",
+			fail: func(f fixture) { f.local.readErr = errInjected },
+		},
+		{
+			name: "3章/接続情報/資格情報を読めなければ、未設定ではなく読めなかったエラーを返す",
+			fail: func(f fixture) { f.creds.readErr = errInjected },
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newFixture(t)
+			save(t, f, savedInput)
+			tt.fail(f)
+
+			if _, err := f.settings.Remote(ctx); !errors.Is(err, errInjected) || errors.Is(err, settings.ErrRemoteNotConfigured) {
+				t.Errorf("Remote: err = %v, want injected error, not ErrRemoteNotConfigured", err)
+			}
+			if _, err := f.settings.SavedRemote(ctx); !errors.Is(err, errInjected) {
+				t.Errorf("SavedRemote: err = %v, want injected error", err)
+			}
+		})
+	}
+}
+
 // TestSaveRemoteFailure は、資格情報と DB の設定を 1 つのトランザクションで書けないことから残る状態を確かめる。
 func TestSaveRemoteFailure(t *testing.T) {
 	ctx := context.Background()
