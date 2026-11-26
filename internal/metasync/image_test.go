@@ -346,30 +346,43 @@ func TestSyncImage(t *testing.T) {
 	})
 }
 
-func TestCacheImage(t *testing.T) {
-	tests := []struct {
-		name string
-		body []byte
-		ok   bool
-	}{
-		{"8-I2 PNG の画像を受け入れる", imageBody(pngMagic, "png"), true},
-		{"8-I2 JPEG の画像を受け入れる", imageBody(jpegMagic, "jpeg"), true},
-		{"8-I2 WebP の画像を受け入れる", imageBody(webpMagic, "webp"), true},
-		{"8-I2 ちょうど 10 MiB の画像を受け入れる", imageOfSize(pngMagic, maxImageSize), true},
-		{"8-I2 10 MiB を超える画像を拒否する", imageOfSize(pngMagic, maxImageSize+1), false},
-		{"8-I2 GIF の画像を拒否する", imageBody([]byte("GIF89a"), "gif"), false},
-		{"8-I2 WebP でない RIFF を拒否する", imageBody([]byte("RIFF\x00\x00\x00\x00WAVE"), "wav"), false},
-		{"8-I2 先頭が足りない PNG を拒否する", pngMagic[:7], false},
-		{"8-I2 空の画像を拒否する", nil, false},
+// imageCheckCases は、CheckImage と CacheImage で同じ 8-I2 の検査をしていることを確かめるために、両方で使う。
+// want が nil なら受け入れる。呼び出し側が拒否の理由を利用者に伝えられるよう、大きさと形式を別のエラーで返すことも確かめる。
+var imageCheckCases = []struct {
+	name string
+	body []byte
+	want error
+}{
+	{"8-I2 PNG の画像を受け入れる", imageBody(pngMagic, "png"), nil},
+	{"8-I2 JPEG の画像を受け入れる", imageBody(jpegMagic, "jpeg"), nil},
+	{"8-I2 WebP の画像を受け入れる", imageBody(webpMagic, "webp"), nil},
+	{"8-I2 ちょうど 10 MiB の画像を受け入れる", imageOfSize(pngMagic, maxImageSize), nil},
+	{"8-I2 10 MiB を超える画像を拒否する", imageOfSize(pngMagic, maxImageSize+1), metasync.ErrImageTooLarge},
+	{"8-I2 GIF の画像を拒否する", imageBody([]byte("GIF89a"), "gif"), metasync.ErrImageFormat},
+	{"8-I2 WebP でない RIFF を拒否する", imageBody([]byte("RIFF\x00\x00\x00\x00WAVE"), "wav"), metasync.ErrImageFormat},
+	{"8-I2 先頭が足りない PNG を拒否する", pngMagic[:7], metasync.ErrImageFormat},
+	{"8-I2 空の画像を拒否する", nil, metasync.ErrImageFormat},
+}
+
+func TestCheckImage(t *testing.T) {
+	for _, tt := range imageCheckCases {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := metasync.CheckImage(bytes.NewReader(tt.body)); !errors.Is(err, tt.want) {
+				t.Errorf("CheckImage = %v, want %v", err, tt.want)
+			}
+		})
 	}
-	for _, tt := range tests {
+}
+
+func TestCacheImage(t *testing.T) {
+	for _, tt := range imageCheckCases {
 		t.Run(tt.name, func(t *testing.T) {
 			e := newBareEnv(t)
 
 			sha, err := e.core.CacheImage(bytes.NewReader(tt.body))
-			if !tt.ok {
-				if err == nil {
-					t.Error("CacheImage がエラーを返さなかった")
+			if tt.want != nil {
+				if !errors.Is(err, tt.want) {
+					t.Errorf("CacheImage = %v, want %v", err, tt.want)
 				}
 				if files := e.cacheFiles(t); len(files) != 0 {
 					t.Errorf("キャッシュに入れた: %v", files)

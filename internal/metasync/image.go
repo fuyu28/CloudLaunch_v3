@@ -21,6 +21,12 @@ import (
 const maxImageSize = 10 << 20
 
 var (
+	// ErrImageTooLarge と ErrImageFormat は、8-I2 で拒否した理由。画像を設定する画面が、理由を分けて伝えるために使う
+	ErrImageTooLarge = errors.New("image exceeds 10 MiB")
+	ErrImageFormat   = errors.New("image is not PNG, JPEG or WebP")
+)
+
+var (
 	pngMagic  = []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'}
 	jpegMagic = []byte{0xff, 0xd8, 0xff}
 )
@@ -32,12 +38,9 @@ func (c *Core) imagePath(sha string) string {
 // CacheImage は、画像を検証して（仕様書 8-I2）キャッシュに入れ、sha256 を返す。上限の 1 バイト先までしか読まない。
 // リモートには触れない。リモートへは、次の同期で game.json を PUT する前に PUT する（8-I1）。
 func (c *Core) CacheImage(r io.Reader) (string, error) {
-	body, err := io.ReadAll(io.LimitReader(r, maxImageSize+1))
+	body, err := readCheckedImage(r)
 	if err != nil {
-		return "", fmt.Errorf("read image: %w", err)
-	}
-	if err := checkImage(body); err != nil {
-		return "", fmt.Errorf("8-I2: %w", err)
+		return "", err
 	}
 	sha := sha256Hex(body)
 	// Windows では、表示や同期で開かれているファイルへのリネームが失敗するので、すでにあれば書き直さない
@@ -70,14 +73,31 @@ func (c *Core) SetImage(ctx context.Context, gameID string, r io.Reader, now tim
 	return sha, nil
 }
 
+// CheckImage は、CacheImage と同じく画像を検証する（仕様書 8-I2）が、キャッシュには入れない。上限の 1 バイト先までしか読まない。
+func CheckImage(r io.Reader) error {
+	_, err := readCheckedImage(r)
+	return err
+}
+
+func readCheckedImage(r io.Reader) ([]byte, error) {
+	body, err := io.ReadAll(io.LimitReader(r, maxImageSize+1))
+	if err != nil {
+		return nil, fmt.Errorf("read image: %w", err)
+	}
+	if err := checkImage(body); err != nil {
+		return nil, fmt.Errorf("8-I2: %w", err)
+	}
+	return body, nil
+}
+
 // checkImage は、大きさと形式を確かめる。形式は先頭のバイトだけで判定し、画像として解読できるかは確かめない。
 func checkImage(body []byte) error {
 	if len(body) > maxImageSize {
-		return fmt.Errorf("image exceeds %d bytes", maxImageSize)
+		return ErrImageTooLarge
 	}
 	webp := len(body) >= 12 && string(body[:4]) == "RIFF" && string(body[8:12]) == "WEBP"
 	if !bytes.HasPrefix(body, pngMagic) && !bytes.HasPrefix(body, jpegMagic) && !webp {
-		return errors.New("image is not PNG, JPEG or WebP")
+		return ErrImageFormat
 	}
 	return nil
 }

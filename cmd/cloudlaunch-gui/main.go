@@ -85,6 +85,8 @@ func runApp(dir, logPath string, logFile *os.File) error {
 
 	// バックアップの置き場所は設定で変わらないので、BackupService のコアは設定を保存しても作り直さない
 	backups := &BackupService{save: c.save}
+	// 画像のキャッシュの置き場所も設定で変わらないので、登録の画面のコアはリモートにつながずに 1 回だけ作る
+	games := &GameService{store: s, meta: metasync.New(metasync.Config{Local: s, Logger: logger, ImageDir: imageDir(dir)}), logger: logger}
 	syncs := newSyncService(c, logger, setup)
 	app := application.New(application.Options{
 		Name: "CloudLaunch",
@@ -92,6 +94,7 @@ func runApp(dir, logPath string, logFile *os.File) error {
 			application.NewService(&HomeService{store: s, sync: syncs, banner: recoverBanner(err, logPath)}),
 			application.NewService(syncs),
 			application.NewService(backups),
+			application.NewService(games),
 			application.NewService(&SettingsService{settings: set, sync: syncs, open: open, logger: logger}),
 		},
 		Assets: application.AssetOptions{Handler: application.AssetFileServerFS(assets)},
@@ -99,12 +102,17 @@ func runApp(dir, logPath string, logFile *os.File) error {
 		Logger: slog.New(slog.NewTextHandler(logFile, &slog.HandlerOptions{Level: slog.LevelWarn})),
 	})
 	backups.openFolder = func(dir string) error { return app.Env.OpenFileManager(dir, false) }
-	app.Window.NewWithOptions(application.WebviewWindowOptions{
+	win := app.Window.NewWithOptions(application.WebviewWindowOptions{
 		Title:  "CloudLaunch",
 		Width:  1000,
 		Height: 700,
 		URL:    "/",
 	})
+	games.pick = func(opts *application.OpenFileDialogOptions) (string, error) {
+		// 窓に結び付けないと、ダイアログが窓の裏に開くことがある
+		opts.Window = win
+		return app.Dialog.OpenFileWithOptions(opts).PromptForSingleSelection()
+	}
 	return app.Run()
 }
 
@@ -150,7 +158,7 @@ func openCores(ctx context.Context, dir string, s *store.Store, logger *slog.Log
 		Processes:  platform.Processes{},
 		Rename:     platform.Rename,
 	}
-	metaCfg := metasync.Config{Local: s, Logger: logger, ImageDir: filepath.Join(dir, "images")}
+	metaCfg := metasync.Config{Local: s, Logger: logger, ImageDir: imageDir(dir)}
 	// nil の *objstore.S3 をインターフェースに入れると nil と比べて等しくならないので、つないだときだけ入れる
 	if remoteErr == nil {
 		cfg.Remote = remote
@@ -160,3 +168,6 @@ func openCores(ctx context.Context, dir string, s *store.Store, logger *slog.Log
 	games := gamesync.New(gamesync.Config{Save: save, Meta: metasync.New(metaCfg), Logger: logger})
 	return cores{save: save, games: games}, setupErrors{remote: remoteErr, device: deviceErr}
 }
+
+// imageDir は、同期のコアと登録の画面のコアで、画像のキャッシュの置き場所を食い違わせないために 1 か所で決める。
+func imageDir(dataDir string) string { return filepath.Join(dataDir, "images") }

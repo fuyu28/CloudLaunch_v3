@@ -14,6 +14,7 @@
   } from "../bindings/github.com/fuyu28/CloudLaunch_v3/cmd/cloudlaunch-gui";
   import { SyncProgress } from "../bindings/events";
   import Settings from "./Settings.svelte";
+  import GameForm from "./GameForm.svelte";
 
   type CardState = { status: string; error: string };
   type Transfer = { title: string; progress: ProgressEvent | null; cancelError: string };
@@ -38,7 +39,7 @@
   }
 
   // page は、転送の帯と進捗を設定画面でも出し続けるよう、App の中で画面だけを切り替える
-  let page = $state<"home" | "settings">("home");
+  let page = $state<"home" | "settings" | "register">("home");
 
   function loadHome() {
     HomeService.Load()
@@ -138,6 +139,13 @@
 
 {#if page === "settings"}
   <Settings onBack={backToHome} />
+{:else if page === "register"}
+  <GameForm
+    onBack={(registered) => {
+      page = "home";
+      if (registered) loadHome();
+    }}
+  />
 {:else}
 <main>
   {#if view?.banner}
@@ -152,7 +160,10 @@
 
   <div class="top">
     <h1>ゲーム</h1>
-    <button onclick={() => (page = "settings")}>設定</button>
+    <div class="buttons">
+      <button onclick={() => (page = "register")}>ゲームを登録</button>
+      <button onclick={() => (page = "settings")}>設定</button>
+    </div>
   </div>
 
   {#if loadError}
