@@ -346,23 +346,39 @@ func TestSyncImage(t *testing.T) {
 	})
 }
 
-func TestCacheImage(t *testing.T) {
-	tests := []struct {
-		name string
-		body []byte
-		ok   bool
-	}{
-		{"8-I2 PNG の画像を受け入れる", imageBody(pngMagic, "png"), true},
-		{"8-I2 JPEG の画像を受け入れる", imageBody(jpegMagic, "jpeg"), true},
-		{"8-I2 WebP の画像を受け入れる", imageBody(webpMagic, "webp"), true},
-		{"8-I2 ちょうど 10 MiB の画像を受け入れる", imageOfSize(pngMagic, maxImageSize), true},
-		{"8-I2 10 MiB を超える画像を拒否する", imageOfSize(pngMagic, maxImageSize+1), false},
-		{"8-I2 GIF の画像を拒否する", imageBody([]byte("GIF89a"), "gif"), false},
-		{"8-I2 WebP でない RIFF を拒否する", imageBody([]byte("RIFF\x00\x00\x00\x00WAVE"), "wav"), false},
-		{"8-I2 先頭が足りない PNG を拒否する", pngMagic[:7], false},
-		{"8-I2 空の画像を拒否する", nil, false},
+// imageCheckCases は、CheckImage と CacheImage で同じ 8-I2 の検査をしていることを確かめるために、両方で使う。
+var imageCheckCases = []struct {
+	name string
+	body []byte
+	ok   bool
+}{
+	{"8-I2 PNG の画像を受け入れる", imageBody(pngMagic, "png"), true},
+	{"8-I2 JPEG の画像を受け入れる", imageBody(jpegMagic, "jpeg"), true},
+	{"8-I2 WebP の画像を受け入れる", imageBody(webpMagic, "webp"), true},
+	{"8-I2 ちょうど 10 MiB の画像を受け入れる", imageOfSize(pngMagic, maxImageSize), true},
+	{"8-I2 10 MiB を超える画像を拒否する", imageOfSize(pngMagic, maxImageSize+1), false},
+	{"8-I2 GIF の画像を拒否する", imageBody([]byte("GIF89a"), "gif"), false},
+	{"8-I2 WebP でない RIFF を拒否する", imageBody([]byte("RIFF\x00\x00\x00\x00WAVE"), "wav"), false},
+	{"8-I2 先頭が足りない PNG を拒否する", pngMagic[:7], false},
+	{"8-I2 空の画像を拒否する", nil, false},
+}
+
+func TestCheckImage(t *testing.T) {
+	for _, tt := range imageCheckCases {
+		t.Run(tt.name, func(t *testing.T) {
+			err := metasync.CheckImage(bytes.NewReader(tt.body))
+			if tt.ok && err != nil {
+				t.Errorf("CheckImage: %v", err)
+			}
+			if !tt.ok && err == nil {
+				t.Error("CheckImage がエラーを返さなかった")
+			}
+		})
 	}
-	for _, tt := range tests {
+}
+
+func TestCacheImage(t *testing.T) {
+	for _, tt := range imageCheckCases {
 		t.Run(tt.name, func(t *testing.T) {
 			e := newBareEnv(t)
 
