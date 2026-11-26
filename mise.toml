@@ -5,6 +5,56 @@ lefthook = "2.2.2"
 bun = "1.3.14"
 "go:github.com/wailsapp/wails/v3/cmd/wails3" = "v3.1.0"
 
+[tasks.check]
+description = "PR を出す前の確認を、CI と同じ組み合わせでまとめて行う（フォーマットの確認、両方の GOOS のリント、テスト、フロント）"
+depends = ["lint", "test", "front"]
+
+[tasks.fmt]
+description = "Go のファイルにフォーマッタ（gofmt・goimports）をかけて直す"
+run = "golangci-lint fmt ./..."
+
+# golangci-lint は実行する OS 向けのファイルしか解析しないので、本番で動く Windows 向けと開発用の Linux 向けの両方でかける
+[tasks.lint]
+description = "golangci-lint を GOOS=windows と GOOS=linux の両方でかけ、フォーマットの差分も確かめる"
+depends = ["lint-windows", "lint-linux"]
+
+[tasks.lint-windows]
+hide = true
+env = { GOOS = "windows" }
+run = "golangci-lint run ./..."
+
+# run は formatters の差分を報告しないので、fmt --diff で別に確かめる。結果は GOOS に依らないため、こちらでだけ行う
+[tasks.lint-linux]
+hide = true
+env = { GOOS = "linux" }
+run = ["golangci-lint run ./...", "golangci-lint fmt --diff ./..."]
+
+# .env に契約テストの接続先があれば objstore の契約テストも走るので、そのときは先に mise run versitygw で立てておく
+[tasks.test]
+description = "Go のテストを -race で走らせる。引数はそのまま go test に渡す（例: mise run test -- ./internal/syncore -run TestPush）"
+run = 'go test -race {{arg(name="args", var=true, default="./...")}}'
+
+# compose のプロジェクト名は既定でフォルダ名になり、worktree ごとに別のコンテナが同じポートを取り合うので、名前を固定する
+[tasks.versitygw]
+description = "objstore の契約テストの相手の versitygw（compose.yaml）を立てる。どの worktree からでも同じコンテナを使う"
+run = "docker compose -p cloudlaunch-versitygw up -d --wait"
+
+# 接続先は compose.yaml の versitygw の値で、秘密ではないので、.env に頼らずここで渡す
+[tasks.test-contract]
+description = "versitygw を立て、objstore の契約テストを走らせる"
+depends = ["versitygw"]
+env = { CLOUDLAUNCH_TEST_S3_ENDPOINT = "http://127.0.0.1:7070", CLOUDLAUNCH_TEST_S3_BUCKET = "cloudlaunch-test", CLOUDLAUNCH_TEST_S3_ACCESS_KEY_ID = "testuser", CLOUDLAUNCH_TEST_S3_SECRET_ACCESS_KEY = "testsecret" }
+run = "go test -race -count=1 ./internal/objstore/..."
+
+[tasks.cli-build]
+description = "CLI をビルドして bin/ に置く"
+run = "go build -o bin/ ./cmd/cloudlaunch-cli"
+
+[tasks.front]
+description = "GUI のフロントの依存を入れ、型検査とビルドをする"
+dir = "cmd/cloudlaunch-gui/frontend"
+run = ["bun install --frozen-lockfile", "bun run check", "bun run build"]
+
 [tasks.spec-ids]
 description = "仕様書の ID のうち、テストのケース名に現れないものを一覧にする"
 run = "scripts/spec-ids.sh"
@@ -23,9 +73,9 @@ run = "wails3 generate bindings -clean -ts -d frontend/bindings"
 # 開発用のビルドになる。Windows ではコンソールを開かないよう windowsgui にする
 [tasks.gui-build]
 description = "GUI のフロントをビルドして、Go のバイナリに埋め込む"
-dir = "cmd/cloudlaunch-gui/frontend"
-run = ["bun install --frozen-lockfile", "bun run check", "bun run build", "go build -tags production -o ../../../bin/ .."]
-run_windows = ["bun install --frozen-lockfile", "bun run check", "bun run build", "go build -tags production -ldflags=-H=windowsgui -o ../../../bin/ .."]
+depends = ["front"]
+run = "go build -tags production -o bin/ ./cmd/cloudlaunch-gui"
+run_windows = "go build -tags production -ldflags=-H=windowsgui -o bin/ ./cmd/cloudlaunch-gui"
 
 # Windows の mise は cmd で実行し、/ で始まる部分をオプションとして読むので、パスを分ける
 [tasks.gui]

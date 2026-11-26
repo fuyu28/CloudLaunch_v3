@@ -98,6 +98,7 @@ internal/platform/     OS 固有の処理（PC 全体の同期ロックに使う
 
 - lefthook を選んだ理由: `docs/adr/2026-10-23_00-30_git-hooks-lefthook.md`
 - ツールのバージョンは `mise.toml` で固定する。clone したら `mise install` と `lefthook install` を実行する
+- よく使うコマンドは `mise.toml` のタスクにまとめてある（一覧は `mise tasks`）。PR を出す前は `mise run check` で、CI と同じ組み合わせ（フォーマットの確認、両方の GOOS のリント、テスト、フロントの型検査とビルド）を確かめる。objstore の契約テストは `mise run test-contract` で、versitygw を立てるところから行う
 - GUI は `mise run gui` でビルドして起動する。Go のサービスやイベントを変えたら `mise run gui-bindings` でバインディングを生成し直してコミットする。Linux では、wails3 のインストールと GUI のビルドに GTK4 版の WebKitGTK（Ubuntu では `libgtk-4-dev`・`libwebkitgtk-6.0-dev`）が、日本語の表示にフォント（`fonts-noto-cjk`）が要る
 - リント（`.golangci.yml`）は、Wails の cgo を使わない実装（`purego` のタグ）で GUI のコードを型検査する。WebKitGTK のない CI の Ubuntu でも、Linux 向けの GUI のコードを検査するためである。CI の Ubuntu のテストは GUI のパッケージを外す。テストに `purego` を付けると、標準ライブラリの crypto もアセンブリのない実装に変わるためである（`docs/adr/2026-11-17_01-30_gui-skeleton.md`）
 - アプリ（CLI と GUI）は R2 だけにつなぎ、接続情報は GUI の設定画面か CLI の `config remote` で保存する。versitygw は objstore の契約テストだけで使う（`docs/adr/2026-11-27_00-38_settings-no-env.md`）
