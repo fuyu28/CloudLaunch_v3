@@ -12,9 +12,8 @@ import (
 type SettingsService struct {
 	settings *settings.Settings
 	sync     *SyncService
-	// open は、保存した設定からコアを作り直す
-	open   func(ctx context.Context) (cores, setupErrors)
-	logger *slog.Logger
+	open     func(ctx context.Context) (cores, setupErrors)
+	logger   *slog.Logger
 }
 
 // SettingsView は、設定画面に出す値。シークレットは WebView に渡さず、保存してあるかだけを渡す。
